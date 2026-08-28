@@ -87,18 +87,6 @@ enum DebugBit {
 	//! height guessed from luminance overshoots on high-contrast textures.
 	DebugParallax = 1 << 16,
 	/*!
-	 * Build the camera-facing quads from EERIECreateSprite() - fire, magic,
-	 * sparks, light flares - in world space instead of screen space, so the path
-	 * tracer sees them and they can light what is around them.
-	 *
-	 * Off by default. An earlier unconditional version of this left the game on
-	 * a black screen with no level geometry and no crash in either log, and the
-	 * cause was never identified. Behind a bit it can be toggled between two
-	 * runs of the same build, which is the only way to tell a rendering problem
-	 * from a loading one.
-	 */
-	DebugWorldBillboards = 1 << 17,
-	/*!
 	 * Stop pinning the look-related Remix options, so the developer menu (Alt+X)
 	 * and the user.conf it writes are what decide.
 	 *
@@ -114,19 +102,30 @@ enum DebugBit {
 	 */
 	DebugFreeConfig = 1 << 18,
 	/*!
-	 * Let Arx's own baked lighting through instead of discarding it.
+	 * Go back to building the quads from EERIECreateSprite() - fire, magic,
+	 * sparks, light flares - in screen space, as 2D overlays the path tracer
+	 * never sees.
 	 *
-	 * Vanilla's light distribution *is* the bake: every level light is painted
-	 * into vertex colour, including the several hundred that cannot fit through
-	 * fixed-function D3D9 and are therefore absent from the traced scene. With
-	 * the bake discarded, a room is lit by whichever few lights won a slot,
-	 * which is what makes the result read as inconsistent next to the original.
-	 *
-	 * The trade is real and worth stating: baked light is paint, not a light
-	 * source, so the path tracer cannot shadow it or bounce it. This buys
-	 * vanilla's distribution at the cost of the shadows being vanilla's too.
+	 * World space is the default now: with the quads in the world, a torch flame
+	 * is geometry that can be lit and, through emissive blend translation, can
+	 * light the wall behind it. This bit exists because an early unconditional
+	 * version of that left the game on a black screen with no level geometry and
+	 * no crash in either log, so a way back without a rebuild is worth keeping.
 	 */
-	DebugBakedLighting = 1 << 19
+	DebugScreenSpaceSprites = 1 << 20,
+	/*!
+	 * Discard Arx's baked vertex lighting, leaving only the map lights that fit
+	 * through fixed-function D3D9.
+	 *
+	 * The bake is kept by default because vanilla's light distribution *is* the
+	 * bake: every level light painted into vertex colour, including the hundreds
+	 * that never get a light slot. Discarding it gives light the tracer can
+	 * shadow and bounce, but only a handful of sources for a whole level, which
+	 * reads as bright patches and flat nothing in between.
+	 *
+	 * Keep this as the A/B for anything that changes how lights reach the runtime.
+	 */
+	DebugNoBakedLighting = 1 << 21
 };
 
 //! Raw --remix-debug mask. Zero unless the option was passed.

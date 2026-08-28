@@ -105,7 +105,8 @@ static bool EERIECreateSprite(TexturedQuad & sprite, const Vec3f & in, float siz
 
 #if ARX_HAVE_RTX_REMIX
 	/*
-	 * --remix-debug 131072: rebuild the quad in world space.
+	 * Rebuild the quad in world space, unless --remix-debug 1048576 asks for
+	 * the old screen-space overlay back.
 	 *
 	 * A sprite is a camera-facing quad whose position was projected and whose
 	 * size is in pixels, so nothing about it is in world space by the time it
@@ -116,7 +117,7 @@ static bool EERIECreateSprite(TexturedQuad & sprite, const Vec3f & in, float siz
 	 * Zpos <= 1 is left alone. Those sprites are pinned to a fixed depth as an
 	 * overlay, which is a screen-space intent, not a thing in the world.
 	 */
-	if(Zpos > 1.f && remix::debugEnabled(remix::DebugWorldBillboards)
+	if(Zpos > 1.f && !remix::debugEnabled(remix::DebugScreenSpaceSprites)
 	   && GRenderer && GRenderer->wantsWorldSpaceEntities()) {
 
 		const glm::mat4x4 & viewToWorld = g_preparedCamera.m_viewToWorld;

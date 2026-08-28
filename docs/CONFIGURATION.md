@@ -44,9 +44,9 @@ values back out of `user.conf` — that is how a number gets into the table belo
 | `rtx.volumetrics.enable` | `False` | |
 | `rtx.usePostFilter` | `False` | |
 | `rtx.maxAnisotropySamples` | `16` | Floors are seen at a grazing angle, where isotropic mip selection dissolves the slabs |
-| `rtx.ignoreAllVertexColorBakedLighting` | `True` | Arx's 2002 lightmaps must not multiply on top of traced light. Inverted by `--remix-debug 524288` |
-| `rtx.vertexColorIsBakedLighting` | `False` | `True` under that bit |
-| `rtx.vertexColorStrength` | `0` | `1.0` under that bit |
+| `rtx.ignoreAllVertexColorBakedLighting` | `False` | Arx's bake carries every level light, including the hundreds that never get a light slot. Inverted by `--remix-debug 2097152` |
+| `rtx.vertexColorIsBakedLighting` | `True` | So the runtime treats vertex colour as light rather than as paint on the texture |
+| `rtx.vertexColorStrength` | `1.0` | `0` under that bit |
 | `rtx.autoExposure.enabled` | `True` | Overridden below when the Remix DLL is hooked |
 | `rtx.tonemap.exposureBias` | `-0.6` | |
 | `rtx.integrateIndirectMode` | `2` | Pins importance sampling; NRC failed to initialise on the development GPU |
@@ -117,8 +117,8 @@ game; these are the ones that still bite:
 | `128` | Forces the Remix developer UI on |
 | `512` | Restores the `VK_COMPARE_OP_NEVER` alpha-test bug, on purpose |
 | `4096` | World-space entities without skinning |
-| `131072` | Builds sprites — fire, magic, sparks, light flares — in world space so the path tracer sees them |
 | `262144` | Stops the game re-applying the look options, so the developer menu and the `user.conf` it writes are what decide |
-| `524288` | Keeps Arx's baked vertex lighting instead of discarding it. Vanilla's light distribution is the bake, so this matches the original at the cost of the shadows being baked too |
+| `1048576` | Puts sprites — fire, magic, sparks, flares — back in screen space as 2D overlays the tracer never sees |
+| `2097152` | Discards Arx's baked vertex lighting, leaving only the map lights that fit through fixed-function D3D9 |
 
 The full list is in the option's help text: run `arx.exe --help`.

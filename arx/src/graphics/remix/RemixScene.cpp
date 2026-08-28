@@ -412,7 +412,7 @@ void applyPreviewConfigImpl() {
 	// level far too low and the slabs dissolve. Verified on its own: this single
 	// option brings the floor joints back.
 	g_api.iface().SetConfigVariable("rtx.maxAnisotropySamples", "16");
-	if(debugEnabled(DebugBakedLighting)) {
+	if(!debugEnabled(DebugNoBakedLighting)) {
 		// Arx's bake carries every level light, including the ones that never fit
 		// through fixed-function D3D9. Treated as baked lighting rather than as
 		// albedo, so the runtime knows it is light and not paint on the texture.
