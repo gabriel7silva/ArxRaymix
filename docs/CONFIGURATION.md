@@ -21,6 +21,18 @@ Two things worth knowing before debugging a setting:
 - `SetConfigVariable` may only take effect at the end of a frame, and the log echoing a key back is
   not proof the runtime understood it — a deliberately misspelled key echoes the same way.
 
+### Why the developer menu does not stick
+
+Because channel 3 keeps winning. The game re-applies its own values when a device registers, when a
+video option changes, and every time the render mode flips between a menu and the level — so a
+slider dragged in the developer menu is overwritten shortly after, and saving it to `user.conf`
+changes nothing on the next run either.
+
+That is protection against a stale `user.conf`, and it is in the way while tuning. Run with
+**`--remix-debug 262144`** to turn it off: the four structural options are still forced, everything
+about the look is left to `rtx.conf`, `user.conf` and the menu. Tune it live, save it, then read the
+values back out of `user.conf` — that is how a number gets into the table below.
+
 ## Applied once, after device registration
 
 `applyPreviewConfig()` — pinned so a stale `user.conf` cannot change them.
@@ -39,17 +51,26 @@ Two things worth knowing before debugging a setting:
 | `rtx.tonemap.exposureBias` | `-0.6` | |
 | `rtx.integrateIndirectMode` | `2` | Pins importance sampling; NRC failed to initialise on the development GPU |
 
-Additionally, when the Remix DLL is hooked — that is, on the path the game actually runs:
+When the Remix DLL is hooked — the path the game actually runs — four options are **structural**
+and are applied before anything else, because they describe the geometry being submitted rather than
+how it should look. Nothing overrides these, not even the developer menu:
 
 | Option | Value | Why |
 |---|---|---|
 | `rtx.leftHandedCoordinateSystem` | `True` | D3D9 is left-handed and Arx is Y-down |
 | `rtx.zUp` | `False` | |
 | `rtx.sceneScale` | `1.0` | One Arx unit is about one centimetre |
-| `rtx.legacyMaterial.roughnessConstant` | `0.35` | No USD replacements, so every surface uses this. `0.7` reads as matte plaster; `0.35` lets torchlight specular on stone |
-| `rtx.legacyMaterial.metallicConstant` | `0.12` | |
-| `rtx.legacyMaterial.emissiveIntensity` | `0.0` | |
 | `rtx.camera.correctProjectionYFlip` | `False` | The engine already flips Y from NDC to screen; correcting again renders the world upside down |
+
+The rest describe the look, and can be handed over to the developer menu with
+`--remix-debug 262144`:
+
+| Option | Value | Why |
+|---|---|---|
+| `rtx.legacyMaterial.roughnessConstant` | `0.75` | No USD replacements, so one value describes every surface. Was `0.35`, which read as wet plastic once path tracing was actually presenting |
+| `rtx.legacyMaterial.metallicConstant` | `0.0` | Was `0.12`. Dungeon stone is not metal, and the tint it added was part of the plastic look |
+| `rtx.legacyMaterial.emissiveIntensity` | `0.0` | |
+| `rtx.lightConversionIntensityFactor` | `0.5` | Gain applied when D3D9 lights become Remix lights. Ours already carry Arx intensity, so the default washed the cell out. A starting point, not a measurement |
 | `rtx.showUI` | `2` | Developer menu forced on while the `Alt+X` window hook is unreliable |
 | `rtx.showUICursor` | `True` | |
 
@@ -95,6 +116,7 @@ game; these are the ones that still bite:
 | `128` | Forces the Remix developer UI on |
 | `512` | Restores the `VK_COMPARE_OP_NEVER` alpha-test bug, on purpose |
 | `4096` | World-space entities without skinning |
-| `131072` | Builds sprites — fire, magic, sparks, light flares — in world space so the path tracer sees them. Off by default and unverified; see [CONTRIBUTING.md](CONTRIBUTING.md) |
+| `131072` | Builds sprites — fire, magic, sparks, light flares — in world space so the path tracer sees them |
+| `262144` | Stops the game re-applying the look options, so the developer menu and the `user.conf` it writes are what decide |
 
 The full list is in the option's help text: run `arx.exe --help`.

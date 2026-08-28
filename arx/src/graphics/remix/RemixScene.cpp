@@ -365,8 +365,42 @@ void applyPreviewConfigImpl() {
 	if(!g_api.iface().SetConfigVariable) {
 		return;
 	}
+
+	/*
+	 * Structural first, and unconditionally: these describe the geometry we
+	 * submit, not how it should look. Getting them wrong renders the world
+	 * upside down or at the wrong scale, so they are not up for negotiation
+	 * even when the developer menu is allowed to win below.
+	 */
+	if(g_dllHooked) {
+		// D3D9 is left-handed, Y-down. Remix defaults assume a right-handed Z-up
+		// capture game; the VIEW matrix still drives the camera, but GI/specular
+		// sampling follows this. 1 Arx unit ≈ 1 cm.
+		g_api.iface().SetConfigVariable("rtx.leftHandedCoordinateSystem", "True");
+		g_api.iface().SetConfigVariable("rtx.zUp", "False");
+		g_api.iface().SetConfigVariable("rtx.sceneScale", "1.0");
+		/*
+		 * Off, not on.
+		 *
+		 * This was set to True to stop Remix logging "not detecting a valid
+		 * camera" back when nothing was being traced at all. That symptom
+		 * belonged to dxvk_CreateD3D9, which never fed the path tracer; on the
+		 * capture path the camera is accepted without it.
+		 *
+		 * Camera.cpp already flips Y on the way from NDC to screen, so
+		 * correcting the flip a second time renders the world upside down.
+		 */
+		g_api.iface().SetConfigVariable("rtx.camera.correctProjectionYFlip", "False");
+	}
+
+	if(debugEnabled(DebugFreeConfig)) {
+		LogInfo << "Remix scene: free config - materials, exposure and lighting left to "
+		           "rtx.conf, user.conf and the developer menu";
+		return;
+	}
+
 	// The Remix runtime persists whatever the developer menu was left on into
-	// rtx.conf in the working directory, and one stray toggle there (notably
+	// user.conf in the working directory, and one stray toggle there (notably
 	// rtx.enableRaytracing = False) turns the preview black on every later run.
 	// Pin the settings the preview depends on instead of trusting that file.
 	g_api.iface().SetConfigVariable("rtx.enableRaytracing", "True");
@@ -387,35 +421,35 @@ void applyPreviewConfigImpl() {
 	// so we do not pay the failed-init path and a surprise lighting mode switch.
 	g_api.iface().SetConfigVariable("rtx.integrateIndirectMode", "2");
 	if(g_dllHooked) {
-		// D3D9 is left-handed, Y-down. Remix defaults assume a right-handed Z-up
-		// capture game; the VIEW matrix still drives the camera, but GI/specular
-		// sampling follows this. 1 Arx unit ≈ 1 cm.
-		g_api.iface().SetConfigVariable("rtx.leftHandedCoordinateSystem", "True");
-		g_api.iface().SetConfigVariable("rtx.zUp", "False");
-		g_api.iface().SetConfigVariable("rtx.sceneScale", "1.0");
-		// No USD replacements: default legacy PBR. 0.7 roughness is matte plaster
-		// and the dungeon reads as the original raster. 0.35 lets torch light
-		// specular on wet stone — that is the RT tell without a texture mod.
-		g_api.iface().SetConfigVariable("rtx.legacyMaterial.roughnessConstant", "0.35");
-		g_api.iface().SetConfigVariable("rtx.legacyMaterial.metallicConstant", "0.12");
+		/*
+		 * No USD replacements, so one roughness and one metallic describe every
+		 * surface in the game.
+		 *
+		 * These were 0.35 and 0.12, chosen while the rasterised image was still
+		 * what reached the screen and a visible specular was the only sign the
+		 * tracer was doing anything. With path tracing actually presenting, that
+		 * same specular is what makes wet-looking stone read as moulded plastic:
+		 * a broad glossy highlight sliding across a flat wall, and a metallic
+		 * tint on top of it. Dungeon stone is neither wet nor metal.
+		 */
+		g_api.iface().SetConfigVariable("rtx.legacyMaterial.roughnessConstant", "0.75");
+		g_api.iface().SetConfigVariable("rtx.legacyMaterial.metallicConstant", "0.0");
 		g_api.iface().SetConfigVariable("rtx.legacyMaterial.emissiveIntensity", "0.0");
 		/*
-		 * Off, not on.
+		 * Legacy D3D9 lights are converted to Remix lights with an intensity
+		 * factor applied. Ours are already in Arx units - rgb in 0..1 times the
+		 * light's own intensity - so the factor is pure gain on top, and the cell
+		 * comes out flat and washed rather than lit from torches.
 		 *
-		 * This was set to True to stop Remix logging "not detecting a valid
-		 * camera" back when nothing was being traced at all. That symptom
-		 * belonged to dxvk_CreateD3D9, which never fed the path tracer; on the
-		 * capture path the camera is accepted without it.
-		 *
-		 * Camera.cpp already builds the projection with proj[1][1] = -h, so
-		 * correcting the flip a second time renders the world upside down.
+		 * Halving it is a starting point, not a measurement. --remix-debug 262144
+		 * leaves this to the developer menu so the value can be found on screen.
 		 */
-		g_api.iface().SetConfigVariable("rtx.camera.correctProjectionYFlip", "False");
+		g_api.iface().SetConfigVariable("rtx.lightConversionIntensityFactor", "0.5");
 		// WindowProc was not bound to the swapchain; force the developer menu
 		// so we do not depend on Alt+X until that hook sticks.
 		g_api.iface().SetConfigVariable("rtx.showUI", "2");
 		g_api.iface().SetConfigVariable("rtx.showUICursor", "True");
-		LogInfo << "Remix dll hook: Y-flip projection correction, developer UI forced on";
+		LogInfo << "Remix dll hook: matte legacy material, developer UI forced on";
 	}
 	LogInfo << "Remix scene: fallback light off, ignore baked vertex color, realistic dark dungeon tone";
 	
@@ -455,6 +489,12 @@ void applyPreviewConfigImpl() {
  *  - pathMaxBounces 0   nothing in a menu to bounce light off
  */
 void applyUserGfxConfigImpl() {
+	
+	if(debugEnabled(DebugFreeConfig)) {
+		// The video options page would otherwise overwrite whatever was just
+		// dialled in through the developer menu, one keystroke later.
+		return;
+	}
 	
 	auto set = [](const char * key, const char * value) {
 		g_api.iface().SetConfigVariable(key, value);
@@ -524,14 +564,18 @@ void applyUserGfxConfigImpl() {
 		set("rtx.leftHandedCoordinateSystem", "True");
 		set("rtx.zUp", "False");
 		set("rtx.sceneScale", "1.0");
-		set("rtx.legacyMaterial.roughnessConstant", "0.35");
-		set("rtx.legacyMaterial.metallicConstant", "0.12");
+		// Matte stone, no metal, and legacy lights at half gain. Same values as
+		// applyPreviewConfigImpl(); changing one without the other gives a look
+		// that shifts the first time the player opens the video options.
+		set("rtx.legacyMaterial.roughnessConstant", "0.75");
+		set("rtx.legacyMaterial.metallicConstant", "0.0");
 		set("rtx.legacyMaterial.emissiveIntensity", "0.0");
+		set("rtx.lightConversionIntensityFactor", "0.5");
 	}
 	LogInfo << "Remix scene: path traced profile quality=" << gfx.quality
 	        << " dlss=" << gfx.dlss << " rr=" << gfx.rayReconstruction
 	        << " denoiser=" << gfx.denoiser
-	        << (g_dllHooked ? " autoexposure=0 legacyRough=0.35" : "");
+	        << (g_dllHooked ? " autoexposure=0 legacyRough=0.75" : "");
 }
 
 void applyRenderModeConfig(bool inGame) {
@@ -539,7 +583,14 @@ void applyRenderModeConfig(bool inGame) {
 	if(!g_api.iface().SetConfigVariable) {
 		return;
 	}
-	
+
+	if(debugEnabled(DebugFreeConfig)) {
+		// Crossing between a menu and the level would otherwise reset the look
+		// mid-session, which is the other half of "the developer menu does not
+		// stick". The flat 2D menu profile is a look, not a correctness fix.
+		return;
+	}
+
 	// SetConfigVariable is not free and may only land at end of frame, so only
 	// touch it when the mode actually flips.
 	const int wanted = inGame ? 1 : 0;

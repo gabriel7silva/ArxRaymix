@@ -97,7 +97,22 @@ enum DebugBit {
 	 * runs of the same build, which is the only way to tell a rendering problem
 	 * from a loading one.
 	 */
-	DebugWorldBillboards = 1 << 17
+	DebugWorldBillboards = 1 << 17,
+	/*!
+	 * Stop pinning the look-related Remix options, so the developer menu (Alt+X)
+	 * and the user.conf it writes are what decide.
+	 *
+	 * Normally the game re-applies its own values whenever a device registers or
+	 * the render mode flips, which protects a run from a stale user.conf but also
+	 * means a slider dragged in the developer menu is silently overwritten and
+	 * never survives a restart. With this bit the game keeps only what would
+	 * otherwise break the image - handedness, scene scale, the Y-flip - and
+	 * leaves materials, exposure and lighting alone.
+	 *
+	 * This is how to find a value worth committing: tune it live, save it, and
+	 * read it back out of user.conf.
+	 */
+	DebugFreeConfig = 1 << 18
 };
 
 //! Raw --remix-debug mask. Zero unless the option was passed.
