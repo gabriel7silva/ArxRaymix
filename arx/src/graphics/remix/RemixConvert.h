@@ -85,7 +85,19 @@ enum DebugBit {
 	DebugFlipNormalGreen = 1 << 15,
 	//! Feed the derived height map to parallax occlusion as well. Off by default:
 	//! height guessed from luminance overshoots on high-contrast textures.
-	DebugParallax = 1 << 16
+	DebugParallax = 1 << 16,
+	/*!
+	 * Build the camera-facing quads from EERIECreateSprite() - fire, magic,
+	 * sparks, light flares - in world space instead of screen space, so the path
+	 * tracer sees them and they can light what is around them.
+	 *
+	 * Off by default. An earlier unconditional version of this left the game on
+	 * a black screen with no level geometry and no crash in either log, and the
+	 * cause was never identified. Behind a bit it can be toggled between two
+	 * runs of the same build, which is the only way to tell a rendering problem
+	 * from a loading one.
+	 */
+	DebugWorldBillboards = 1 << 17
 };
 
 //! Raw --remix-debug mask. Zero unless the option was passed.

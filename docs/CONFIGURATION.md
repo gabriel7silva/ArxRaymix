@@ -95,5 +95,6 @@ game; these are the ones that still bite:
 | `128` | Forces the Remix developer UI on |
 | `512` | Restores the `VK_COMPARE_OP_NEVER` alpha-test bug, on purpose |
 | `4096` | World-space entities without skinning |
+| `131072` | Builds sprites — fire, magic, sparks, light flares — in world space so the path tracer sees them. Off by default and unverified; see [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 The full list is in the option's help text: run `arx.exe --help`.

@@ -2394,8 +2394,12 @@ void D3D9Renderer::drawTextured(Primitive primitive, const TexturedVertex * vert
 	 * Only take the world path for geometry the engine converted for us. What is
 	 * left in screen space - sprites, sparks, flames from EERIECreateSprite() -
 	 * is a camera-facing quad built from a projected position and a pixel size.
-	 * There is no world orientation in it to recover, so it stays a 2D overlay
-	 * rather than being reconstructed and made to shimmer.
+	 * There is no world orientation in it to recover here, so it stays a 2D
+	 * overlay rather than being reconstructed and made to shimmer.
+	 *
+	 * EERIECreateSprite() can build those quads in world space instead, where
+	 * the world position is still in hand, under --remix-debug 131072. Then they
+	 * arrive marked and take this path like anything else.
 	 */
 	if(remixWantsWorldSpace() && isWorldSpaceW(vertices[0].w)) {
 		if(drawUnprojectedTL(primitive, vertices, count, nullptr, 0)) {
@@ -2728,8 +2732,12 @@ void D3D9Renderer::drawIndexed(Primitive primitive, const TexturedVertex * verti
 	 * Only take the world path for geometry the engine converted for us. What is
 	 * left in screen space - sprites, sparks, flames from EERIECreateSprite() -
 	 * is a camera-facing quad built from a projected position and a pixel size.
-	 * There is no world orientation in it to recover, so it stays a 2D overlay
-	 * rather than being reconstructed and made to shimmer.
+	 * There is no world orientation in it to recover here, so it stays a 2D
+	 * overlay rather than being reconstructed and made to shimmer.
+	 *
+	 * EERIECreateSprite() can build those quads in world space instead, where
+	 * the world position is still in hand, under --remix-debug 131072. Then they
+	 * arrive marked and take this path like anything else.
 	 */
 	if(remixWantsWorldSpace() && isWorldSpaceW(vertices[0].w)) {
 		if(drawUnprojectedTL(primitive, vertices, nvertices, indices, nindices)) {

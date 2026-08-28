@@ -43,6 +43,8 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "graphics/Draw.h"
 
+#include "Configure.h"
+
 #include "core/Core.h"
 #include "core/Application.h"
 #include "core/GameTime.h"
@@ -52,6 +54,10 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/data/TextureContainer.h"
 #include "game/Camera.h"
 #include "graphics/data/Mesh.h"
+
+#if ARX_HAVE_RTX_REMIX
+#include "graphics/remix/RemixConvert.h"
+#endif
 
 CircularVertexBuffer<TexturedVertex> * pDynamicVertexBuffer_TLVERTEX;
 
@@ -95,12 +101,76 @@ static bool EERIECreateSprite(TexturedQuad & sprite, const Vec3f & in, float siz
 		return false;
 	}
 	
+	ColorRGBA col = color.toRGBA();
+
+#if ARX_HAVE_RTX_REMIX
+	/*
+	 * --remix-debug 131072: rebuild the quad in world space.
+	 *
+	 * A sprite is a camera-facing quad whose position was projected and whose
+	 * size is in pixels, so nothing about it is in world space by the time it
+	 * gets here - which is why the renderer otherwise leaves it as a 2D overlay
+	 * and the path tracer never sees a flame. Rebuilding it here works because
+	 * the world position is still in hand: `in` has not been projected away.
+	 *
+	 * Zpos <= 1 is left alone. Those sprites are pinned to a fixed depth as an
+	 * overlay, which is a screen-space intent, not a thing in the world.
+	 */
+	if(Zpos > 1.f && remix::debugEnabled(remix::DebugWorldBillboards)
+	   && GRenderer && GRenderer->wantsWorldSpaceEntities()) {
+
+		const glm::mat4x4 & viewToWorld = g_preparedCamera.m_viewToWorld;
+		const Vec3f right(viewToWorld[0]);
+		// View +Y is screen-down: Camera.cpp flips Y again on the way to screen
+		// coordinates, so this is the direction the 2D branch calls +y.
+		const Vec3f down(viewToWorld[1]);
+		const Vec3f forward(viewToWorld[2]);
+
+		/*
+		 * Screen pixels to world units at this depth. m_screenToView is already
+		 * 2 / (viewport * fov), and clip.w is the view-space depth, so the
+		 * product is exact - no probing a second projected point for a scale.
+		 */
+		const Vec2f perPixel = g_preparedCamera.m_screenToView * out.w;
+
+		// Facing the camera, so the tracer shades the lit side.
+		const Vec3f normal = -forward;
+
+		auto corner = [&](float dx, float dy) {
+			return in + right * (dx * perPixel.x) + down * (dy * perPixel.y);
+		};
+
+		sprite.v[0] = TexturedVertex(Vec3f(0.f), 0.f, col, Vec2f(0.f));
+		sprite.v[1] = TexturedVertex(Vec3f(0.f), 0.f, col, Vec2f(1.f, 0.f));
+		sprite.v[2] = TexturedVertex(Vec3f(0.f), 0.f, col, Vec2f(1.f, 1.f));
+		sprite.v[3] = TexturedVertex(Vec3f(0.f), 0.f, col, Vec2f(0.f, 1.f));
+
+		// Same corner order as the 2D branch below, so winding and texture
+		// orientation are unchanged.
+		if(rot == 0) {
+			sprite.v[0].p = corner(-t, -t);
+			sprite.v[1].p = corner( t, -t);
+			sprite.v[2].p = corner( t,  t);
+			sprite.v[3].p = corner(-t,  t);
+		} else {
+			for(long i = 0; i < 4; i++) {
+				float tt = glm::radians(MAKEANGLE(rot + 90.f * i + 135.f));
+				sprite.v[i].p = corner(std::sin(tt) * t, std::cos(tt) * t);
+			}
+		}
+
+		for(long i = 0; i < 4; i++) {
+			sprite.v[i].normal = normal;
+		}
+
+		return true;
+	}
+#endif
+
 	if(Zpos <= 1.f) {
 		p.z = Zpos;
 		out.w = 1.f / (1.f - Zpos);
 	}
-	
-	ColorRGBA col = color.toRGBA();
 
 	
 	sprite.v[0] = TexturedVertex(Vec3f(0.f), out.w, col, Vec2f(0.f));
