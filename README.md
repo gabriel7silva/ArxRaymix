@@ -67,9 +67,10 @@ Work in progress, and the bars are meant literally.
 
 ### Not working yet
 
-- **Fire, magic and particle effects are not traced.** They are still screen-space overlays, so a
-  torch flame casts no light. A world-space rewrite is the next milestone; the first attempt was
-  reverted because it broke level loading.
+- **Fire, magic and particle effects are not traced by default.** They are screen-space overlays, so
+  a torch flame casts no light. Building them in world space is implemented behind
+  `--remix-debug 131072` and is off until someone confirms on screen that it loads and looks right —
+  an earlier unconditional version broke level loading.
 - **Light intensity is unaudited.** Only eight lights can be active at once — the fixed-function
   limit — and radiance and `rtx.sceneScale` were last tuned while nothing was reaching the screen.
 - **Vertex colour still carries Arx's baked lighting.** Correct while rasterising, wrong once the
@@ -132,7 +133,7 @@ libepoxy, zlib) are in `libs/`, so there is nothing else to fetch.
 Download an RTX Remix release and extract it into `runtime/remix-extract/`, then:
 
 ```bash
-pwsh -File scripts/run-remix-scene.ps1 -LoadLevel 1
+powershell -ExecutionPolicy Bypass -File scripts/run-remix-scene.ps1 -LoadLevel 1
 ```
 
 The script finds your Arx Fatalis install from the Steam and GOG registry entries; pass
