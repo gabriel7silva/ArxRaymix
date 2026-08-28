@@ -1,0 +1,51 @@
+/*
+ * Copyright 2011-2019 Arx Libertatis Team (see the AUTHORS file)
+ *
+ * This file is part of Arx Libertatis.
+ *
+ * Arx Libertatis is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Arx Libertatis is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "core/Version.h"
+
+/*!
+ * This file is automatically processed by cmake if the version or commit id changes.
+ * For the exact syntax see the documentation of the configure_file() cmake command.
+ * For available variables see cmake/VersionString.cmake.
+ */
+
+#define ARX_VERSION_LINE_COUNT ${VERSION_COUNT}
+#if ARX_VERSION_LINE_COUNT != 6 && ARX_VERSION_LINE_COUNT != 7
+#error "Configure error - the VERSION file should specify 6 or 7 non-empty lines!"
+#endif
+
+const std::string arx_name = "${VERSION_0_NAME}";
+const std::string arx_icon_name = "${VERSION_1_STRING}";
+const std::string arx_version = "${VERSION_0_STRING}${VERSION_SUFFIX}${GIT_SUFFIX_7}";
+const u64 arx_version_number = (u64(${VERSION_MAJOR}) << 48) | (u64(${VERSION_MINOR}) << 32)
+                             | (u64(${VERSION_PATCH}) << 16) | (u64(${VERSION_BUILD}) << 0);
+#cmakedefine VERSION_6
+#ifdef VERSION_6
+const std::string arx_release_codename = "${VERSION_6}";
+#else
+const std::string arx_release_codename;
+#endif
+
+// TODO move this to an external file once we ship our own resources
+const std::string arx_credits = "${AUTHORS}";
+const std::string arx_copyright = "${COPYING}";
+
+const std::string cmake_version = "${CMAKE_VERSION}";
+
+const int tbg_version_id = ${VERSION_4_NUMBER};

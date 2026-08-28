@@ -1,0 +1,53 @@
+# Build trees
+/build/
+/build-*/
+
+# In-tree CMake configuration, for anyone who configures outside build/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+*.sln
+*.vcxproj
+*.vcxproj.*
+
+# Third-party runtime, game data and per-run scratch. Never committed: the
+# NVIDIA Remix runtime and Arx Fatalis data are not ours to redistribute.
+/runtime/
+/mod texture hd/
+
+# Written by the Remix runtime and by the game, wherever they are launched from.
+# rtx-remix/ is unanchored because the runtime writes it into whatever directory
+# the game was launched from, so the vendored SDK header has to be re-included.
+rtx-remix/
+!arx/third_party/rtx-remix/
+rtx.conf
+user.conf
+metrics.txt
+imgui.ini
+*.dxvk-cache
+*.log
+*.dmp
+
+# Captures and screenshots are never published from a working tree
+*.dds
+Screenshots/
+
+# Session notes stay local
+/docs/dev/
+
+# Editor, IDE and agent scratch
+/.vs/
+/.cursor/
+/.claude/
+*.user
+
+# The pre-fork git history, kept locally for diffing against upstream
+/.git.archive/
+
+# Detached submodule pointers into .git.archive
+.git-submodule-link
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store

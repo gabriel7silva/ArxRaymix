@@ -1,0 +1,513 @@
+/*
+ * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ *
+ * This file is part of Arx Libertatis.
+ *
+ * Arx Libertatis is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Arx Libertatis is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ */
+/* Based on:
+===========================================================================
+ARX FATALIS GPL Source Code
+Copyright (C) 1999-2010 Arkane Studios SA, a ZeniMax Media company.
+
+This file is part of the Arx Fatalis GPL Source Code ('Arx Fatalis Source Code').
+
+Arx Fatalis Source Code is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+Arx Fatalis Source Code is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with Arx Fatalis Source Code.  If not, see
+<http://www.gnu.org/licenses/>.
+
+In addition, the Arx Fatalis Source Code is also subject to certain additional terms. You should have received a copy of these
+additional terms immediately following the terms and conditions of the GNU General Public License which accompanied the Arx
+Fatalis Source Code. If not, please request a copy in writing from Arkane Studios at the address below.
+
+If you have questions concerning this license or the applicable additional terms, you may contact in writing Arkane Studios, c/o
+ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
+===========================================================================
+*/
+// Copyright (c) 1999-2000 ARKANE Studios SA. All rights reserved
+
+#include "gui/Text.h"
+
+#include <sstream>
+#include <utility>
+
+#include "core/Localisation.h"
+#include "core/Config.h"
+#include "core/Core.h"
+
+#include "gui/Interface.h"
+#include "gui/TextManager.h"
+
+#include "graphics/Renderer.h"
+#include "graphics/Math.h"
+#include "graphics/font/Font.h"
+#include "graphics/font/FontCache.h"
+
+#include "io/resource/PakReader.h"
+#include "io/resource/ResourcePath.h"
+#include "io/log/Logger.h"
+
+#include "util/Cast.h"
+#include "util/Number.h"
+#include "util/Unicode.h"
+
+
+TextManager * pTextManage = nullptr;
+
+Font * hFontInBook = nullptr;
+Font * hFontMainMenu = nullptr;
+Font * hFontMenu = nullptr;
+Font * hFontControls = nullptr;
+Font * hFontCredits = nullptr;
+Font * hFontInGame = nullptr;
+Font * hFontInGameNote = nullptr;
+Font * hFontDebug = nullptr;
+Font * g_iconFont = nullptr;
+
+static void ARX_UNICODE_FormattingInRect(Font * font, std::string_view text, const Rect & rect, Color col,
+                                         long * textHeight = 0, long * numChars = 0,
+                                         bool computeOnly = false, bool noOneLineParagraphs = false) {
+	
+	const char * itLastParagraphBreak = text.data();
+	const char * itLastLineBreak = text.data();
+	const char * itLastWordBreak = text.data();
+	const char * it = text.data();
+	
+	int maxLineWidth;
+	if(rect.right == Rect::Limits::max()) {
+		maxLineWidth = std::numeric_limits<int>::max();
+	} else {
+		maxLineWidth = rect.width();
+	}
+	arx_assert(maxLineWidth >= 0);
+	int penY = rect.top;
+	
+	if(textHeight) {
+		*textHeight = 0;
+	}
+	
+	if(numChars) {
+		*numChars = 0;
+	}
+	
+	// Ensure we can at least draw one line...
+	if(penY + font->getLineHeight() > rect.bottom) {
+		return;
+	}
+	
+	size_t linesInParagraph = 0;
+	bool wasLineBreak = true;
+	
+	while(it != text.data() + text.size()) {
+		
+		const char * next = util::UTF8::next(it, text.data() + text.size());
+		
+		// Line break ?
+		bool isLineBreak = false;
+		if(*it == '\n' || *it == '*') {
+			isLineBreak = true;
+			if(wasLineBreak) {
+				itLastParagraphBreak = next;
+				linesInParagraph = 0;
+			}
+			wasLineBreak = true;
+		} else {
+			
+			// Word break ?
+			if(*it == ' ' || *it == '\t') {
+				itLastWordBreak = it;
+			} else {
+				wasLineBreak = false;
+			}
+			
+			// Check length of string up to this point
+			Vec2i size = font->getTextSize(std::string_view(itLastLineBreak, next - itLastLineBreak));
+			if(size.x > maxLineWidth) { // Too long ?
+				isLineBreak = true;
+				if(itLastWordBreak > itLastLineBreak) {
+					// Draw a line from the last line break up to the last word break
+					it = itLastWordBreak;
+					next = util::UTF8::next(it, text.data() + text.size());
+				} else if(it == itLastLineBreak) {
+					// Not enough space to render even one character!
+					break;
+				} else {
+					// The current word is too long to fit on a line, force a line break
+					// Don't skip a character after the forced line break.
+					next = it;
+				}
+			}
+		}
+		
+		// If we have to draw a line
+		//  OR
+		// This is the last character of the string
+		if(isLineBreak || next == text.data() + text.size()) {
+			
+			if(!isLineBreak) {
+				it = next;
+			}
+			
+			// Draw the line
+			if(!computeOnly) {
+				font->draw(rect.left, penY, std::string_view(itLastLineBreak, it - itLastLineBreak), col);
+			}
+			
+			itLastLineBreak = next;
+			if(itLastParagraphBreak != next) {
+				linesInParagraph++;
+			}
+			
+			penY += font->getLineHeight();
+			
+			// Validate that the new line will fit inside the rect...
+			if(penY + font->getLineHeight() > rect.bottom) {
+				break;
+			}
+			
+		}
+		
+		it = next;
+	}
+	
+	if(noOneLineParagraphs && linesInParagraph == 1 && itLastParagraphBreak != text.data()
+	   && !wasLineBreak && it != text.data() + text.size()) {
+		it = itLastParagraphBreak;
+		penY -= font->getLineHeight();
+	}
+	
+	// Return text height
+	if(textHeight) {
+		*textHeight = penY - rect.top;
+	}
+	
+	// Return num characters displayed
+	if(numChars) {
+		*numChars = it - text.data();
+	}
+	
+}
+
+long ARX_UNICODE_ForceFormattingInRect(Font * font, std::string_view text,
+                                       const Rect & rect, bool noOneLineParagraphs) {
+	long numChars;
+	ARX_UNICODE_FormattingInRect(font, text, rect, Color(), 0, &numChars, true, noOneLineParagraphs);
+	return numChars;
+}
+
+long ARX_UNICODE_DrawTextInRect(Font * font, const Vec2f & pos, float maxx, std::string_view text,
+                                Color col, const Rect * pClipRect) {
+	
+	if(pClipRect) {
+		GRenderer->SetScissor(*pClipRect);
+	}
+
+	Rect rect(Rect::Num(pos.x), Rect::Num(pos.y), Rect::Num(maxx), Rect::Limits::max());
+	if(maxx >= std::numeric_limits<float>::max()) {
+		rect.right = Rect::Limits::max();
+	}
+
+	long height;
+	ARX_UNICODE_FormattingInRect(font, text, rect, col, &height);
+	
+	if(pClipRect) {
+		GRenderer->SetScissor(Rect());
+	}
+	
+	return height;
+}
+
+void UNICODE_ARXDrawTextCenter(Font * font, const Vec2f & pos, std::string_view text, Color col) {
+	font->draw(Vec2i(pos) - Vec2i(font->getTextSize(text).advance() / 2, 0), text, col);
+}
+
+void UNICODE_ARXDrawTextCenteredScroll(Font * font, float x, float y, float x2, std::string && text,
+                                       Color col, PlatformDuration iTimeScroll, float fSpeed,
+                                       int iNbLigne, PlatformDuration iTimeOut) {
+	
+	s32 _x = util::to<s32>(x - x2);
+	s32 _y = util::to<s32>(y);
+	s32 w = util::to<s32>(x + x2);
+	
+	Rect rRect(_x, _y, w, Rect::Limits::max());
+	
+	if(pTextManage) {
+		pTextManage->AddText(font, std::move(text), rRect, col, iTimeOut, iTimeScroll, fSpeed, iNbLigne);
+	}
+	
+}
+
+static Font * createFont(const res::path & fontFace, std::string_view configSizeKey, unsigned int fontSize,
+                         float scaleFactor, int fontWeight = 0) {
+
+	arx_assert(fontSize > 0);
+	arx_assert(scaleFactor > 0.f);
+	arx_assert(scaleFactor < 1000.f); // TODO better maximum
+	
+	std::string_view configSize = getLocalised(configSizeKey, std::string_view());
+	if(!configSize.empty()) {
+		s32 size = util::toInt(configSize).value_or(0);
+		if(size > 0) {
+			fontSize = size;
+		} else {
+			LogError << "Invalid font size for: " << configSizeKey;
+		}
+	}
+	
+	fontSize = unsigned(fontSize * scaleFactor);
+
+	Font * newFont = FontCache::getFont(fontFace, fontSize, unsigned(fontWeight));
+	if(!newFont) {
+		LogError << "Error loading font: " << fontFace << " of size " << fontSize;
+	}
+	
+	return newFont;
+}
+
+static float g_currentFontScale = 0.f;
+static float g_currentFontSize = 0.f;
+static int g_currentFontWeight = 0;
+
+static bool getFontFile(res::path & result) {
+	
+	if(!config.interface.language.empty()) {
+		result = "misc/arx_" + config.interface.language + ".ttf";
+		if(g_resources->hasFile(result)) {
+			return true;
+		}
+	}
+	
+	result = "misc/arx_default.ttf";
+	if(g_resources->hasFile(result)) {
+		return true;
+	}
+	
+	result = "misc/arx.ttf";
+	if(g_resources->hasFile(result)) {
+		return true;
+	}
+	
+	result = "misc/arx_base.ttf";
+	if(g_resources->hasFile(result)) {
+		return true;
+	}
+	
+	if(!config.interface.language.empty()) {
+		LogCritical << "Missing font file: need either misc/arx_" << config.interface.language
+		            << ".ttf, misc/arx_base.ttf, misc/arx_default.ttf or misc/arx.ttf.";
+	} else {
+		LogCritical << "Missing font file: need either misc/arx_base.ttf, misc/arx_default.ttf or misc/arx.ttf.";
+	}
+	return false;
+}
+
+static float smallTextScale(float scale) {
+	if(scale > 2.f) {
+		return scale * 0.85f;
+	}
+	if(scale > 1.f) {
+		return scale * 0.7f + 0.3f;
+	}
+	return scale;
+}
+
+void ARX_Text_scaleBookFont(float scale, int weight) {
+	
+	res::path file;
+	if(!getFontFile(file)) {
+		return;
+	}
+	
+	Font * nFontInBook = createFont(file, "system_font_book_size", 18, smallTextScale(scale), weight);
+	FontCache::releaseFont(hFontInBook);
+	hFontInBook = nFontInBook;
+	
+}
+
+void ARX_Text_scaleNoteFont(float scale, int weight) {
+	
+	res::path file;
+	if(!getFontFile(file)) {
+		return;
+	}
+	
+	Font * nFontInGameNote = createFont(file, "system_font_note_size", 18, smallTextScale(scale), weight);
+	FontCache::releaseFont(hFontInGameNote);
+	hFontInGameNote = nFontInGameNote;
+	
+}
+
+bool ARX_Text_Init(bool force) {
+	
+	res::path file;
+	if(!getFontFile(file)) {
+		return false;
+	}
+	
+	float scale = std::max(std::min(g_sizeRatio.y, g_sizeRatio.x), .001f);
+	if(!force && scale == g_currentFontScale
+	   && config.interface.fontSize == g_currentFontSize && config.interface.fontWeight == g_currentFontWeight) {
+		return true;
+	}
+	g_currentFontScale = scale;
+	g_currentFontSize = config.interface.fontSize;
+	g_currentFontWeight = config.interface.fontWeight;
+	
+	// Keep small fonts small when increasing resolution
+	float smallScale = smallTextScale(scale) * config.interface.fontSize;
+	int smallWeight = config.interface.fontWeight;
+	
+	delete pTextManage;
+	pTextManage = new TextManager();
+	
+	FontCache::initialize();
+	
+	Font * nFontMainMenu   = createFont(file, "system_font_mainmenu_size", 58, scale);
+	Font * nFontMenu       = createFont(file, "system_font_menu_size", 32, scale);
+	Font * nFontControls   = createFont(file, "system_font_menucontrols_size", 22, scale);
+	Font * nFontCredits    = createFont(file, "system_font_menucredits_size", 36, scale);
+	Font * nFontInGame     = createFont(file, "system_font_book_size", 18, smallScale);
+	Font * nFontInGameNote = createFont(file, "system_font_note_size", 18, smallScale, smallWeight);
+	Font * nFontInBook     = createFont(file, "system_font_book_size", 18, smallTextScale(scale), smallWeight);
+	
+	res::path debugFontFile = "misc/dejavusansmono.ttf";
+	if(!g_resources->hasFile(debugFontFile)) {
+		LogWarning << "Missing debug font " << debugFontFile;
+		debugFontFile = file;
+	}
+	float debugFontScale = scale / 2.5f;
+	if(debugFontScale < 0.5f) {
+		debugFontScale *= 2.f;
+	} else if(debugFontScale < 1.f) {
+		debugFontScale = 1.f;
+	}
+	Font * nFontDebug = FontCache::getFont(debugFontFile, unsigned(14.f * debugFontScale));
+	
+	res::path iconFontFile = "misc/icons.ttf";
+	Font * iconFont = FontCache::getFont(iconFontFile, unsigned(40.f * scale), 0, false);
+	if(!iconFont) {
+		LogWarning << "Could not load font " << iconFontFile;
+	}
+	
+	// Only release old fonts after creating new ones to allow same fonts to be cached.
+	FontCache::releaseFont(hFontMainMenu);
+	FontCache::releaseFont(hFontMenu);
+	FontCache::releaseFont(hFontControls);
+	FontCache::releaseFont(hFontCredits);
+	FontCache::releaseFont(hFontInGame);
+	FontCache::releaseFont(hFontInGameNote);
+	FontCache::releaseFont(hFontInBook);
+	FontCache::releaseFont(hFontDebug);
+	FontCache::releaseFont(g_iconFont);
+	
+	hFontMainMenu = nFontMainMenu;
+	hFontMenu = nFontMenu;
+	hFontControls = nFontControls;
+	hFontCredits = nFontCredits;
+	hFontInGame = nFontInGame;
+	hFontInGameNote = nFontInGameNote;
+	hFontInBook = nFontInBook;
+	hFontDebug = nFontDebug;
+	g_iconFont = iconFont;
+	
+	if(!hFontMainMenu
+	   || !hFontMenu
+	   || !hFontControls
+	   || !hFontCredits
+	   || !hFontInGame
+	   || !hFontInGameNote
+	   || !hFontInBook
+	) {
+		LogCritical << "Could not load font " << file << " for scale " << scale
+		            << " / small scale " << smallScale;
+		return false;
+	}
+	
+	if(!hFontDebug) {
+		LogCritical << "Could not load font " << debugFontFile;
+		return false;
+	}
+	
+	LogInfo << "Loaded font " << file << " with sizes " << hFontMainMenu->getSize()
+	        << ", " << hFontMenu->getSize() << ", " << hFontControls->getSize()
+	        << ", " << hFontCredits->getSize() << ", " << hFontInGame->getSize()
+	        << ", " << hFontInGameNote->getSize() << ", " << hFontInBook->getSize()
+	        << ", " << hFontDebug->getSize();
+	
+	return true;
+}
+
+void ARX_Text_Close() {
+	
+	g_currentFontScale = 0.f;
+	g_currentFontSize = 0.f;
+	g_currentFontWeight = 0;
+	
+	delete pTextManage;
+	pTextManage = nullptr;
+	
+	FontCache::releaseFont(hFontInBook);
+	hFontInBook = nullptr;
+	
+	FontCache::releaseFont(hFontMainMenu);
+	hFontMainMenu = nullptr;
+	
+	FontCache::releaseFont(hFontMenu);
+	hFontMenu = nullptr;
+	
+	FontCache::releaseFont(hFontControls);
+	hFontControls = nullptr;
+	
+	FontCache::releaseFont(hFontCredits);
+	hFontCredits = nullptr;
+	
+	FontCache::releaseFont(hFontInGame);
+	hFontInGame = nullptr;
+	
+	FontCache::releaseFont(hFontInGameNote);
+	hFontInGameNote = nullptr;
+
+	FontCache::releaseFont(hFontDebug);
+	hFontDebug = nullptr;
+
+	FontCache::releaseFont(g_iconFont);
+	g_iconFont = nullptr;
+	
+	FontCache::shutdown();
+}
+
+void drawTextCentered(Font * font, Vec2f center, std::string_view text, Color color) {
+	Vec2i size = font->getTextSize(text);
+	Vec2f corner = center - Vec2f(size) / 2.f;
+	font->draw(int(corner.x), int(corner.y), text, color);
+}
+
+void drawTextAt(Font * font, const Vec3f & pos, std::string_view text, Color color, float offset) {
+	
+	// Project the 3d coordinates to get an on-screen position
+	Vec4f p = worldToClipSpace(pos);
+	if(p.w <= 0.f) {
+		// Don't draw text behind the camera!
+		return;
+	}
+	
+	Vec2f pos2d = Vec2f(p) / p.w + Vec2f(0, offset);
+	drawTextCentered(font, pos2d, text, color);
+	
+}

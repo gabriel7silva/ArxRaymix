@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 260" width="1000" height="260" role="img" aria-label="Arx Raymix - Arx Fatalis path traced with RTX Remix">
+  <defs>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#161210"/>
+      <stop offset="60%" stop-color="#0e0b0a"/>
+      <stop offset="100%" stop-color="#050404"/>
+    </linearGradient>
+
+    <radialGradient id="torch" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffb457" stop-opacity="0.85"/>
+      <stop offset="45%" stop-color="#e8722a" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#e8722a" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="ray" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ffd39a" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#ffd39a" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ffd39a" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f6e0bd"/>
+      <stop offset="55%" stop-color="#ffb457"/>
+      <stop offset="100%" stop-color="#d2691e"/>
+    </linearGradient>
+
+    <!-- The sweep that runs across the title, once every six seconds. -->
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="45%" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0">
+        <animate attributeName="stop-opacity" values="0;0" dur="6s" repeatCount="indefinite"/>
+      </stop>
+      <animateTransform attributeName="gradientTransform" type="translate"
+                        values="-1 0; 1 0; 1 0" dur="6s" repeatCount="indefinite"/>
+    </linearGradient>
+
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+
+  <rect width="1000" height="260" fill="url(#stone)"/>
+
+  <!-- Masonry, drawn faintly so the light has something to fall on. -->
+  <g stroke="#2a201b" stroke-width="1" fill="none" opacity="0.55">
+    <path d="M0 40 H1000 M0 90 H1000 M0 140 H1000 M0 190 H1000"/>
+    <path d="M60 0 V40 M180 0 V40 M300 0 V40 M420 0 V40 M540 0 V40 M660 0 V40 M780 0 V40 M900 0 V40"/>
+    <path d="M0 40 V90 M120 40 V90 M240 40 V90 M360 40 V90 M480 40 V90 M600 40 V90 M720 40 V90 M840 40 V90 M960 40 V90"/>
+    <path d="M60 90 V140 M180 90 V140 M300 90 V140 M420 90 V140 M540 90 V140 M660 90 V140 M780 90 V140 M900 90 V140"/>
+    <path d="M0 140 V190 M120 140 V190 M240 140 V190 M360 140 V190 M480 140 V190 M600 140 V190 M720 140 V190 M840 140 V190 M960 140 V190"/>
+    <path d="M60 190 V260 M180 190 V260 M300 190 V260 M420 190 V260 M540 190 V260 M660 190 V260 M780 190 V260 M900 190 V260"/>
+  </g>
+
+  <!-- Torchlight: two pools, breathing out of phase so the flicker never loops visibly. -->
+  <g filter="url(#soft)">
+    <ellipse cx="150" cy="130" rx="190" ry="140" fill="url(#torch)">
+      <animate attributeName="rx" values="190;205;186;196;190" dur="3.7s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.85;1;0.78;0.94;0.85" dur="2.3s" repeatCount="indefinite"/>
+    </ellipse>
+    <ellipse cx="880" cy="150" rx="150" ry="120" fill="url(#torch)">
+      <animate attributeName="rx" values="150;138;158;146;150" dur="4.9s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.7;0.55;0.8;0.62;0.7" dur="3.1s" repeatCount="indefinite"/>
+    </ellipse>
+  </g>
+
+  <!-- Traced rays: light leaving the torch, bouncing once, reaching the eye. -->
+  <g stroke="url(#ray)" stroke-width="1.6" fill="none" stroke-linecap="round">
+    <path d="M150 130 L430 205 L720 120" opacity="0">
+      <animate attributeName="opacity" values="0;0.9;0" dur="4s" begin="0s" repeatCount="indefinite"/>
+    </path>
+    <path d="M150 130 L560 60 L860 165" opacity="0">
+      <animate attributeName="opacity" values="0;0.7;0" dur="4s" begin="1.3s" repeatCount="indefinite"/>
+    </path>
+    <path d="M880 150 L520 230 L200 175" opacity="0">
+      <animate attributeName="opacity" values="0;0.6;0" dur="4s" begin="2.6s" repeatCount="indefinite"/>
+    </path>
+  </g>
+
+  <!-- Photons travelling those same paths. -->
+  <g fill="#fff2d8">
+    <circle r="3">
+      <animateMotion path="M150 130 L430 205 L720 120" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="2.4">
+      <animateMotion path="M150 130 L560 60 L860 165" dur="4s" begin="1.3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="4s" begin="1.3s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="2.4">
+      <animateMotion path="M880 150 L520 230 L200 175" dur="4s" begin="2.6s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="4s" begin="2.6s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <g font-family="Georgia, 'Times New Roman', serif" text-anchor="middle">
+    <text x="500" y="128" font-size="76" letter-spacing="10" fill="url(#title)">ARX RAYMIX</text>
+    <text x="500" y="128" font-size="76" letter-spacing="10" fill="url(#sweep)">ARX RAYMIX</text>
+    <text x="500" y="166" font-size="19" letter-spacing="5.5" fill="#c9ac86" opacity="0.95">
+      ARX FATALIS · PATH TRACED WITH RTX REMIX
+    </text>
+    <text x="500" y="212" font-size="13" letter-spacing="3" fill="#7d6a58" font-family="Consolas, monospace">
+      1.4 · WINDOWS x64 · D3D9 → dxvk-remix
+    </text>
+  </g>
+</svg>

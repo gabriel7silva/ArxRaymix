@@ -1,0 +1,112 @@
+
+#ifndef ARX_CONFIGURE_H
+#define ARX_CONFIGURE_H
+
+// Thread & process control
+#cmakedefine01 ARX_HAVE_PTHREADS
+#cmakedefine01 ARX_HAVE_PRCTL
+#cmakedefine01 ARX_HAVE_PTHREAD_SETNAME_NP
+#cmakedefine01 ARX_HAVE_PTHREAD_SET_NAME_NP
+#cmakedefine01 ARX_HAVE_SCHED_GETSCHEDULER
+#cmakedefine01 ARX_HAVE_NANOSLEEP
+#cmakedefine01 ARX_HAVE_FORK
+#cmakedefine01 ARX_HAVE_SETPGID
+#cmakedefine01 ARX_HAVE_EXECVP
+#cmakedefine01 ARX_HAVE_POSIX_SPAWNP
+#cmakedefine01 ARX_HAVE_UNISTD_ENVIRON
+#cmakedefine01 ARX_HAVE_WAITPID
+#cmakedefine01 ARX_HAVE_SIGACTION
+#cmakedefine01 ARX_HAVE_GETPID
+#cmakedefine01 ARX_HAVE_GETUID
+#cmakedefine01 ARX_HAVE_GETGID
+#cmakedefine01 ARX_HAVE_KILL
+#cmakedefine01 ARX_HAVE_SETRLIMIT
+
+// Filesystem & I/O
+#cmakedefine01 ARX_HAVE_POSIX_FILESYSTEM
+#cmakedefine01 ARX_HAVE_WIN32_FILESYSTEM
+#cmakedefine01 ARX_HAVE_BOOST_FILESYSTEM_V3
+#cmakedefine01 ARX_HAVE_READLINK
+#cmakedefine01 ARX_HAVE_OPEN
+#cmakedefine01 ARX_HAVE_O_CLOEXEC
+#cmakedefine01 ARX_HAVE_FCNTL
+#cmakedefine01 ARX_HAVE_DUP2
+#cmakedefine01 ARX_HAVE_PIPE
+#cmakedefine01 ARX_HAVE_PIPE2
+#cmakedefine01 ARX_HAVE_READ
+#cmakedefine01 ARX_HAVE_CLOSE
+#cmakedefine01 ARX_HAVE_ISATTY
+#cmakedefine01 ARX_HAVE_THREADSAFE_READDIR
+#cmakedefine01 ARX_HAVE_FPATHCONF
+#cmakedefine01 ARX_HAVE_PATHCONF
+#cmakedefine01 ARX_HAVE_NAME_MAX
+#cmakedefine01 ARX_HAVE_PC_NAME_MAX
+#cmakedefine01 ARX_HAVE_PC_CASE_SENSITIVE
+#cmakedefine01 ARX_HAVE_DIRFD
+#cmakedefine01 ARX_HAVE_FSTATAT
+#cmakedefine01 ARX_HAVE_AT_SYMLINK_NOFOLLOW
+#cmakedefine01 ARX_HAVE_CHDIR
+
+// Video backend
+#cmakedefine01 ARX_HAVE_EPOXY
+#cmakedefine01 ARX_HAVE_GLEW
+#cmakedefine01 ARX_HAVE_GLX
+#cmakedefine01 ARX_HAVE_EGL
+#cmakedefine01 ARX_HAVE_GL_STATIC
+#cmakedefine01 ARX_HAVE_RTX_REMIX
+#cmakedefine01 ARX_HAVE_D3D9
+
+// Audio backend
+#cmakedefine01 ARX_HAVE_OPENAL
+#cmakedefine01 ARX_HAVE_OPENAL_EFX
+#cmakedefine01 ARX_HAVE_OPENAL_HRTF
+
+// Input backend
+#cmakedefine01 ARX_HAVE_SDL1
+#cmakedefine01 ARX_HAVE_SDL2
+#cmakedefine01 ARX_HAVE_SDL2_X11
+
+// Crash handler
+#cmakedefine01 ARX_HAVE_CRASHHANDLER_POSIX
+#cmakedefine01 ARX_HAVE_CRASHHANDLER_WINDOWS
+
+// Endianness
+#cmakedefine01 ARX_HAVE_BUILTIN_BSWAP16
+#cmakedefine01 ARX_HAVE_BUILTIN_BSWAP32
+#cmakedefine01 ARX_HAVE_BUILTIN_BSWAP64
+#cmakedefine01 ARX_HAVE_BSWAP_16
+#cmakedefine01 ARX_HAVE_BSWAP_32
+#cmakedefine01 ARX_HAVE_BSWAP_64
+
+// Misc POSIX / Linux features
+#cmakedefine01 ARX_HAVE_DLSYM
+#cmakedefine01 ARX_HAVE_BACKTRACE
+#cmakedefine01 ARX_HAVE_WORDEXP
+#cmakedefine01 ARX_HAVE_UNAME
+#cmakedefine01 ARX_HAVE_GETRUSAGE
+#cmakedefine01 ARX_HAVE_SYSCONF
+#cmakedefine01 ARX_HAVE_GETEXECNAME
+#cmakedefine01 ARX_HAVE_SYSCTL
+#cmakedefine01 ARX_HAVE_SYSCTLBYNAME
+#cmakedefine01 ARX_HAVE_SETENV
+#cmakedefine01 ARX_HAVE_UNSETENV
+#cmakedefine01 ARX_HAVE_CONFSTR
+
+// Architure-specific features
+#cmakedefine01 ARX_HAVE_GET_CPUID
+#cmakedefine01 ARX_HAVE_GET_CPUID_MAX
+#cmakedefine01 ARX_HAVE_XMMINTRIN
+#cmakedefine01 ARX_HAVE_PMMINTRIN
+#cmakedefine01 ARX_HAVE_BUILTIN_IA32_FXSAVE
+
+// Assert intercepts
+#cmakedefine01 ARX_HAVE_LIBCPP_VERBOSE_ABORT
+#cmakedefine01 ARX_HAVE_GLIBCXX_ASSERT_FAIL
+
+// Build system
+#cmakedefine01 UNITY_BUILD
+
+// Defaults
+#cmakedefine01 ARX_DEBUG_GL
+
+#endif // ARX_CONFIGURE_H

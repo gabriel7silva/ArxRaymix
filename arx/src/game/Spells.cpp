@@ -1,0 +1,1103 @@
+/*
+ * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ *
+ * This file is part of Arx Libertatis.
+ *
+ * Arx Libertatis is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Arx Libertatis is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ */
+/* Based on:
+===========================================================================
+ARX FATALIS GPL Source Code
+Copyright (C) 1999-2010 Arkane Studios SA, a ZeniMax Media company.
+
+This file is part of the Arx Fatalis GPL Source Code ('Arx Fatalis Source Code'). 
+
+Arx Fatalis Source Code is free software: you can redistribute it and/or modify it under the terms of the GNU General Public 
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+Arx Fatalis Source Code is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied 
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with Arx Fatalis Source Code.  If not, see 
+<http://www.gnu.org/licenses/>.
+
+In addition, the Arx Fatalis Source Code is also subject to certain additional terms. You should have received a copy of these 
+additional terms immediately following the terms and conditions of the GNU General Public License which accompanied the Arx 
+Fatalis Source Code. If not, please request a copy in writing from Arkane Studios at the address below.
+
+If you have questions concerning this license or the applicable additional terms, you may contact in writing Arkane Studios, c/o 
+ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
+===========================================================================
+*/
+// Copyright (c) 1999-2000 ARKANE Studios SA. All rights reserved
+
+#include "game/Spells.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <set>
+#include <sstream>
+#include <utility>
+
+#include "animation/Animation.h"
+
+#include "core/Application.h"
+#include "core/Config.h"
+#include "core/Core.h"
+#include "core/GameTime.h"
+#include "core/Localisation.h"
+
+#include "game/Damage.h"
+#include "game/EntityId.h"
+#include "game/EntityManager.h"
+#include "game/Equipment.h"
+#include "game/NPC.h"
+#include "game/Player.h"
+#include "game/Inventory.h"
+#include "game/effect/Quake.h"
+#include "game/magic/Precast.h"
+#include "game/spell/Cheat.h"
+#include "game/spell/FlyingEye.h"
+
+#include "game/magic/spells/SpellsLvl01.h"
+#include "game/magic/spells/SpellsLvl02.h"
+#include "game/magic/spells/SpellsLvl03.h"
+#include "game/magic/spells/SpellsLvl04.h"
+#include "game/magic/spells/SpellsLvl05.h"
+#include "game/magic/spells/SpellsLvl06.h"
+#include "game/magic/spells/SpellsLvl07.h"
+#include "game/magic/spells/SpellsLvl08.h"
+#include "game/magic/spells/SpellsLvl09.h"
+#include "game/magic/spells/SpellsLvl10.h"
+
+#include "gui/Speech.h"
+#include "gui/Menu.h"
+#include "gui/Interface.h"
+#include "gui/MiniMap.h"
+#include "gui/Notification.h"
+
+#include "graphics/BaseGraphicsTypes.h"
+#include "graphics/Color.h"
+#include "graphics/Draw.h"
+#include "graphics/GraphicsTypes.h"
+#include "graphics/Math.h"
+#include "graphics/Renderer.h"
+#include "graphics/Vertex.h"
+#include "graphics/data/Mesh.h"
+#include "graphics/data/TextureContainer.h"
+#include "graphics/effects/SpellEffects.h"
+#include "graphics/particle/ParticleEffects.h"
+#include "graphics/particle/ParticleSystem.h"
+#include "graphics/particle/MagicFlare.h"
+
+#include "graphics/spells/Spells05.h"
+
+#include "input/Input.h"
+
+#include "io/resource/ResourcePath.h"
+#include "io/log/Logger.h"
+
+#include "math/Angle.h"
+#include "math/Vector.h"
+
+#include "physics/Collisions.h"
+
+#include "platform/Platform.h"
+#include "platform/profiler/Profiler.h"
+
+#include "scene/Light.h"
+#include "scene/Scene.h"
+#include "scene/GameSound.h"
+
+#include "script/Script.h"
+
+#include "util/Cast.h"
+
+
+bool WILLRETURNTOFREELOOK = false;
+bool GLOBAL_MAGIC_MODE = true;
+
+short ARX_FLARES_broken(1);
+
+long snip = 0;
+static Vec2f g_LastFlarePosition;
+static PlatformInstant g_LastFlareTime = 0;
+
+SpellManager spells;
+
+void SpellManager::init() {
+	
+	spellRecognitionInit();
+	
+	RuneInfosFill();
+	ARX_SPELLS_Init_Rects();
+	
+	m_nextInstance = 1;
+	
+}
+
+void SpellManager::clearAll() {
+	m_spells.clear();
+	m_nextInstance = 1;
+}
+
+Spell * SpellManager::operator[](const SpellHandle handle) const noexcept {
+	return handle && size_t(handle) < m_spells.size() ? m_spells[size_t(handle)].get() : nullptr;
+}
+
+static void SPELLEND_Notify(const Spell & spell);
+
+void SpellManager::endSpell(Spell * spell) noexcept {
+	spell->m_duration = 0;
+	spell->m_hasDuration = true;
+}
+
+void SpellManager::endByCaster(EntityHandle caster) noexcept {
+	
+	for(Spell & spell : byCaster(caster)) {
+		endSpell(&spell);
+	}
+	
+}
+
+void SpellManager::endByTarget(EntityHandle target, SpellType type) noexcept {
+	
+	Spell * spell = getSpellOnTarget(target, type);
+	if(spell) {
+		endSpell(spell);
+	}
+	
+}
+
+void SpellManager::endByType(SpellType type) noexcept {
+	
+	for(Spell & spell : ofType(type)) {
+		endSpell(&spell);
+	}
+	
+}
+
+void SpellManager::endByCaster(EntityHandle caster, SpellType type) noexcept {
+	
+	Spell * spell = getSpellByCaster(caster, type);
+	if(spell) {
+		endSpell(spell);
+	}
+	
+}
+
+Spell * SpellManager::getSpellByCaster(EntityHandle caster, SpellType type) const noexcept {
+	
+	if(caster == EntityHandle()) {
+		return nullptr;
+	}
+	
+	for(Spell & spell : ofType(type)) {
+		if(spell.m_caster == caster) {
+			return &spell;
+		}
+	}
+	
+	return nullptr;
+}
+
+Spell * SpellManager::getSpellOnTarget(EntityHandle target, SpellType type) const noexcept {
+	
+	if(target == EntityHandle()) {
+		return nullptr;
+	}
+	
+	for(Spell & spell : ofType(type)) {
+		if(std::find(spell.m_targets.begin(), spell.m_targets.end(), target) != spell.m_targets.end()) {
+			return &spell;
+		}
+	}
+	
+	return nullptr;
+}
+
+float SpellManager::getTotalSpellCasterLevelOnTarget(EntityHandle target, SpellType type) const noexcept {
+	
+	float level = 0.f;
+	for(const Spell & spell : ofType(type)) {
+		if(std::find(spell.m_targets.begin(), spell.m_targets.end(), target) != spell.m_targets.end()) {
+			level += spell.m_level;
+		}
+	}
+	
+	return level;
+}
+
+void SpellManager::replaceCaster(EntityHandle oldCaster, EntityHandle newCaster) noexcept {
+	
+	for(Spell & spell : byCaster(oldCaster)) {
+		spell.m_caster = newCaster;
+	}
+	
+}
+
+void SpellManager::removeTarget(Entity * io) noexcept {
+	
+	for(Spell & spell : *this) {
+		spell.m_targets.erase(std::remove(spell.m_targets.begin(), spell.m_targets.end(), io->index()),
+		                      spell.m_targets.end());
+	}
+	
+}
+
+Spell & SpellManager::addSpell(std::unique_ptr<Spell> spell) {
+	
+	arx_assert(spell);
+	
+	spell->m_instance = m_nextInstance++;
+	
+	for(size_t i = 0; i < m_spells.size(); i++) {
+		if(!m_spells[i]) {
+			spell->m_thisHandle = SpellHandle(i);
+			m_spells[i] = std::move(spell);
+			return *m_spells[i];
+		}
+	}
+	
+	spell->m_thisHandle = SpellHandle(m_spells.size());
+	
+	return *m_spells.emplace_back(std::move(spell));
+}
+
+void SpellManager::freeSlot(const Spell * spell) {
+	
+	for(std::unique_ptr<Spell> & entry : m_spells) {
+		if(entry.get() == spell) {
+			entry.reset();
+			break;
+		}
+	}
+	
+	while(!m_spells.empty() && !m_spells.back()) {
+		m_spells.resize(m_spells.size() - 1);
+	}
+	
+}
+
+Spell * SpellManager::getById(std::string_view idString) const noexcept {
+	EntityId id(idString);
+	for(Spell & spell : ofType(GetSpellId(id.className()))) {
+		if(spell.m_instance == id.instance()) {
+			return &spell;
+		}
+	}
+	return nullptr;
+}
+
+const char * getSpellName(SpellType num) {
+	
+	switch(num) {
+		// Level 1
+		case SPELL_MAGIC_SIGHT           : return "magic_sight";
+		case SPELL_MAGIC_MISSILE         : return "magic_missile";
+		case SPELL_IGNIT                 : return "ignit";
+		case SPELL_DOUSE                 : return "douse";
+		case SPELL_ACTIVATE_PORTAL       : return "activate_portal";
+		// Level 2
+		case SPELL_HEAL                  : return "heal";
+		case SPELL_DETECT_TRAP           : return "detect_trap";
+		case SPELL_ARMOR                 : return "armor";
+		case SPELL_LOWER_ARMOR           : return "lower_armor";
+		case SPELL_HARM                  : return "harm";
+		// Level 3
+		case SPELL_SPEED                 : return "speed";
+		case SPELL_DISPELL_ILLUSION      : return "dispell_illusion";
+		case SPELL_FIREBALL              : return "fireball";
+		case SPELL_CREATE_FOOD           : return "create_food";
+		case SPELL_ICE_PROJECTILE        : return "ice_projectile";
+		// Level 4
+		case SPELL_BLESS                 : return "bless";
+		case SPELL_DISPELL_FIELD         : return "dispell_field";
+		case SPELL_FIRE_PROTECTION       : return "fire_protection";
+		case SPELL_TELEKINESIS           : return "telekinesis";
+		case SPELL_CURSE                 : return "curse";
+		case SPELL_COLD_PROTECTION       : return "cold_protection";
+		// Level 5
+		case SPELL_RUNE_OF_GUARDING      : return "rune_of_guarding";
+		case SPELL_LEVITATE              : return "levitate";
+		case SPELL_CURE_POISON           : return "cure_poison";
+		case SPELL_REPEL_UNDEAD          : return "repel_undead";
+		case SPELL_POISON_PROJECTILE     : return "poison_projectile";
+		// Level 6
+		case SPELL_RAISE_DEAD            : return "raise_dead";
+		case SPELL_PARALYSE              : return "paralyse";
+		case SPELL_CREATE_FIELD          : return "create_field";
+		case SPELL_DISARM_TRAP           : return "disarm_trap";
+		case SPELL_SLOW_DOWN             : return "slowdown";
+		// Level 7
+		case SPELL_FLYING_EYE            : return "flying_eye";
+		case SPELL_FIRE_FIELD            : return "fire_field";
+		case SPELL_ICE_FIELD             : return "ice_field";
+		case SPELL_LIGHTNING_STRIKE      : return "lightning_strike";
+		case SPELL_CONFUSE               : return "confuse";
+		// Level 8
+		case SPELL_INVISIBILITY          : return "invisibility";
+		case SPELL_MANA_DRAIN            : return "mana_drain";
+		case SPELL_EXPLOSION             : return "explosion";
+		case SPELL_ENCHANT_WEAPON        : return "enchant_weapon";
+		case SPELL_LIFE_DRAIN            : return "life_drain";
+		// Level 9
+		case SPELL_SUMMON_CREATURE       : return "summon_creature";
+		case SPELL_FAKE_SUMMON           : return "fake_summon";
+		case SPELL_NEGATE_MAGIC          : return "negate_magic";
+		case SPELL_INCINERATE            : return "incinerate";
+		case SPELL_MASS_PARALYSE         : return "mass_paralyse";
+		// Level 10
+		case SPELL_MASS_LIGHTNING_STRIKE : return "mass_lightning_strike";
+		case SPELL_CONTROL_TARGET        : return "control";
+		case SPELL_FREEZE_TIME           : return "freeze_time";
+		case SPELL_MASS_INCINERATE       : return "mass_incinerate";
+		default :
+			return nullptr;
+	}
+}
+
+static void SPELLCAST_Notify(const Spell & spell) {
+	
+	const char * spellName = getSpellName(spell.m_type);
+	if(!spellName) {
+		return;
+	}
+	
+	Entity * caster = entities.get(spell.m_caster);
+	
+	ScriptParameters parameters;
+	parameters.emplace_back(spellName);
+	parameters.push_back(long(spell.m_level));
+	parameters.emplace_back(spell.idString());
+	
+	// TODO inconsistent use of the SM_SPELLCAST event
+	if(spell.m_type == SPELL_CONFUSE || spell.m_type == SPELL_ENCHANT_WEAPON) {
+		Entity * target = entities.get(spell.m_target);
+		if(target) {
+			SendIOScriptEvent(caster, target, SM_SPELLCAST, parameters);
+		}
+	} else {
+		for(Entity & entity : entities) {
+			SendIOScriptEvent(caster, &entity, SM_SPELLCAST, parameters);
+		}
+	}
+	
+}
+
+static void SPELLEND_Notify(const Spell & spell) {
+	
+	const char * spellName = getSpellName(spell.m_type);
+	if(!spellName) {
+		return;
+	}
+	
+	Entity * caster = entities.get(spell.m_caster);
+	
+	ScriptParameters parameters;
+	parameters.emplace_back(spellName);
+	parameters.push_back(long(spell.m_level));
+	parameters.emplace_back(spell.idString());
+	
+	// TODO inconsistent use of the SM_SPELLEND event
+	if(spell.m_type == SPELL_CONFUSE) {
+		if(Entity * target = entities.get(spell.m_target)) {
+			SendIOScriptEvent(caster, target, SM_SPELLEND, parameters);
+		}
+	} else {
+		for(Entity & entity : entities) {
+			SendIOScriptEvent(caster, &entity, SM_SPELLEND, parameters);
+		}
+	}
+	
+}
+
+//! Plays the sound of Fizzling spell
+void ARX_SPELLS_Fizzle(Spell * spell) {
+	
+	if(entities.get(spell->m_caster)) {
+		ARX_SOUND_PlaySFX(g_snd.MAGIC_FIZZLE, &spell->m_caster_pos);
+	}
+	
+}
+
+
+void ARX_SPELLS_ManageMagic() {
+	
+	arx_assert(entities.player());
+	Entity * io = entities.player();
+	
+	const ANIM_HANDLE * anim = io->animlayer[1].cur_anim;
+	
+	if(   anim == io->anims[ANIM_BARE_UNREADY]
+	   || anim == io->anims[ANIM_DAGGER_UNREADY_PART_1]
+	   || anim == io->anims[ANIM_1H_UNREADY_PART_1]
+	   || anim == io->anims[ANIM_2H_UNREADY_PART_1]
+	   || anim == io->anims[ANIM_MISSILE_UNREADY_PART_1]
+	   || anim == io->anims[ANIM_DAGGER_UNREADY_PART_2]
+	   || anim == io->anims[ANIM_1H_UNREADY_PART_2]
+	   || anim == io->anims[ANIM_2H_UNREADY_PART_2]
+	   || anim == io->anims[ANIM_MISSILE_UNREADY_PART_2]
+	) {
+		return;
+	}
+
+	snip++;
+
+	if(   !(player.m_currentMovement & PLAYER_CROUCH)
+	   && !BLOCK_PLAYER_CONTROLS
+	   && GInput->actionPressed(CONTROLS_CUST_MAGICMODE)
+	   && !player.m_paralysed
+	) {
+		if(player.Interface & INTER_COMBATMODE) {
+			WILLRETURNTOCOMBATMODE = true;
+
+			ARX_INTERFACE_setCombatMode(COMBAT_MODE_OFF);
+
+			ResetAnim(io->animlayer[1]);
+			io->animlayer[1].flags &= ~EA_LOOP;
+		}
+
+		if(TRUE_PLAYER_MOUSELOOK_ON) {
+			WILLRETURNTOFREELOOK = true;
+			TRUE_PLAYER_MOUSELOOK_ON = false;
+		}
+
+		if(player.doingmagic != 2) {
+			player.doingmagic = 2;
+			if(io->anims[ANIM_CAST_START]) {
+				changeAnimation(io, 1, io->anims[ANIM_CAST_START]);
+				MAGICMODE = true;
+			}
+		}
+		
+		if(snip >= 2) {
+			if(!eeMousePressed1() && ARX_FLARES_broken == 0) {
+				ARX_FLARES_broken = 2;
+				MagicFlareChangeColor();
+			}
+			
+			if(eeMousePressed1()) {
+				Vec2f pos = Vec2f(DANAEMouse);
+				if(TRUE_PLAYER_MOUSELOOK_ON) {
+					pos = Vec2f(MemoMouse);
+				}
+				
+				PlatformInstant now = g_platformTime.frameStart();
+				
+				const PlatformDuration interval = std::chrono::microseconds(1s) / 60;
+				
+				if(ARX_FLARES_broken) {
+					g_LastFlarePosition = pos;
+					g_LastFlareTime = now - interval;
+				}
+				
+				if(now - g_LastFlareTime >= interval) {
+					
+					if(glm::distance(pos, g_LastFlarePosition) > 14 * g_sizeRatio.y) {
+						FlareLine(g_LastFlarePosition, pos);
+						g_LastFlarePosition = pos;
+					}
+					
+					if(Random::getf() > 0.6f)
+						AddFlare(pos, 1.f, -1);
+					else
+						AddFlare(pos, 1.f, 3);
+					
+					g_LastFlareTime = now - std::min(now - g_LastFlareTime - interval, interval);
+				}
+				
+				ARX_FLARES_broken = 0;
+				
+				if(!ARX_SOUND_IsPlaying(player.magic_draw)) {
+					player.magic_draw = ARX_SOUND_PlaySFX_loop(g_snd.MAGIC_DRAW_LOOP, nullptr, 1.f);
+				}
+				
+			} else {
+				ARX_SOUND_Stop(player.magic_draw);
+				player.magic_draw = audio::SourcedSample();
+			}
+			
+			snip = 0;
+		}
+	} else {
+		ARX_FLARES_broken = 1;
+		MagicFlareChangeColor();
+		
+		if(player.doingmagic != 0) {
+			player.doingmagic = 0;
+			if(io->anims[ANIM_CAST_END]) {
+				changeAnimation(io, 1, io->anims[ANIM_CAST_END]);
+			}
+			ARX_FLARES_broken = 3;
+		}
+	}
+	
+	if(ARX_FLARES_broken == 3) {
+		CheatDetectionReset();
+		
+		if(CurrSpellSymbol != 0) {
+			if(ARX_SPELLS_AnalyseSPELL()) {
+				if(io->anims[ANIM_CAST]) {
+					changeAnimation(io, 1, io->anims[ANIM_CAST]);
+				}
+			}
+		}
+		
+		ARX_FLARES_broken = 1;
+
+		if(WILLRETURNTOCOMBATMODE) {
+			player.Interface |= INTER_COMBATMODE;
+			player.Interface |= INTER_NO_STRIKE;
+
+			ARX_EQUIPMENT_LaunchPlayerReadyWeapon();
+			player.doingmagic = 0;
+			WILLRETURNTOCOMBATMODE = false;
+
+			TRUE_PLAYER_MOUSELOOK_ON = true;
+			bRenderInCursorMode = false;
+		}
+
+		if(WILLRETURNTOFREELOOK) {
+			TRUE_PLAYER_MOUSELOOK_ON = true;
+			WILLRETURNTOFREELOOK = false;
+		}
+
+		ARX_SPELLS_ResetRecognition();
+	} else if(ARX_FLARES_broken == 2) {
+
+		if(!config.input.useAltRuneRecognition) {
+			ARX_SPELLS_Analyse();
+			if(!SpellMoves.empty())
+				ARX_SPELLS_AnalyseSYMBOL();
+		} else {
+			ARX_SPELLS_Analyse_Alt();
+		}
+	
+		ARX_FLARES_broken = 1;
+	}
+}
+
+static bool CanPayMana(Spell * spell, float cost) {
+	
+	if(spell->m_flags & SPELLCAST_FLAG_NOMANA) {
+		return true;
+	}
+	
+	Entity * caster = entities.get(spell->m_caster);
+	if(caster == entities.player()) {
+		if(player.manaPool.current < cost) {
+			return false;
+		}
+		player.manaPool.current -= cost;
+		return true;
+	} else if(caster) {
+		if(caster->ioflags & IO_NPC) {
+			if(caster->_npcdata->manaPool.current < cost) {
+				return false;
+			}
+			caster->_npcdata->manaPool.current -= cost;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static EntityHandle TemporaryGetSpellTarget(const Vec3f & from) {
+	
+	float mindist = std::numeric_limits<float>::max();
+	EntityHandle found = EntityHandle_Player;
+	for(const Entity & npc : entities(IO_NPC)) {
+		float dist = arx::distance2(from, npc.pos);
+		if(dist < mindist) {
+			found = npc.index();
+			mindist = dist;
+		}
+	}
+	
+	return found;
+}
+
+struct TARGETING_SPELL {
+	SpellType typ;
+	SpellcastFlags flags;
+	long level;
+	EntityHandle target;
+	GameDuration duration;
+};
+
+static TARGETING_SPELL t_spell;
+
+long LOOKING_FOR_SPELL_TARGET = 0;
+GameInstant LOOKING_FOR_SPELL_TARGET_TIME = 0;
+
+void ARX_SPELLS_CancelSpellTarget() {
+	t_spell.typ = SPELL_NONE;
+	LOOKING_FOR_SPELL_TARGET = 0;
+}
+
+void ARX_SPELLS_LaunchSpellTarget(Entity * io) {
+	if(io) {
+		ARX_SPELLS_Launch(t_spell.typ, *entities.player(), t_spell.flags, t_spell.level, io, t_spell.duration);
+	}
+}
+
+float ARX_SPELLS_ApplyFireProtection(Entity * io, float damages) {
+	
+	if(io) {
+		
+		Spell * spell = spells.getSpellOnTarget(io->index(), SPELL_FIRE_PROTECTION);
+		if(spell) {
+			damages *= glm::clamp(1.f - (spell->m_level * 0.1f), 0.f, 1.f);
+		}
+		
+		if(io->ioflags & IO_NPC) {
+			damages -= io->_npcdata->resist_fire * 0.01f * damages;
+			if(damages < 0.f) {
+				damages = 0.f;
+			}
+		}
+		
+	}
+	
+	return damages;
+}
+
+float ARX_SPELLS_ApplyColdProtection(Entity * io, float damages) {
+	
+	Spell * spell = spells.getSpellOnTarget(io->index(), SPELL_COLD_PROTECTION);
+	if(spell) {
+		damages *= glm::clamp(1.f - (spell->m_level * 0.1f), 0.f, 1.f);
+	}
+	
+	return damages;
+}
+
+float ARX_SPELLS_GetManaCost(SpellType spell, float casterLevel) {
+	
+	// TODO this data should not be hardcoded
+	
+	switch(spell)  {
+		
+		default:                          return   0.f;
+		
+		case SPELL_TELEKINESIS:           return   0.001f;
+		case SPELL_CURSE:                 return   0.001f;
+		case SPELL_ARMOR:                 return   0.01f;
+		case SPELL_LOWER_ARMOR:           return   0.01f;
+		case SPELL_SPEED:                 return   0.01f;
+		case SPELL_BLESS:                 return   0.01f;
+		case SPELL_DETECT_TRAP:           return   0.03f;
+		case SPELL_MAGIC_SIGHT:           return   0.3f;
+		case SPELL_HARM:                  return   0.4f;
+		case SPELL_MANA_DRAIN:            return   0.4f;
+		case SPELL_IGNIT:                 return   1.f;
+		case SPELL_DOUSE:                 return   1.f;
+		case SPELL_FIRE_PROTECTION:       return   1.f;
+		case SPELL_COLD_PROTECTION:       return   1.f;
+		case SPELL_LEVITATE:              return   1.f;
+		case SPELL_CREATE_FIELD:          return   1.2f;
+		case SPELL_SLOW_DOWN:             return   1.2f;
+		case SPELL_ACTIVATE_PORTAL:       return   2.f;
+		case SPELL_NEGATE_MAGIC:          return   2.f;
+		case SPELL_INVISIBILITY:          return   3.f;
+		case SPELL_LIFE_DRAIN:            return   3.f;
+		case SPELL_HEAL:                  return   4.f;
+		case SPELL_FLYING_EYE:            return   4.f;
+		case SPELL_CREATE_FOOD:           return   5.f;
+		case SPELL_DISPELL_ILLUSION:      return   7.f;
+		case SPELL_DISPELL_FIELD:         return   7.f;
+		case SPELL_RUNE_OF_GUARDING:      return   9.f;
+		case SPELL_CURE_POISON:           return  10.f;
+		case SPELL_RAISE_DEAD:            return  12.f;
+		case SPELL_DISARM_TRAP:           return  15.f;
+		case SPELL_FIRE_FIELD:            return  15.f;
+		case SPELL_ICE_FIELD:             return  15.f;
+		case SPELL_REPEL_UNDEAD:          return  18.f;
+		case SPELL_ENCHANT_WEAPON:        return  35.f;
+		case SPELL_INCINERATE:            return  40.f;
+		case SPELL_CONTROL_TARGET:        return  40.f;
+		case SPELL_EXPLOSION:             return  45.f;
+		case SPELL_FREEZE_TIME:           return  60.f;
+		case SPELL_MASS_INCINERATE:       return 160.f;
+		
+		case SPELL_CONFUSE:               return casterLevel * 0.1f;
+		case SPELL_MAGIC_MISSILE:         return casterLevel * 1.f;
+		case SPELL_ICE_PROJECTILE:        return casterLevel * 1.5f;
+		case SPELL_POISON_PROJECTILE:     return casterLevel * 2.f;
+		case SPELL_FIREBALL:              return casterLevel * 3.f;
+		case SPELL_PARALYSE:              return casterLevel * 3.f;
+		case SPELL_MASS_PARALYSE:         return casterLevel * 3.f;
+		case SPELL_LIGHTNING_STRIKE:      return casterLevel * 6.f;
+		case SPELL_MASS_LIGHTNING_STRIKE: return casterLevel * 8.f;
+		
+		case SPELL_SUMMON_CREATURE:       return (casterLevel < 9) ? 20.f : 80.f;
+		case SPELL_FAKE_SUMMON:           return (casterLevel < 9) ? 20.f : 80.f;
+		
+	}
+}
+
+static std::unique_ptr<Spell> createSpellInstance(SpellType type) {
+	
+	switch(type) {
+		case SPELL_NONE: return { };
+		// LEVEL 1
+		case SPELL_MAGIC_SIGHT: return std::make_unique<MagicSightSpell>();
+		case SPELL_MAGIC_MISSILE: return std::make_unique<MagicMissileSpell>();
+		case SPELL_IGNIT: return std::make_unique<IgnitSpell>();
+		case SPELL_DOUSE: return std::make_unique<DouseSpell>();
+		case SPELL_ACTIVATE_PORTAL: return std::make_unique<ActivatePortalSpell>();
+		// LEVEL 2
+		case SPELL_HEAL: return std::make_unique<HealSpell>();
+		case SPELL_DETECT_TRAP: return std::make_unique<DetectTrapSpell>();
+		case SPELL_ARMOR: return std::make_unique<ArmorSpell>();
+		case SPELL_LOWER_ARMOR: return std::make_unique<LowerArmorSpell>();
+		case SPELL_HARM: return std::make_unique<HarmSpell>();
+		// LEVEL 3
+		case SPELL_SPEED: return std::make_unique<SpeedSpell>();
+		case SPELL_DISPELL_ILLUSION: return std::make_unique<DispellIllusionSpell>();
+		case SPELL_FIREBALL: return std::make_unique<FireballSpell>();
+		case SPELL_CREATE_FOOD: return std::make_unique<CreateFoodSpell>();
+		case SPELL_ICE_PROJECTILE: return std::make_unique<IceProjectileSpell>();
+		// LEVEL 4
+		case SPELL_BLESS: return std::make_unique<BlessSpell>();
+		case SPELL_DISPELL_FIELD: return std::make_unique<DispellFieldSpell>();
+		case SPELL_FIRE_PROTECTION: return std::make_unique<FireProtectionSpell>();
+		case SPELL_COLD_PROTECTION: return std::make_unique<ColdProtectionSpell>();
+		case SPELL_TELEKINESIS: return std::make_unique<TelekinesisSpell>();
+		case SPELL_CURSE: return std::make_unique<CurseSpell>();
+		// LEVEL 5
+		case SPELL_RUNE_OF_GUARDING: return std::make_unique<RuneOfGuardingSpell>();
+		case SPELL_LEVITATE: return std::make_unique<LevitateSpell>();
+		case SPELL_CURE_POISON: return std::make_unique<CurePoisonSpell>();
+		case SPELL_REPEL_UNDEAD: return std::make_unique<RepelUndeadSpell>();
+		case SPELL_POISON_PROJECTILE: return std::make_unique<PoisonProjectileSpell>();
+		// LEVEL 6
+		case SPELL_RAISE_DEAD: return std::make_unique<RaiseDeadSpell>();
+		case SPELL_PARALYSE: return std::make_unique<ParalyseSpell>();
+		case SPELL_CREATE_FIELD: return std::make_unique<CreateFieldSpell>();
+		case SPELL_DISARM_TRAP: return std::make_unique<DisarmTrapSpell>();
+		case SPELL_SLOW_DOWN: return std::make_unique<SlowDownSpell>();
+		// LEVEL 7
+		case SPELL_FLYING_EYE: return std::make_unique<FlyingEyeSpell>();
+		case SPELL_FIRE_FIELD: return std::make_unique<FireFieldSpell>();
+		case SPELL_ICE_FIELD: return std::make_unique<IceFieldSpell>();
+		case SPELL_LIGHTNING_STRIKE: return std::make_unique<LightningStrikeSpell>();
+		case SPELL_CONFUSE: return std::make_unique<ConfuseSpell>();
+		// LEVEL 8
+		case SPELL_INVISIBILITY: return std::make_unique<InvisibilitySpell>();
+		case SPELL_MANA_DRAIN: return std::make_unique<ManaDrainSpell>();
+		case SPELL_EXPLOSION: return std::make_unique<ExplosionSpell>();
+		case SPELL_ENCHANT_WEAPON: return std::make_unique<EnchantWeaponSpell>();
+		case SPELL_LIFE_DRAIN: return std::make_unique<LifeDrainSpell>();
+		// LEVEL 9
+		case SPELL_SUMMON_CREATURE: return std::make_unique<SummonCreatureSpell>();
+		case SPELL_FAKE_SUMMON: return std::make_unique<FakeSummonSpell>();
+		case SPELL_NEGATE_MAGIC: return std::make_unique<NegateMagicSpell>();
+		case SPELL_INCINERATE: return std::make_unique<IncinerateSpell>();
+		case SPELL_MASS_PARALYSE: return std::make_unique<MassParalyseSpell>();
+		// LEVEL 10
+		case SPELL_MASS_LIGHTNING_STRIKE: return std::make_unique<MassLightningStrikeSpell>();
+		case SPELL_CONTROL_TARGET: return std::make_unique<ControlTargetSpell>();
+		case SPELL_FREEZE_TIME: return std::make_unique<FreezeTimeSpell>();
+		case SPELL_MASS_INCINERATE: return std::make_unique<MassIncinerateSpell>();
+	}
+	
+	return { };
+}
+
+bool ARX_SPELLS_Launch(SpellType typ, Entity & source, SpellcastFlags flags, long level,
+                       Entity * target, GameDuration duration) {
+	
+	if(cur_rf == CHEAT_ENABLED) {
+		flags |= SPELLCAST_FLAG_NOCHECKCANCAST | SPELLCAST_FLAG_NOMANA;
+	}
+	
+	if(cur_mx == CHEAT_ENABLED) {
+		level = std::max(level, 15l);
+	}
+	
+	if(source == *entities.player() && !(flags & SPELLCAST_FLAG_NOCHECKCANCAST) &&
+	   !player.hasAllRunes(SpellSymbol)) {
+		ARX_SOUND_PlaySpeech("player_cantcast");
+		CurrSpellSymbol = 0;
+		ARX_SPELLS_ResetRecognition();
+		return false;
+	}
+	
+	float playerSpellLevel = 0;
+	
+	if(source == *entities.player()) {
+		ARX_SPELLS_ResetRecognition();
+		if(player.SpellToMemorize.bSpell) {
+			CurrSpellSymbol = 0;
+			player.SpellToMemorize.bSpell = false;
+		}
+		ARX_PLAYER_ComputePlayerFullStats();
+		if(level == -1) {
+			playerSpellLevel = player.spellLevel();
+		} else {
+			playerSpellLevel = static_cast<float>(level);
+		}
+	}
+	
+	// Todo what was this assert supposed to do ?
+	// arx_assert(!(source && (flags & SPELLCAST_FLAG_PRECAST)));
+	
+	if(flags & SPELLCAST_FLAG_PRECAST) {
+		int l = level;
+		
+		if(l <= 0) {
+			l = util::to<int>(playerSpellLevel);
+		}
+		
+		SpellcastFlags flgs = flags;
+		flgs &= ~SPELLCAST_FLAG_PRECAST;
+		ARX_SPELLS_Precast_Add(typ, l, flgs, duration);
+		return true;
+	}
+	
+	if(!target && source == *entities.player()) {
+		
+		switch(typ) {
+			
+			case SPELL_LOWER_ARMOR:
+			case SPELL_CURSE:
+			case SPELL_PARALYSE:
+			case SPELL_INCINERATE:
+			case SPELL_SLOW_DOWN:
+			case SPELL_CONFUSE: {
+				LOOKING_FOR_SPELL_TARGET_TIME = g_gameTime.now();
+				LOOKING_FOR_SPELL_TARGET = 1;
+				t_spell.typ = typ;
+				t_spell.flags = flags;
+				t_spell.level = level;
+				t_spell.target = EntityHandle();
+				t_spell.duration = duration;
+				return false;
+			}
+			
+			case SPELL_ENCHANT_WEAPON: {
+				LOOKING_FOR_SPELL_TARGET_TIME = g_gameTime.now();
+				LOOKING_FOR_SPELL_TARGET = 2;
+				t_spell.typ = typ;
+				t_spell.flags = flags;
+				t_spell.level = level;
+				t_spell.target = EntityHandle();
+				t_spell.duration = duration;
+				return false;
+			}
+			
+			case SPELL_CONTROL_TARGET: {
+				Vec3f cpos = source.pos;
+				long tcount = 0;
+				for(const Entity & entity : entities(IO_NPC)) {
+					if(entity._npcdata->lifePool.current > 0.f
+					   && entity.show == SHOW_FLAG_IN_SCENE
+					   && entity.groups.find("demon") != entity.groups.end()
+					   && closerThan(entity.pos, cpos, 900.f)) {
+						tcount++;
+					}
+				}
+				if(tcount == 0) {
+					ARX_SOUND_PlaySFX(g_snd.MAGIC_FIZZLE, &cpos);
+					return false;
+				}
+				ARX_SOUND_PlaySpeech("player_follower_attack");
+				LOOKING_FOR_SPELL_TARGET_TIME = g_gameTime.now();
+				LOOKING_FOR_SPELL_TARGET = 1;
+				t_spell.typ = typ;
+				t_spell.flags = flags;
+				t_spell.level = level;
+				t_spell.target = EntityHandle();
+				t_spell.duration = duration;
+				return false;
+			}
+			
+			default: break;
+		}
+		
+	}
+	
+	if(source == *entities.player()) {
+		ARX_SPELLS_CancelSpellTarget();
+	}
+	
+	std::unique_ptr<Spell> spell = createSpellInstance(typ);
+	if(!spell) {
+		return false;
+	}
+	
+	if(spellicons[typ].bAudibleAtStart) {
+		spawnAudibleSound(source.pos, source);
+	}
+	
+	spell->m_caster = source.index();
+	spell->m_target = target ? target->index() : TemporaryGetSpellTarget(source.pos);
+	
+	spell->updateCasterHand();
+	spell->updateCasterPosition();
+	
+	float spellLevel;
+	
+	if(source == *entities.player()) {
+		// Player source
+		spellLevel = playerSpellLevel; // Level of caster
+	} else {
+		// IO source
+		spellLevel = float(glm::clamp(level, 1l, 10l));
+	}
+	
+	if(flags & SPELLCAST_FLAG_LAUNCHPRECAST) {
+		spellLevel = static_cast<float>(level);
+	}
+	
+	if(cur_rf == CHEAT_ENABLED) {
+		spellLevel += 2;
+	}
+	
+	spell->m_level = spellLevel;
+	spell->m_flags = flags;
+	spell->m_type = typ;
+	spell->m_timcreation = g_gameTime.now();
+	spell->m_fManaCostPerSecond = 0.f;
+	spell->m_launchDuration = duration;
+	
+	if(!CanPayMana(spell.get(), ARX_SPELLS_GetManaCost(typ, spell->m_level))) {
+		if(spell->m_caster == EntityHandle_Player) {
+			notification_add("player_cantcast");
+			ARX_SPEECH_AddSpeech(*entities.player(), "player_cantcast", ANIM_TALK_NEUTRAL);
+		}
+		ARX_SPELLS_Fizzle(spell.get());
+		return false;
+	}
+	
+	if(!GLOBAL_MAGIC_MODE) {
+		ARX_SPELLS_Fizzle(spell.get());
+		return false;
+	}
+	
+	if(!spell->CanLaunch()) {
+		return false;
+	}
+	
+	spell->Launch();
+	
+	Spell & addedSpell = spells.addSpell(std::move(spell));
+	
+	SPELLCAST_Notify(addedSpell);
+	
+	if(flags & SPELLCAST_FLAG_ORPHAN) {
+		addedSpell.m_caster = EntityHandle();
+	}
+	
+	return true;
+}
+
+
+/*!
+ * \brief Updates all currently working spells.
+ */
+void ARX_SPELLS_Update() {
+	
+	ARX_PROFILE_FUNC();
+	
+	for(Spell & spell : spells) {
+		
+		if(!GLOBAL_MAGIC_MODE) {
+			spells.endSpell(&spell);
+		}
+		
+		if(!CanPayMana(&spell, spell.m_fManaCostPerSecond * (g_gameTime.lastFrameDuration() / 1s))) {
+			ARX_SPELLS_Fizzle(&spell);
+			spells.endSpell(&spell);
+		}
+		
+		spell.m_elapsed += g_gameTime.lastFrameDuration();
+		
+		if(spell.m_hasDuration && spell.m_elapsed > spell.m_duration) {
+			SPELLEND_Notify(spell);
+			spell.End();
+			damageClearSpell(&spell);
+			spells.freeSlot(&spell);
+			continue;
+		}
+		
+		spell.Update();
+		
+	}
+	
+}
+
+void TryToCastSpell(Entity * io, SpellType spellType, long level, EntityHandle target, SpellcastFlags flags, GameDuration duration)
+{
+	if(!io || io->spellcast_data.castingspell != SPELL_NONE)
+		return;
+	
+	if(!(flags & SPELLCAST_FLAG_NOMANA) && (io->ioflags & IO_NPC) && io->_npcdata->manaPool.current <= 0.f) {
+		return;
+	}
+	
+	unsigned long i(0);
+
+	for(; i < SPELL_TYPES_COUNT; i++)
+		if(spellicons[i].spellid == spellType)
+			break;
+
+	if(i >= SPELL_TYPES_COUNT)
+		return; // not an existing spell...
+
+	for(unsigned long j(0); j < 4; j++)
+		io->spellcast_data.symb[j] = RUNE_NONE;
+
+	// checks for symbol drawing...
+	if(!flags.has(SPELLCAST_FLAG_NOANIM) && io->ioflags.has(IO_NPC)) {
+		changeAnimation(io, 1, io->anims[ANIM_CAST_START]);
+		for(unsigned long j = 0; j < 4; j++) {
+			io->spellcast_data.symb[j] = spellicons[i].symbols[j];
+		}
+	}
+
+	io->spellcast_data.castingspell = spellType;
+
+	io->spellcast_data.spell_flags = flags;
+	io->spellcast_data.spell_level = util::to<short>(level);
+
+	io->spellcast_data.duration = duration;
+	io->spellcast_data.target = target;
+	
+	io->gameFlags &= ~GFLAG_INVISIBILITY;
+	
+	if(((io->spellcast_data.spell_flags & SPELLCAST_FLAG_NOANIM) &&
+		  (io->spellcast_data.spell_flags & SPELLCAST_FLAG_NODRAW)) ||
+		 (io->spellcast_data.spell_flags & SPELLCAST_FLAG_PRECAST)) {
+		
+		ARX_SPELLS_Launch(io->spellcast_data.castingspell,
+		                  *io,
+		                  io->spellcast_data.spell_flags,
+		                  io->spellcast_data.spell_level,
+		                  entities.get(io->spellcast_data.target),
+		                  io->spellcast_data.duration);
+		
+		io->spellcast_data.castingspell = SPELL_NONE;
+	}
+	
+	io->spellcast_data.spell_flags &= ~SPELLCAST_FLAG_NODRAW; // temporary, removes colored flares
+}
