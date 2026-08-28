@@ -1,0 +1,649 @@
+
+= Arx Libertatis 1.3  (TBD) =
+
+Gameplay:
+
+* Fixed lightning strike damage depending on framerate
+* Fixed fireplace damage depending on framerate
+* Fixed being able to cast the SAM (Lord Inut's bow) cheat multiple times in a single playthough by saving/loading
+* Casting the Ylside (MX) armor cheat no longer disables the POM (Lord Inut's sword) cheat
+
+Graphics:
+
+* Fixed increased fog particle count with high framerates
+* Fixed increased effect particle count for the bless, confuse, control, curse, fire field, flying eye, ice field, ice projection, levitate, negate magic, repel undead and trap spells with high framerates
+* Fixed increased magic damage particle count for the chaos, harm, life drain, lightning strike and mana drain spells with high framerates
+* Fixed rendering issues with the levitate spell effect
+* Fixed missing fire animation in the fire field spell
+* Fixed fogs starting out with 0 particles after coming into view
+* Windows: Disabled "Crisp" Alpha Cutout AA with Intel graphics drivers to avoid rendering issues and crashes
+
+Interface:
+
+* Fixed cheat text not scaling correctly with higher resolutions
+* Made the "Customize controls" button look less like a heading
+* Changed the field of view slider to go from 50° to 100° (vertical) instead of from 75° to 125°
+
+Controls:
+
+* Fixed the "Interrupt current spell" keyboard shortcut sometimes ending previous spells instead of the last one
+
+Audio:
+
+* Fixed some audio samples not ending correctly
+* Fixed lighting strike damage sound being played for every frame
+
+Modding:
+
+* Added support for level numbers above 27
+* Added support for script event parameters above 3 (e.g. ^$param4)
+* Added support for having more than 20 spells active
+* Added support for uncompressed .fts files
+* Added the ^angleto_… system variable returning the the direction to another entity
+* Added the ^caster* system variable to get the caster of the given spell or summoned entity
+* Added the ^class* system variable to get the class name of the given entity or spell
+* Added the ^hover system variable returning the entity under the mouse cursor
+* Added the ^onscreen* and ^offscreen* system variables to determine if an entity is shown on screen (feature request #1593)
+* Added the ^player_mana and and ^player_maxmana system variables to query the current and maximum player mana level
+* Added the ^spell* system variable to get the ID of the newest active spell cast by the given entity
+* Added the ^spelllevel* system variable to get the caster level of the player or the given spell
+* Added the ^realtime_year, ^realtime_month and ^realtime_day to get the current date
+* Added the spell ID as parameter 3 to the spellcast and spellend script events
+* Added the summoned entity ID as parameter 3 to the ouch script event
+* Added the weapon/summoned/spell ID as parameter 3 to the hit script event (feature request #1599)
+* Added the damage type flags as parameter 4 to the hit script event
+* Added support for stopping specific spells using the `destroy` script command
+* Added support for specifying volume of non-looped ambiances with the `ammbiance` script command
+* Added support for creating items without an icon existing at the same path as the script
+* Added support for calling the `closestealbag` command from non-NPC entities
+* Added support for fractional intervals in the `timer` command
+* Added support for more than 16 active attractors and fixed overlapping attractors
+* Fixed the ^$objontop script variable to not have a leading space and don't repeat 'player'
+
+Debugging:
+
+* Added a new entity visibility debug HUD under F11
+
+Other Fixes:
+
+* Added a workaround for broken ratman backflip in intro (bug #93)
+* Fixed a crash when dragging an entity without a 3D object (bug #1592)
+* Fixed a crash when using a weapon without a 3D object (bug #1286)
+* Fixed a crash when an equipped candle is destroyed (bug #1622)
+* Fixed a crash with negative (or zero with -i) intervals in the `timer` command
+* Fixed a crash when loading save files with linked items inside an inventory (bug #1618)
+* Fixed linked entities being removed from NPC inventories even if linked to the owning NPC
+* Fixed the `replaceme` script command for NPC weapons not equipping the new weapon
+* Fixed the PNUX cheat progress not being reset when exiting magic mode if the player has drawn 3 out of 4 cheat runes
+* Fixed being able to cast the SOS (reveal map) cheat multiple times per playthough even though it is idempotent
+
+Technical Changes:
+
+* Added support for Qt 6 in the crash reporter
+* The lld linker is now used when available (for non-LTO builds)
+
+################################################################################
+
+= Arx Libertatis 1.2.1  (2022-04-10) =
+
+Gameplay:
+
+* Fixed armor class and magic/poison resistance modifiers being rounded down
+* Fixed being able to use items multiple times by dropping them on the player book (bug #1011)
+* Fixed using stacks of items by dropping them on the player book causing the remaining unused items in the stack to disappear
+
+Graphics:
+
+* Fixed messed up graphics with the Steam overlay active
+
+Audio:
+
+* Fixed missing death screams for most NPCs (bug #1579)
+* Fixed double click sound when unequipping armor
+
+Performance:
+
+* Fixed excessively slow performance with "Crisp" Alpha Cutout AA enabled (bug #1595)
+* Linux: Fixed stuttering and freezing in the portable binary release caused by the bundled SDL2 library (bug #1605)
+
+Other Fixes:
+
+* The spellcast animation is no longer played when casting fails
+* Fixed a crash when starting a new game while a game is already loaded
+* Fixed a crash when color-keyed BMP images failed to load (bug #1557)
+* Fixed a crash when the player is given an item while the inventory is full (bug #1570)
+* Fixed a crash when releasing the escape key during the first frame of the main menu (bug #1155)
+* Fixed a crash caused by the flying eye spell (bug #511)
+* Fixed a crash when combining the coin purse with lights
+* Fixed a crash with the `activatephysics` script command (bug #1259)
+* Fixed a crash with the entity debug view (bug #1608)
+* Fixed a crash when passing invalid values to command-line arguments
+* Fixed a hang on startup on some POSIX platforms
+* Fixed formatting for HTTPS links in dialogs
+* Windows: Fixed a crash with Intel graphics and "Crisp" Alpha Cutout AA enabled (bug #1568, bug #1603)
+* Windows: Restored Windows XP support (bug #1569)
+
+Technical Changes:
+
+* Fixed compatibility with the CMake config installed by SDL 2.0.4+
+* Fixed build without fstatat()
+* Initial flags in CMAKE_REQUIRED_DEFINITIONS are no longer dropped when testing some platform features
+* Platform feature tests no longer fail if they produce generic warnings
+* Fixed libstdc++ assert failures and disabled _GLIBCXX_ASSERTIONS in release builds (bug #1563)
+* Added a workaround for miscompilation bugs in GCC 9.0-9.4 and 10.0-10.3 (bug #1600)
+
+################################################################################
+
+= Arx Libertatis 1.2 "Mega Mega Mega"  (2021-07-13) =
+
+Gameplay:
+
+* Added an alternate, less strict rune recognition algorithm (enabled by default) (feature request #289, #653)
+* Made rune recognition less dependent on framerate (bug #856)
+* Added an alternate bow aim mode
+* Added gravity to arrows unless fully charged
+* Fixed weapon durability degrading faster at higher framerates (bug #790)
+* Fixed poison and magic resistance bonus from equipment and cheats being ignored in some cases
+* Fixed player ascending infinitely when attacked while levitating (bug #640)
+* Fixed Slow down (Rhaa Rune (decrease)Movis Rune (movement)) spell affecting user interface and input and improve player movement while it is active (bug #534)
+* Fixed hunger dropping below 0% when overeating (bug #132, fix is also applied when loading save files)
+* Higher caster level now makes the Curse (Rhaa Rune (decrease)Stregum Rune (magic)Vitae Rune (life)) spell more effective against NPC Damages, Armor Class and Damage Absorption instead of less effective
+* Calculated Armor Class, Magic Resistance, Poison Resistance and Damages stats now include attribute and skill modifiers from items and spells (bug #322)
+* The Critical Hit chance now includes item and cheat modifiers
+* The Negate magic (Nhi Rune (remove)Stregum Rune (magic)Spacium Rune (field)) spell and effect now correctly follows the target
+* Fixed player not receiving experience for kills by summoned creatures
+* Fixed selection of replacement weapon when the equipped one breaks to select one that is similarly powerful
+* Fixed maximum player Health and Mana ignoring attribute modifiers from items and spells while the MAX or MAR cheats are active
+* Fixed Akbaa not attacking the player after using his tentacle attack twice (bug #584)
+* Fixed spells without mana drain using the mana drain from previous spells
+* Fixed Confuse (Rhaa Rune (decrease)Vista Rune (vision)) spell ending immediately (bug #615)
+
+Graphics:
+
+* Windows: In multi-GPU setups (Optimus/PowerXpress) the more powerful GPU is now used by default
+* Added a configurable FPS limit independent of vsync, defaulting to the display refresh rate
+* Added a field of view setting (feature request #404)
+* Re-added a fullscreen gamma option (feature request #254)
+* Added support for fullscreen modes with different refresh rates
+* Added anti-aliasing to alpha cutouts (color key anti-aliasing, alpha to coverage and sample shading
+* Added an option to disable anisotropic filtering (feature request #96)
+* Added options to disable view bobbing and camera shake (feature request #405)
+* Fixed missing blob shadows under dragged entities
+* Fixed wrongly displayed light flare when dragging a torch (bug #783)
+* Fixed water and lava not being animated while the night vision spell is active (bug #1053)
+* Fixed scaling of flares around lights with higher resolutions
+* Fixed light flares showing through scene geometry or disappearing when the light is still visible (bug #120)
+* Fixed light flares showing through non-interactive entities (e.g. doors that are opening or closing)
+* Fixed light flares being drawn in front interface elements including notes (bug #1145)
+* Fixed light flares being disabled when the player book is open
+* Fixed flashes, flares and other effects appearing in front of the cinematic border
+* Fixed missing dynamic lighting for far away scene geometry (bug #1213)
+* Fixed amount of sparks, flame and smoke particles depending on the framerate
+* Fixed cinematic light flicker depending on the framerate
+* Fixed VSync setting not being applied until the game is restarted
+* Fixed water and lava animation overlay (bug #512)
+* Fixed map rendering glitches with buggy OpenGL drivers (bug #539)
+* Fixed Negate magic (Nhi Rune (remove)Stregum Rune (magic)Spacium Rune (field)) and Trap (Aam Rune (create)Morte Rune (death)Cosum Rune (object)) spell effects not rotating
+* Fixed overzealous entity culling (bug #588)
+* Fixed weapons and equipment always being drawn in front of the player hands and arms
+* Fixed player hands clipping with walls in first person view
+* Fixed arrow object rotation not matching direction
+* Fixed missing arrow trails (bug #538) and improved the effect (also used in the Speed (Mega Rune (increase)Movis Rune (movement)) spell)
+* Fixed NPC animations not playing when close to the player (bug #270)
+* Fixed missing aura when a protection spell ended before a Lower armor (Rhaa Rune (decrease)Kaom Rune (protection)) on the same target
+* Fixed Ylside blow up effect only disappearing when looking at it (bug #122)
+* Fixed lighting only being updated every other frame (bug #75)
+* Increased depth buffer from 16 bits minimum to 24 bits to prevent Z-fighting (bug #759)
+* Linux: Fixed missing anti-aliasing for some drivers
+
+Interface:
+
+* Added options to scale the player book, HUD and cursor with larger resolutions (feature request #391, #996)
+* Added an option to limit speech width on wide screens (enabled by default)
+* Fixed scaling and positioning of magic flares when casting with higher resolutions (bug #535)
+* Fixed scaling of cinematics with higher and wide resolutions
+* Add an option to letterbox or fade out cinematics with wide resolutions (fade by default)
+* Fixed player book and minimap being stretched with wide resolutions (bug #211)
+* Fixed minimap texture filtering changing when hovering map markers (bug #570)
+* Added anti-aliasing to HUD element borders (even without MSAA)
+* Improved quest book text layout
+* Added options to control the in-game font size and weight
+* Increased default font weight for text in the player book and notes to improve readability
+* Improved shop inventory sorting
+* Added crosshair when aiming with a fully charged bow
+* Sorting the inventory now never drops items to the ground
+* Fixed missing quest book background when there are no quest entries (bug #1021)
+* Fixed wrong items being highlighted when in combine mode (bug #121)
+* Add missing item halo when combining items
+* Fixed item halo being displayed in front of dragged items
+* Fixed too small font size at resolutions slightly above 640x480
+* Fixed rendering of runes in the player book
+* Removed light affecting the world when clicking on runes in the book
+* Tweaked how spell/stealth/equipment/torch icons move when opening the inventory
+* Fixed purse halo not showing when selling certain items
+* Fixed health and mana gauges not being hidden during the death animation (bug #806)
+* Fixed position of number in cursor when distributing skill points
+* Fixed level transition icons on the map not being displayed correctly (bug #782)
+* The player book is now closed when returning to mouse look mode (bug #143)
+* Fixed missing characters after forced line breaks in text (bug #718)
+
+Controls:
+
+* Added raw mouse input support and an option to control mouse acceleration
+* Fixed border turning (bug #255) and added an option to disable it
+* The "Resume game" menu entry and quickload (F9) now load the last save if no game is running (feature request #45)
+* Added a keyboard shortcut for drinking cure poison potions (not bound by default)
+* Added a keyboard shortcut to enter level transitions (feature request #105)
+* Add an auto ready weapon mode that only triggers on enemies
+* Player book and notes can now be closed using Escape (feature request #409)
+* Improved item drag and drop behavior
+* Improved drag threshold to make it less likely to accidentally drag an item when Shift+clicking it (bug #1225)
+* Fixed being able to exceed item stack size limits in some cases (bug #1111)
+* Added the ability to drop stacks of items to the floor or throw them (feature request #36)
+* Added the ability to pick up stacks of items outside inventories while holding shift (stealth mode shortcut)
+* Items can now be dragged across saves and level transitions
+* Fixed rotation of dragged and thrown entities (bug #591)
+* Fixed invert mouse setting affecting turning via keyboard or screen borders
+* Fixed double-click only working for the first slot in the Action binding (bug #795)
+* Mouse grab now released during cutscenes, conversations and cinematics
+* Fixed mouse not always being centered when exiting mouse look mode
+* Mouse look mode is now cancelled on focus loss to prevent the cursor being continuously warped to the window center
+
+Audio:
+
+* Added an option to enable OpenAL Soft's virtual surround (HRTF) support (enabled automatically when using headphones)
+* Re-added environmental audio effects (reverb) using OpenAL EFX (the game uses only one relatively neutral environment)
+* Added a config option to select the audio device (feature request #379)
+* Restored more spell sounds and fixed spell sound positions
+* The Harm (Rhaa Rune (decrease)Vitae Rune (life)), Ignite (Aam Rune (create)Yok Rune (fire)) and Douse (Nhi Rune (remove)Yok Rune (fire)) sound effects now correctly follow the caster/target (bug #740)
+* Added an option to mute audio when the window is not focused
+* Fixed duplicated page turn sound when clicking top tabs in the player book (bug #1125)
+* Fixed casting sound being played on level load when restoring persistent fields of protection
+* Fixed bare handed entity hit sound being repeated each frame
+* Fixed sound position when dousing torches
+* Added missing panning for ambient sounds
+* Audio listener orientation now uses the camera pitch (only noticeable with HRTF)
+* Fixed audio suddenly cutting off when getting too far from sources
+
+Menu:
+
+* Added text and audio language options (available languages depend on your Arx Fatalis version)
+* Added German, Italian, Russian and Spanish localization of new menu strings (feature request #1006)
+* Improved customize controls menu:
+* Overwriting bindings no longer moves the old key (bug #717)
+* Key bindings can now be removed using the escape key (feature request #408)
+* Displayed key names now use the current keyboard layout
+* Fixed removing duplicated key assignments
+* Fixed being locked out of the config menu when binding the 'toggle fullscreen' action to the left mouse button (bug #1136)
+* Fixed UI not updating properly when changing key bindings (bug #717)
+* Sliders and option widgets can now be controlled using the mouse wheel or by clicking at the desired position
+* Fixed checkbox mouseover area (bug #528)
+* Fixed disappearing menu textures after resizing the window (bug #275)
+* Fixed slow cursor animation and shorter cursor trail with higher framerates
+* Increased the save thumbnail size
+* Added support for Unicode save names (feature request #1032)
+* Improved editing support in the save name textbox, including copy & paste support
+* Improved date/time display in the save list
+* Added additional highlighting and improved positioning to the credits
+* Added the libraries and tools used for the build to the credits
+* Added support for scrolling the credits using the mouse wheel or keyboard
+* Fixed credits scroll position changing on window size changes
+
+Windowing:
+
+* Switched to SDL 2 for windowing and input (task #506) - SDL 1 backend will be removed in the next version
+* No longer grabs all keys when fullscreen (with SDL2)
+* The default ("Desktop") resolution now selects fullscreen windowed mode (with SDL2) (feature request #300, #449)
+* Added an option not to minimize the fullscreen window on Alt+TAB (feature request #814)
+* Added a new high-resolution icon
+* Screen saver is no longer inhibited while in the menu in windowed mode
+* Windows: Disabled OS-level DPI scaling (bug #706)
+* Windows: Fixed missing window icon
+* Linux: Translated the .desktop file to Italian and Spanish
+* macOS: Handle Command + Q shortcut to close the window
+
+Modding:
+
+* Added support for loading uncompressed FTL files
+* Added a blender plugin for FTL files
+* Added support for extending localization strings in mods
+* Added a ^camera system variable returning the active camera
+* Added a ^dragged system variable returning the item being dragged
+* Added the ^angle* and ^view* system system variables returning the rotation of the player or another entity
+* Fixed ^gamedays system variable to give the number of days since the playthrough start instead of the the number of 10-days
+* Added the -o flag to the spellcast script command to orphan the spell after being cast
+* Added library and python wrapper for decompressing FTL files
+
+Debugging:
+
+* Added a script console (feature request #356)
+* Added more debug views and made the key binding configurable (feature request #1500)
+* Added --skiplogo, --loadlevel, --loadslot and --loadsave command-line option to skip startup logos or load a level or save file on startup
+* Added support for loading save files by drag & drop
+* Added ability to rename saves to arxsavetool
+* Added a --benchmark command-line option
+* Added a --override-gl command-line option and extension_overrides setting to control used OpenGL extensions
+* Changed to OpenGL debug context and enabled ARB_debug_output for debug builds or with the --debug-gl option
+* Added a config option for the vertex streaming buffer size
+
+Tools:
+
+* Added support to arxunpak to extract all resources as seen by the game (default when no arguments are given)
+* Added support to arxunpak to create resource manifests with checksums
+* arxunpak now handles non-ASCII characters in filenames
+* Unix: Added support for different French and Russian Arx Fatalis CD versions to the data install script
+* Unix: Added support for different localized demo versions to the data install script
+* Unix: Fixed support for copying non-English data files from Steam installs in the data install script (bug #829)
+
+Performance:
+
+* A lot of code cleanup and various performance tweaks
+* Reduced number of redundant OpenGL state changes
+* Improved vertex upload, now uses persistently mapped buffers when available
+* MSAA is now disabled for interface draw calls where it does not make a difference
+* Optimized particle effect rendering
+* Changed blood rendering to only need one draw command per particle
+* Disabled denormalized floating point numbers on x86 and ARM for better performance
+* Added a performance profiling tool
+* Changed magic missile spell to only use one sound source instead of one per missile
+* Improved CPU usage when the window is minimized
+* Improved pathfinding performance, especially when the target is unreachable (bug #652)
+* Windows: The OpenGL context is no longer re-initialized on resolution changes
+* Unix: Enabled -ffast-math in release builds (was already enabled for MSVC)
+
+Other Fixes:
+
+* Significantly improved the item-world collision test: thrown or dropped items should no longer get stuck in walls, hover above the ground or fall through the ground or walls (bug #50, #556, #956)
+* Fixed screenshot shortcut (F10) always overriding the same file
+* Fixed potential resource leaks
+* Fixed direction of player speech outside cutscenes
+* Save files now correctly store game time for playthroughs longer than 1193 hours (AL 1.1.x and older as well as AF 1.21 simply ignore the additional data)
+* Fixed inconsistent state (weapon equipped while not in combat mode) when loading a save that was created while in combat mode
+* Fixed persistent arrow trails if arrows get outside the world
+* Fixed game time not being reset to 0 when starting a new playthrough after having an old one loaded
+* Fixed ^sender script variable possibly changing during script execution
+* Fixed a buffer overflow when saving with very long script variables
+* Fixed missing black bars in a cutscene in the castle of Arx (bug #1014)
+* Fixed Akbaa tentacle not being hidden when it is supposed to be in the Ylside bunker
+* Fixed crashes with item stack sizes or player gold amounts above 999999
+* Fixed wrat teleport breaking when saving and loading during the teleport
+* Fixed inconsistent weapon attachment when saving while in combat mode (bug #581)
+* Fixed getting stuck in a cutscene in level 5 (bug #1293)
+* Made saving more robust against unexpected filesystem errors (bug #439) or other programs opening the save file (bug #1218)
+* Improved handling of corrupted inventories in save files (bug #1445)
+* Fixed initial player position when starting a new game after already having loaded an existing game (bug #140)
+* Fixed minimap reveal status not being reset when starting a new game (bug #1349)
+* Fixed script variables not getting cleared on new game
+* Fixed an error when a resource file size changed after the game start
+* Fixed various crashes:
+* Fixed a crash when loading saves with more than 1500 entities in a single level (bug #375)
+* Fixed a crash when the entity whose inventory is open is destroyed (bug #843)
+* Fixed a crash when the caster or target of a spell is destroyed (bug #951)
+* Fixed a crash when the entity selected for combining is destroyed (bug #452)
+* Fixed a lockup when throwing items at certain objects
+* Fixed problems when loading save files with bugged entity positions (bug #894, #995)
+* Fixed asserts with very high player stats not obtainable during normal gameplay (bug #942)
+
+Technical Changes:
+
+* Fixed build with CMake 3.5.0 or newer
+* Fixed Windows XP support with newer MSVC versions
+* New dependency: GLM 0.9.5.0 or newer
+* macOS: New dependency: iconutil (from Xcode) or icnsutil for building the .icns icon
+* New crash reporter dependency: WinHTTP / libcurl 7.20.0 or newer
+* Dropped support for CMake < 2.8.3
+* Dropped support for Boost < 1.48
+* Dropped support for Qt < 4.7
+* Added support for using libepoxy instead of GLEW to load OpenGL functions
+* The unity build is now enabled by default
+* No longer stores deleted entities in save files if not needed
+* Added SDL 2 fall-back for error dialogs
+* Cleaned up missing data files error dialog, ask before running arx-install-data
+* Added support for statically linking Freetype and ZLIB
+* Color output is no longer enabled if $NO_COLOR is set or if $TERM is unset or set to "dumb"
+* Added support for setting a runtime libexec search dir different from the install path
+* Added support for the ARX_PATH environment variable under Windows
+* Added support for storing .pak and loose files in a data subdirectory
+* Added support for loading data files relative to the executable
+* Added support for configuring additional data search paths
+* There is now a dialog on crash and the crash report is prepared even if the Qt-based reporter is not available
+* Fixed build on newer macOS versions
+* Save files now track which playthrough they belong to (not used in the UI yet)
+* The arx binary now displays a graphical error dialog when passed bad command-line arguments
+* Changed passwall cheat to bypass culling
+* Removed the need for a custom vertex shader
+* Added support for using OpenGL ES-CM 1.x when desktop OpenGL is not available
+* Add a script warning when a command is missing parameters
+* The Gold linker is used and link time optimizations are now enabled automatically when building from source
+* Enabled address randomization for the main executable in MSVC builds
+* Made .pak loading case-insensitive on all platforms
+* Windows: Added support for statically linking Qt in the crash reporter
+* Windows: Support using a 32-bit crash reporter for a 64-bit arx process
+* Windows: Added Unicode filesystem support (feature request #786)
+
+Removed Features:
+
+* DirectX backends (Direct3D, DirectSound, DirectInput)
+* Video bit depth option
+* Support for loading uncooked objects (.teo) and scenes (.scn)
+* Removed link_mouse_look_to_use config option
+* Removed the unused killme script command
+* Removed the unused stack, code, rgb and sub-commands from the zoneparam script command
+* Remove stubbed-out -a flag from the set script command
+
+################################################################################
+
+= Arx Libertatis 1.1.2  (2013-10-17) =
+
+* Fixed a crash when hovering over map markers after the window was resized (bug #547)
+
+################################################################################
+
+= Arx Libertatis 1.1.1  (2013-07-17) =
+
+* Fixed map marker labels not being saved
+
+################################################################################
+
+= Arx Libertatis 1.1 "Rhaa Movis"  (2013-07-14) =
+
+New Features:
+
+* Added support for multiple simultaneous data directories
+* The --data-dir (-d) command-line option can now be repeated to add multiple
+  data directories
+* Added a --no-data-dir (-n) command-line option to disable system data
+  directories
+* Improved error messages for missing data files
+* Added an error dialog if the user directory could not be created
+* Enabled up to 8xMSAA (if supported) with the SDL/OpenGL backend (was: 4xMSAA)
+* Ensured that we never request a window size or fullscreen resolution
+  below 640x480
+* Linux: Merged the data install script and set it to be installed it with
+  the arx binary
+* Linux: Added a GUI to the data install script and launch it automatically
+  if needed - you no longer need to use the terminal to install the game data
+  under Linux!
+* Linux: Added support for bundled Arx Fatalis versions to the data install
+  script (bug #348)
+* Linux: Translated the .desktop file to French, German and Russian
+* Restored some unused spell sounds
+* Tweaked color of the Protection from fire aura to make it visually different
+  from the aura of the Armor spell
+* Windows: Changed default input/windowing/render backends to SDL+OpenGL
+  DirectX backends may be removed in a future version
+
+Fixed Bugs:
+
+* Fixed Am Shaegar accelerating too much during slow frames (bug #185)
+* Increased jump distance to fix some jumps that have become frustratingly hard
+  (bug #413)
+* Replaced DevIL with stb_image for image loading (task #352)
+* Fixed a script evaluation bug when looking up Entity-dependent special
+  variables
+* Fixed a crash when evaluating script variables
+* Fixed a crash caused by entities without an attached 3D object (bug #434)
+* Fixed a crash in the playanim script command (bug #383)
+* Fixed a crash when rendering text ending with two newlines
+* Fixed a crash caused by bad window sizes or font loading / texture creation
+  problems (bug #444)
+* Windows: Fixed crashes and missing sounds due to bad OpenAL implementations
+  by bundling OpenAL Soft (task #435)
+* Linux: Fixed improper handling of set-but-empty $XDG_* variables
+* Merged remaining fixes from Nuky's arx-fatalis-fixed: (task #276)
+** Tweaked portrait render zone in the new game screen
+** Fade out rune symbol flares when switching away from the spell page
+   (Issue 13)
+** Fixed detected NPCs from the current level showing up on all level maps in
+   the book (Issue 12)
+* Fixed missing page turn sound when switching between book pages via hotkeys
+  (F1-F4)
+* Fixed being able to switch to the spell page via prev/next hotkeys before
+  getting any runes
+* Fixed minimap showing a smaller area on higher resolutions (bug #64)
+* Adjusted the RAF cheat to no longer limit the player's caster level to 1
+* Fixed Protection from fire spell not respecting the durations supplied by
+  scripts
+* Changed the default duration for Protection from fire and Protection from cold
+  spells cast by NPCs from over 30 minutes to 20 seconds
+* Fixed handling of bogus targets in the spellcast script command
+* Turning off the Detect trap spell no longer turns off Night vision
+
+Technical Changes:
+
+* A *lot* of code cleanup
+* Removed dependency on Boost.Program_options - Boost is now only needed at
+  build-time. We tried to keep the same command-line argument syntax but there
+  might be slight changes in corner cases. (task #353)
+* Changed to always create a user/config directory in the user's home
+  directory unless explicitly changed with the --user-dir and/or --config-dir
+  options or registry keys. Previously, if no data and user directories were
+  found, the current working directory was used as the user directory.
+* Linux: Added /opt as a system data directory prefix (besides $XDG_DATA_DIRS)
+* Linux: Added arx as a system data directory suffix (besides games/arx)
+* Added the executable directory as a system data directory (bug #242)
+* Improved handling of bad UTF-8 sequences
+* Made the text handling code architecture-independent
+* Enabled C++11 mode for GNU-compatible compilers, if supported
+* Added CMake options to control the custom compiler flags used
+* macOS: Fixed some build issues (YMMV)
+* Fixed build with the Intel C++ compiler
+* Fixed build with some MinGW32 distributions
+* Fixed debug build with libc++
+* Fixed build with CMake 2.8.10
+* Fixed build with MS Visual Studio 2012
+* Added support for building the crash reporter with Qt 5
+* Aligned and tweaked log output
+
+################################################################################
+
+= Arx Libertatis 1.0.3  (2012-07-31) =
+
+* Fixed crashes on startup after selecting the OpenGL renderer on Windows
+  (crash report #290)
+* Fixed crashes after Alt+TAB-ing out of fullscreen mode on Windows
+  (crash report #274)
+* Added support for graphics cards and drivers that don't support alpha-only
+  textures to the Direct3D renderer (bug #331)
+* Fixed low mouse sensitivity with the DirectInput backend (bug #334)
+* Fixed some effects shining though walls while casting (bug #278)
+* Fixed missing speech in cinematics for the Russian and Italian versions
+  (bug #335)
+* Fixed missing ambient sound effects (bug #341)
+* Fixed the offset for the halo rendered around some equipped rings
+* Improved the .ini parser to deal with broken syntax in the Japanese and
+  Russian localization files
+* Include attribute modifiers when calculating the effective object knowledge
+  and projectile skills (bug #302)
+* Savegames can now be deleted from the save and load menus
+
+################################################################################
+
+= Arx Libertatis 1.0.2  (2012-06-14) =
+
+* Fixed problems with the unity build under Linux (crash reports #243, #245)
+* Fixed crashes and disappearing items when sorting the inventory
+* Crafting now always adds items to an existing stack if there is one
+  (feature request #109)
+* Inventory sorting now works on all bags at once
+* Fixed a script execution error when changing the heartbeat event while
+  executing the heartbeat event
+* Fixed compile errors with older Qt and SDL versions
+* Fixed crashes due to random numbers, mostly occurring on Windows
+  (crash report #258)
+* Fixed a bug in loading the Spanish localization files (bug #259)
+* Fixed transparent objects being drawn in front of opaque objects when a
+  book/note is open (bug #252)
+* Fixed a regression from the original game that made the player super stealthy
+  (bug #262)
+* Fixed a regression in the script timer code (crash report #251)
+* Fixed label for the 'Full screen' checkbox not being shown in the German
+  version
+* Fixed cursor position not aligning with absolute input devices (e.g. tablets)
+  in fullscreen mode (bug #269)
+* Mouse sensitivity setting now only applies to turning the camera, not to
+  cursor movement
+
+################################################################################
+
+= Arx Libertatis 1.0.1  (2012-04-22) =
+
+* Fixed garbled text rendering in the Russian version (bug #226)
+* Fixed a crash in the critical error dialog on some Linux systems
+  (crash report #229)
+* Loading files from the 'graph' and 'misc' directories is now case-insensitive
+* Switched to D3D and DInput backends by default on Windows
+
+################################################################################
+
+= Arx Libertatis 1.0 "Bloody Gobblers!"  (2012-04-19) =
+
+New Features:
+
+* Cross-platform support: Windows, Linux and possibly other UNIX-likes
+* Configurable windowing + renderer, input and audio backends
+* Save game list is sorted so that latest save is at the top
+* Configurable number of quicksave slots
+* Shortcut to toggle windowed and fullscreen mode (default is Alt+Enter)
+* Video config menu displays the aspect ratio along with resolutions
+* Separated window size and fullscreen resolution
+* Added an "automatic" fullscreen resolution setting that always chooses the
+  highest available one
+* Support for system-wide installation and per-user configuration / savegames
+  (follows the XDG Base Directory Specification under linux)
+* Ported to amd64 architecture
+* A single binary can automatically run the demo or full game data
+* Automatic language detection for the data files
+* Added a crash reporter tool
+* Added tools to extract .pak and savegame files
+
+Fixed Bugs:
+
+* Fixed aspect ratio for interface elements when using non 5:4-resolutions
+  (some are still stretched)
+* Fixed various crashes
+* Improved level loading speed by limiting the progress bar update rate
+
+Technical Changes:
+
+* Ported text rendering from Windows GDI to FreeType
+* Removed dependency on the proprietary PKWARE implode library
+** This required changing the savegame format - saves produced by
+   Arx Libertatis cannot be read by the original Arx Fatalis, but
+   Arx Libertatis can still read the original save files.
+* Abstracted windowing framework, with SDL and Win32 implementations
+* Abstracted audio backend, with OpenAL and DirectSound 9 implementations
+* Abstracted input backend, with SDL and DirectInput 8 implementations
+* Abstracted renderer backend, with OpenGL and Direct3D 9 implementations
+* Replaced custom image loading/saving code with DevIL
+* Various code cleanup and performance improvements
+
+Removed Features:
+
+* Editor mode (will be re-added)
+* Texture size option (will be re-added)
+* "Bump mapping" (proper bump/normal mapping will be re-added)
+* PNUX texture effect
+* Support for reducing textures to 16-bit
+* Non-newcontrol mode
+* Gamma/brightness/contrast correction

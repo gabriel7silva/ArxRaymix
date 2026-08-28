@@ -1,0 +1,44 @@
+
+#ifndef ARX_PLATFORM_PLATFORMCONFIG_H
+#define ARX_PLATFORM_PLATFORMCONFIG_H
+
+/*!
+ * Low-level configuration.
+ * Please only add config flags that change rarely (such as compiler features)
+ * in order to not break incremental builds. Particularly, availability of
+ * libraries and their features belongs in src/Configure.h.in
+ */
+
+// C++17 features
+// wide character support for filenames in fstream
+#cmakedefine01 ARX_HAVE_CXX17_FSTREAM_WCHAR
+// std::from_chars(float)
+#cmakedefine01 ARX_HAVE_CXX17_FROM_CHARS_FLOAT
+// std::from_chars(int)
+#cmakedefine01 ARX_HAVE_CXX17_FROM_CHARS_INT
+
+// C++20 features
+#cmakedefine01 ARX_HAVE_CXX20_NOEXCEPT_DEFAULT
+
+// GCC extensions
+// __attribute__((always_inline))
+#cmakedefine01 ARX_HAVE_ATTRIBUTE_ALWAYS_INLINE
+// __attribute__((format(printf, i, j)))
+#cmakedefine01 ARX_HAVE_ATTRIBUTE_FORMAT_PRINTF
+// __builtin_trap()
+#cmakedefine01 ARX_HAVE_BUILTIN_TRAP
+// __builtin_unreachable()
+#cmakedefine01 ARX_HAVE_BUILTIN_UNREACHABLE
+// __builtin_expect(e, v)
+#cmakedefine01 ARX_HAVE_BUILTIN_EXPECT
+// __attribute__((optimize("-fno-finite-math-only")))
+#cmakedefine01 ARX_HAVE_ATTRIBUTE_OPTIMIZE_FNO_FINITE_MATH_ONLY
+
+// Clang/MSVC extensions
+// #pragma float_control(precise, on, push)
+#cmakedefine01 ARX_HAVE_PRAGMA_FLOAT_CONTROL_PRECISE
+
+// Code generation options
+#cmakedefine01 BUILD_PROFILER_INSTRUMENT
+
+#endif // ARX_PLATFORM_PLATFORMCONFIG_H
