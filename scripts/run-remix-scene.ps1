@@ -50,10 +50,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# [IO.Path]::Combine, not Join-Path: Join-Path resolves the drive, so a path on a
+# drive that does not exist - a typo in -DataDir, or a Steam library on a disk
+# that is not plugged in - throws, and $ErrorActionPreference = 'Stop' turns that
+# into a stack trace instead of the message at the bottom of this script.
+function Join-PathLiteral {
+    param([string]$Base, [string]$Leaf)
+    return [System.IO.Path]::Combine($Base, $Leaf)
+}
+
 function Test-ArxDataDir {
     param([string]$Path)
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    return (Test-Path (Join-Path $Path 'data.pak'))
+    return (Test-Path -LiteralPath (Join-PathLiteral $Path 'data.pak') -ErrorAction SilentlyContinue)
 }
 
 function Get-SteamLibraryRoots {
@@ -71,8 +80,8 @@ function Get-SteamLibraryRoots {
 
     # Extra library folders live in a VDF file. Rather than parse VDF properly,
     # pull out the quoted "path" values - the only ones that look like paths.
-    $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
-    if (Test-Path $vdf) {
+    $vdf = Join-PathLiteral $steam 'steamapps\libraryfolders.vdf'
+    if (Test-Path -LiteralPath $vdf -ErrorAction SilentlyContinue) {
         foreach ($line in Get-Content $vdf) {
             if ($line -match '"path"\s+"(.+)"') {
                 $roots += ($matches[1] -replace '\\\\', '\')
@@ -85,7 +94,7 @@ function Get-SteamLibraryRoots {
 
 function Find-ArxFatalis {
     foreach ($root in Get-SteamLibraryRoots) {
-        $candidate = Join-Path $root 'steamapps\common\Arx Fatalis'
+        $candidate = Join-PathLiteral $root 'steamapps\common\Arx Fatalis'
         if (Test-ArxDataDir $candidate) { return $candidate }
     }
 
