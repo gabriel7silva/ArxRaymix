@@ -127,8 +127,11 @@ posedNormals[index] = quat * eobj->vertexlist[vertex].norm;
 - `Range` from `fallend`
 - quadratic attenuation over the `fallend - fallstart` fade, which is the closest fixed-function
   equivalent to the engine's own falloff
-- **at most eight at a time** — `kMaxD3DLights`, the fixed-function limit. Remaining slots are
-  explicitly disabled each frame so a stale light cannot linger
+- **as many as the device allows**, read from `D3DCAPS9::MaxActiveLights` and clamped to
+  `kMaxSceneLights` (32). Fixed-function D3D9 traditionally answers 8, and a level holds several
+  hundred lights, so most of them never reach the tracer at all — the single biggest reason the
+  result reads as inconsistent next to the baked original. Unused slots are disabled every frame
+  so a stale light cannot linger
 
 `D3DRS_LIGHTING` follows `remixWantsWorldSpace()`: on when the Remix DLL is hooked, off otherwise.
 
