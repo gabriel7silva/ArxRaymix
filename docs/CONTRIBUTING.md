@@ -31,8 +31,7 @@ cmake --build build --config RelWithDebInfo --target arx --parallel
 ```
 
 ```bash
-powershell -ExecutionPolicy Bypass -File scripts
-un-remix-scene.ps1 -LoadLevel 1
+powershell -ExecutionPolicy Bypass -File scripts/run-remix-scene.ps1 -LoadLevel 1
 ```
 
 `-LoadLevel 1` drops straight into the first cell, which is small, enclosed and torch-lit — a fast
@@ -67,19 +66,14 @@ These are the claims in the README that the code implements but nobody has confi
 
 And the milestone in front of everything else:
 
-- **World-space billboards.** Fire, magic and particles are screen-space overlays by default, so the
-  tracer never sees them and a torch flame casts no light. `EERIECreateSprite()` can build the quads
-  in world space instead under **`--remix-debug 131072`**, which is off by default because an
-  earlier unconditional version left the game on a black screen with no level geometry and no crash
-  in either log. Behind the bit it can be A/B'd between two runs of the same build:
+- **Get more of the level's lights to the tracer.** Fixed-function D3D9 caps how many lights are
+  active at once — `applyRemixLights()` reads `D3DCAPS9::MaxActiveLights` and logs it — while a
+  level holds several hundred. Arx's bake currently covers the difference, but baked light is paint:
+  the tracer cannot shadow or bounce it, so a torch behind a pillar still lights the wall in front
+  of it. Getting those lights in as real lights is what would make the shadows honest.
 
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File scripts/run-remix-scene.ps1 -LoadLevel 1
-  powershell -ExecutionPolicy Bypass -File scripts/run-remix-scene.ps1 -LoadLevel 1 -DebugMask 131072
-  ```
-
-  If the second one loads the level and the flames light the walls, the bit becomes the default. If
-  it goes black again, the difference between the two runs is now one flag rather than one build.
+  The A/B for anything here is `--remix-debug 2097152`, which discards the bake and leaves only the
+  real lights, so the difference is exactly what the tracer is doing.
 
 ## Style
 

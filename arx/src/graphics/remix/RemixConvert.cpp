@@ -45,8 +45,8 @@ void setDebugFlags(const std::string & mask) {
 ARX_PROGRAM_OPTION_ARG("remix-debug", "", "RTX Remix debug bitmask: 1=probe triangle, 2=no materials,"
                        " 4=rebase world origin, 8=explicit matrices, 16=probe-style instances,"
                        " 32=fixed exposure, 64=transpose matrices, 128=Remix editor UI (Alt+X), 256=material without texture, 512=restore the NEVER alpha test bug, 1024=alpha state from draw call, 2048=re-attach the albedo-killing blend state, 4096=world-space entities (no skinning), 8192=sRGB DX10 textures, 16384=no normal maps, 32768=flip normal green, 65536=parallax,"
-                       " 131072=world-space billboards, 262144=let the Remix developer menu win,"
-                       " 524288=keep Arx baked vertex lighting",
+                       " 262144=let the Remix developer menu win, 1048576=old screen-space sprites,"
+                       " 2097152=discard Arx baked vertex lighting",
                        &setDebugFlags, "MASK")
 
 } // namespace

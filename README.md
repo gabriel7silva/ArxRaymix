@@ -11,13 +11,19 @@
   <img alt="license" src="https://img.shields.io/badge/license-GPLv3-blue">
 </p>
 
-**Arx Raymix** renders *Arx Fatalis* through the **NVIDIA RTX Remix** runtime, so the dungeon is lit
-by a path tracer instead of the lightmaps baked into the level files in 2002.
+**Arx Raymix** renders *Arx Fatalis* through the **NVIDIA RTX Remix** runtime, so the dungeon gets
+path-traced shadows, reflections, bounced light and PBR materials.
 
 It is not a texture pack and not a generic wrapper. The work is inside the engine: a Direct3D 9
 renderer that creates its device through the Remix runtime's own `d3d9.dll` and feeds it what a path
 tracer needs — untransformed world-space geometry, per-vertex normals and real light sources —
 instead of the screen-space triangles the original engine was happy to draw.
+
+The lighting is deliberately a hybrid, and the reason is worth knowing before judging a screenshot.
+A level holds several hundred lights and fixed-function D3D9 can carry only a handful at a time, so
+the 2002 lightmaps are kept as the base and the tracer adds to them. Flames and magic are real
+emissive geometry on top. Discarding the bake entirely is one flag away
+(`--remix-debug 2097152`) and looks worse today, for that exact reason.
 
 ## Built on Arx Libertatis
 
@@ -63,18 +69,20 @@ Work in progress, and the bars are meant literally.
   with quadratic attenuation derived from the engine's `fallstart`/`fallend` fade.
 - **In-game options page.** Path tracing, quality, DLSS, ray reconstruction, denoiser and bloom are
   exposed in the video options and applied immediately.
+- **Flames light the room.** Fire, magic and flare sprites are built in world space, and additive
+  draws are translated to emissive surfaces, so a torch lights the wall behind it.
+- **Vanilla's lighting distribution is preserved.** Arx's baked vertex lighting is kept and fed
+  to the runtime as lighting, with path-traced shadows, reflections and materials on top.
 - **Remix developer menu** (`Alt+X`), including Debug View.
 
 ### Not working yet
 
-- **Fire, magic and particle effects are not traced by default.** They are screen-space overlays, so
-  a torch flame casts no light. Building them in world space is implemented behind
-  `--remix-debug 131072` and is off until someone confirms on screen that it loads and looks right —
-  an earlier unconditional version broke level loading.
-- **Light intensity is unaudited.** Only eight lights can be active at once — the fixed-function
-  limit — and radiance and `rtx.sceneScale` were last tuned while nothing was reaching the screen.
-- **Vertex colour still carries Arx's baked lighting.** Correct while rasterising, wrong once the
-  tracer is what presents; it has to become white so Remix lights from scratch.
+- **Only a handful of map lights reach the tracer.** Fixed-function D3D9 caps how many lights can be
+  active at once, and a level holds several hundred. The bake covers the rest, but that is a
+  workaround rather than a fix — those lights cast no traced shadows.
+- **Baked light cannot be shadowed.** Keeping Arx's lightmaps buys the original's light
+  distribution, and pays for it with the original's shadows: paint on a surface is not a light
+  source, so the tracer can neither occlude it nor bounce it.
 - **The options page is unverified on screen.** The code applies every toggle, but whether turning
   path tracing off leaves a correct rasterised image has not been confirmed by looking at it.
 - **Materials are flat constants.** On this path Remix derives materials from the D3D9 textures plus
