@@ -187,6 +187,9 @@ private:
 	bool m_requirePow2Textures = false;
 	bool m_clipsTLVertices = true;
 	unsigned m_maxTextureSize = 4096;
+	//! D3DCAPS9::MaxActiveLights, clamped. Every map light past this one is
+	//! simply absent from the traced scene. See applyRemixLights().
+	unsigned m_maxLights = 8;
 	RenderState m_appliedState;
 	bool m_appliedStateValid = false;
 	bool m_remixDummyThisScene = false;

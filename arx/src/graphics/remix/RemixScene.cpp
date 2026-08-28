@@ -412,9 +412,19 @@ void applyPreviewConfigImpl() {
 	// level far too low and the slabs dissolve. Verified on its own: this single
 	// option brings the floor joints back.
 	g_api.iface().SetConfigVariable("rtx.maxAnisotropySamples", "16");
-	g_api.iface().SetConfigVariable("rtx.ignoreAllVertexColorBakedLighting", "True");
-	g_api.iface().SetConfigVariable("rtx.vertexColorIsBakedLighting", "False");
-	g_api.iface().SetConfigVariable("rtx.vertexColorStrength", "0");
+	if(debugEnabled(DebugBakedLighting)) {
+		// Arx's bake carries every level light, including the ones that never fit
+		// through fixed-function D3D9. Treated as baked lighting rather than as
+		// albedo, so the runtime knows it is light and not paint on the texture.
+		g_api.iface().SetConfigVariable("rtx.ignoreAllVertexColorBakedLighting", "False");
+		g_api.iface().SetConfigVariable("rtx.vertexColorIsBakedLighting", "True");
+		g_api.iface().SetConfigVariable("rtx.vertexColorStrength", "1.0");
+		LogInfo << "Remix scene: Arx baked vertex lighting kept";
+	} else {
+		g_api.iface().SetConfigVariable("rtx.ignoreAllVertexColorBakedLighting", "True");
+		g_api.iface().SetConfigVariable("rtx.vertexColorIsBakedLighting", "False");
+		g_api.iface().SetConfigVariable("rtx.vertexColorStrength", "0");
+	}
 	g_api.iface().SetConfigVariable("rtx.autoExposure.enabled", "True");
 	g_api.iface().SetConfigVariable("rtx.tonemap.exposureBias", "-0.6");
 	// NRC fails to init on the 4050 6 GB (every session). Pin importance sampling
@@ -445,6 +455,18 @@ void applyPreviewConfigImpl() {
 		 * leaves this to the developer menu so the value can be found on screen.
 		 */
 		g_api.iface().SetConfigVariable("rtx.lightConversionIntensityFactor", "0.5");
+		/*
+		 * Additively blended draws become emissive surfaces.
+		 *
+		 * This is how the rest of the level's lighting gets in. Only a handful
+		 * of map lights fit through fixed-function D3D9 at once, out of several
+		 * hundred in a level, so a room lit only by those reads inconsistently -
+		 * bright where a slot happened to land, flat everywhere else. Flames,
+		 * flares and magic are additive quads, and since they are now built in
+		 * world space they can light what is around them, the way the baked
+		 * original did.
+		 */
+		g_api.iface().SetConfigVariable("rtx.enableEmissiveBlendModeTranslation", "True");
 		// WindowProc was not bound to the swapchain; force the developer menu
 		// so we do not depend on Alt+X until that hook sticks.
 		g_api.iface().SetConfigVariable("rtx.showUI", "2");

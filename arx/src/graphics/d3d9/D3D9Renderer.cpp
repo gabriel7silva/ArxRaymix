@@ -174,6 +174,13 @@ static_assert(sizeof(WorldVertex3) == 52, "XYZ+NORMAL+DIFFUSE+TEX3 is 52 bytes")
 
 const DWORD kTLFVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1;
 const DWORD kTL3FVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX3;
+/*
+ * Upper bound on map lights handed to the runtime in one frame, whatever the
+ * device claims it can take. Each one is a real light in the traced scene, so
+ * this trades cost against how much of the level's lighting survives.
+ */
+constexpr unsigned kMaxSceneLights = 32;
+
 const DWORD kWorldFVF = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 const DWORD kWorld3FVF = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX3;
 
@@ -1625,7 +1632,19 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 		// If the device does not clip pre-transformed vertices we have to bound the
 		// projected coordinates ourselves instead of relying on the guard band.
 		m_clipsTLVertices = (caps.PrimitiveMiscCaps & D3DPMISCCAPS_CLIPTLVERTS) != 0;
-		LogInfo << "D3D9 caps: clipTLVerts=" << (m_clipsTLVertices ? 1 : 0)
+		/*
+		 * How many map lights can reach the path tracer at once. Fixed-function
+		 * D3D9 usually answers 8, which is why a room with 500 lights is lit by
+		 * the nearest handful and looks nothing like the baked original. The
+		 * runtime is dxvk-remix rather than a 2002 driver, so ask instead of
+		 * assuming, and log the answer either way.
+		 */
+		if(caps.MaxActiveLights > 0) {
+			m_maxLights = (std::min)(unsigned(caps.MaxActiveLights), kMaxSceneLights);
+		}
+		LogInfo << "D3D9 caps: maxActiveLights=" << caps.MaxActiveLights
+		        << " using=" << m_maxLights
+		        << " clipTLVerts=" << (m_clipsTLVertices ? 1 : 0)
 		        << " guardBand=(" << caps.GuardBandLeft << ", " << caps.GuardBandTop
 		        << ", " << caps.GuardBandRight << ", " << caps.GuardBandBottom << ")"
 		        << " maxTexture=" << m_maxTextureSize
@@ -2221,9 +2240,9 @@ void D3D9Renderer::applyRemixLights() {
 		return;
 	}
 	
-	constexpr size_t kMaxD3DLights = 8;
-	remix::SceneLight lights[kMaxD3DLights];
-	const size_t count = remix::collectSceneLights(lights, kMaxD3DLights);
+	remix::SceneLight lights[kMaxSceneLights];
+	const size_t limit = (std::min)(size_t(m_maxLights), size_t(kMaxSceneLights));
+	const size_t count = remix::collectSceneLights(lights, limit);
 	
 	for(size_t i = 0; i < count; i++) {
 		const remix::SceneLight & src = lights[i];
@@ -2251,7 +2270,7 @@ void D3D9Renderer::applyRemixLights() {
 		m_device->LightEnable(DWORD(i), TRUE);
 	}
 	
-	for(size_t i = count; i < kMaxD3DLights; i++) {
+	for(size_t i = count; i < limit; i++) {
 		m_device->LightEnable(DWORD(i), FALSE);
 	}
 #endif

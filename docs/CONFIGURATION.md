@@ -44,9 +44,9 @@ values back out of `user.conf` — that is how a number gets into the table belo
 | `rtx.volumetrics.enable` | `False` | |
 | `rtx.usePostFilter` | `False` | |
 | `rtx.maxAnisotropySamples` | `16` | Floors are seen at a grazing angle, where isotropic mip selection dissolves the slabs |
-| `rtx.ignoreAllVertexColorBakedLighting` | `True` | Arx's 2002 lightmaps must not multiply on top of traced light |
-| `rtx.vertexColorIsBakedLighting` | `False` | |
-| `rtx.vertexColorStrength` | `0` | |
+| `rtx.ignoreAllVertexColorBakedLighting` | `True` | Arx's 2002 lightmaps must not multiply on top of traced light. Inverted by `--remix-debug 524288` |
+| `rtx.vertexColorIsBakedLighting` | `False` | `True` under that bit |
+| `rtx.vertexColorStrength` | `0` | `1.0` under that bit |
 | `rtx.autoExposure.enabled` | `True` | Overridden below when the Remix DLL is hooked |
 | `rtx.tonemap.exposureBias` | `-0.6` | |
 | `rtx.integrateIndirectMode` | `2` | Pins importance sampling; NRC failed to initialise on the development GPU |
@@ -71,6 +71,7 @@ The rest describe the look, and can be handed over to the developer menu with
 | `rtx.legacyMaterial.metallicConstant` | `0.0` | Was `0.12`. Dungeon stone is not metal, and the tint it added was part of the plastic look |
 | `rtx.legacyMaterial.emissiveIntensity` | `0.0` | |
 | `rtx.lightConversionIntensityFactor` | `0.5` | Gain applied when D3D9 lights become Remix lights. Ours already carry Arx intensity, so the default washed the cell out. A starting point, not a measurement |
+| `rtx.enableEmissiveBlendModeTranslation` | `True` | Turns additively blended draws — flames, flares, magic — into emissive surfaces. This is how light from the hundreds of level lights that cannot fit through fixed-function D3D9 gets back in |
 | `rtx.showUI` | `2` | Developer menu forced on while the `Alt+X` window hook is unreliable |
 | `rtx.showUICursor` | `True` | |
 
@@ -118,5 +119,6 @@ game; these are the ones that still bite:
 | `4096` | World-space entities without skinning |
 | `131072` | Builds sprites — fire, magic, sparks, light flares — in world space so the path tracer sees them |
 | `262144` | Stops the game re-applying the look options, so the developer menu and the `user.conf` it writes are what decide |
+| `524288` | Keeps Arx's baked vertex lighting instead of discarding it. Vanilla's light distribution is the bake, so this matches the original at the cost of the shadows being baked too |
 
 The full list is in the option's help text: run `arx.exe --help`.

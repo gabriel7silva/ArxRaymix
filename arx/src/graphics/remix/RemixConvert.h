@@ -112,7 +112,21 @@ enum DebugBit {
 	 * This is how to find a value worth committing: tune it live, save it, and
 	 * read it back out of user.conf.
 	 */
-	DebugFreeConfig = 1 << 18
+	DebugFreeConfig = 1 << 18,
+	/*!
+	 * Let Arx's own baked lighting through instead of discarding it.
+	 *
+	 * Vanilla's light distribution *is* the bake: every level light is painted
+	 * into vertex colour, including the several hundred that cannot fit through
+	 * fixed-function D3D9 and are therefore absent from the traced scene. With
+	 * the bake discarded, a room is lit by whichever few lights won a slot,
+	 * which is what makes the result read as inconsistent next to the original.
+	 *
+	 * The trade is real and worth stating: baked light is paint, not a light
+	 * source, so the path tracer cannot shadow it or bounce it. This buys
+	 * vanilla's distribution at the cost of the shadows being vanilla's too.
+	 */
+	DebugBakedLighting = 1 << 19
 };
 
 //! Raw --remix-debug mask. Zero unless the option was passed.
