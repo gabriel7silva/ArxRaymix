@@ -483,6 +483,12 @@ public:
 			addCenter(std::move(txt));
 		}
 		
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_options_raytracing"));
+			txt->setTargetPage(Page_OptionsRayTracing);
+			addCenter(std::move(txt));
+		}
+		
 #if ARX_HAVE_RTX_REMIX
 		{
 			auto txt = std::make_unique<TextWidget>(hFontMenu, "Remix");
@@ -1147,6 +1153,61 @@ private:
 			cb->setValue(0);
 			cb->setEnabled(false);
 		}
+		
+	}
+	
+};
+
+class RayTracingOptionsMenuPage final : public MenuPage {
+	
+public:
+	
+	RayTracingOptionsMenuPage()
+		: MenuPage(Page_OptionsRayTracing)
+	{ }
+	
+	void init() override {
+		
+		reserveBottom();
+		
+		const bool available = GRenderer && GRenderer->supportsRayTracing();
+		
+		{
+			std::string_view label = getLocalised("system_menus_options_raytracing_rtao");
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
+			cb->valueChanged = [](int pos, std::string_view /* string */) {
+				config.video.rtao = pos;
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->setValue(available ? config.video.rtao : 0);
+			cb->setEnabled(available);
+			addCenter(std::move(cb));
+		}
+		
+		{
+			std::string_view label = getLocalised("system_menus_options_raytracing_shadows");
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
+			cb->valueChanged = [](int pos, std::string_view /* string */) {
+				config.video.dxrShadows = (pos != 0);
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_on"));
+			cb->setValue((available && config.video.dxrShadows) ? 1 : 0);
+			cb->setEnabled(available);
+			addCenter(std::move(cb));
+		}
+		
+		if(!available) {
+			auto txt = std::make_unique<TextWidget>(hFontMenu,
+				getLocalised("system_menus_options_raytracing_unavailable"));
+			addCenter(std::move(txt));
+		}
+		
+		addBackButton(Page_Options);
 		
 	}
 	
@@ -1969,6 +2030,7 @@ void MainMenu::initWindowPages() {
 	m_window->add(std::make_unique<OptionsMenuPage>());
 	m_window->add(std::make_unique<VideoOptionsMenuPage>());
 	m_window->add(std::make_unique<RenderOptionsMenuPage>());
+	m_window->add(std::make_unique<RayTracingOptionsMenuPage>());
 #if ARX_HAVE_RTX_REMIX
 	m_window->add(std::make_unique<RemixOptionsMenuPage>());
 #endif

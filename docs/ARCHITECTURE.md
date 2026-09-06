@@ -57,6 +57,8 @@ D3D9 is the historical Windows raster path, including CPU frustum clipping for `
 
 `runtime/user/` is a local user directory. It is not part of the public tree.
 
+Ray-traced AO (Option A) and later DXR shadows live under [`arx/src/graphics/dxr/`](../arx/src/graphics/dxr/README.md). RTAO is compiled with D3D12 and toggled from **Options → Ray tracing**.
+
 ## Leftover Remix sources
 
 `arx/src/graphics/remix/` and `arx/third_party/rtx-remix/` still exist from an earlier experiment. `ARX_HAVE_RTX_REMIX` is not enabled. Those files are not how the game is launched.

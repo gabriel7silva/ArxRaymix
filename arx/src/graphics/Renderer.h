@@ -385,6 +385,12 @@ public:
 	
 	virtual void showFrame() { }
 	
+	//! DXR / RTAO after the world is rasterized and before HUD. Default is a no-op.
+	virtual void applyWorldRayEffects() { }
+	
+	//! True when this session's device can run DXR (not D3D9, and RaytracingTier != NOT_SUPPORTED).
+	[[nodiscard]] virtual bool supportsRayTracing() const { return false; }
+	
 	/*!
 	 * Whether entity geometry should be handed over untransformed, in world
 	 * space, instead of the engine's software-transformed screen coordinates.

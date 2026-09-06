@@ -128,6 +128,8 @@ public:
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
 	
 	void showFrame() override;
+	void applyWorldRayEffects() override;
+	[[nodiscard]] bool supportsRayTracing() const override;
 	
 	void drawTextured(Primitive primitive, const TexturedVertex * vertices, size_t count);
 	void drawWorldVertices(Primitive primitive, const SMY_VERTEX * vertices, size_t count);
@@ -154,9 +156,19 @@ private:
 	bool beginRecording();
 	void bindDrawState(Primitive primitive);
 	void drawGpuVerts(Primitive primitive, const void * verts, size_t stride, size_t count);
+	void restoreRasterBind();
+	void collectWorld(Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
+	                  const unsigned short * indices, size_t nindices);
+	void collectWorld(Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
+	                  const unsigned short * indices, size_t nindices);
 	
 	struct Impl;
 	Impl * m = nullptr;
+	class D3D12Rtao * m_rtao = nullptr;
+	bool m_loggedRtaoOff = false;
+	bool m_loggedRtaoOn = false;
+	bool m_loggedShadowsOff = false;
+	bool m_loggedShadowsOn = false;
 	
 	Rect m_viewport;
 	Rect m_scissor;

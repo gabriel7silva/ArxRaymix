@@ -10,5 +10,6 @@ English is the default language for this repository. Portuguese (Brazil) lives u
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) | [pt-BR/CONTRIBUTING.md](pt-BR/CONTRIBUTING.md) |
 | Upstream (Arx Libertatis) | [UPSTREAM.md](UPSTREAM.md) | [pt-BR/UPSTREAM.md](pt-BR/UPSTREAM.md) |
 | Launch scripts | [../scripts/README.md](../scripts/README.md) | [pt-BR/README.md](pt-BR/README.md#execução) |
+| Option A / DXR | [../arx/src/graphics/dxr/README.md](../arx/src/graphics/dxr/README.md) | (same README) |
 
 File names, folders, comments, and the in-game Video Options labels for the graphics API are English. Localisation overlays may translate those strings.
