@@ -1,6 +1,8 @@
 # Arquitetura
 
-Como os backends raster do Windows estão ligados. Se um comentário no código e este texto discordarem, o código vence.
+Como os backends raster do Windows estão ligados, e como a camada de ray tracing se apoia em um deles. Se um comentário no código e este texto discordarem, o código vence.
+
+Esta é a visão geral. O [`docs/maintenance/`](../maintenance/README.md) é a referência de trabalho para quem altera o código, e está somente em inglês.
 
 Versão em inglês: [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
@@ -42,7 +44,23 @@ OpenGL é o caminho fora do Windows. No Windows não é escolha em tempo de exec
 
 `runtime/user/` é local. Não faz parte da árvore pública.
 
-AO por raios (opção A) e sombras DXR posteriores estão em [`arx/src/graphics/dxr/`](../../arx/src/graphics/dxr/README.md). O RTAO compila com o D3D12 e liga-se em **Opções → Ray tracing**.
+## A camada de ray tracing
+
+`arx/src/graphics/dxr/` acrescenta oclusão ambiente traçada, sombras e um salto de luz indireta sobre o raster D3D12 já pronto. É uma camada, não uma substituição: o mundo é rasterizado primeiro, e desligar todos os efeitos deixa o raster intacto.
+
+Compila junto com o backend D3D12 e é alcançada por um único método opcional na interface do renderizador, cujo padrão é não fazer nada — então os outros backends não precisam saber dela. A chamada fica depois do mundo desenhado e antes de partículas, clarões e HUD, para que efeitos aditivos não sejam multiplicados pelo sombreamento do mundo.
+
+| | |
+|---|---|
+| Receptores | O buffer de profundidade, um por pixel de tela |
+| Bloqueadores | Salas próximas, em cache e reconstruídas na troca de sala, mais as entidades em cena a cada quadro |
+| Luzes | Um conjunto limitado escolhido por quadro entre as luzes acesas do nível, com entrada e saída suavizadas para que a troca nunca apareça como um salto |
+| Estabilidade | Cada resultado passa por *denoise* e é misturado com o quadro anterior, reprojetado pela câmera anterior |
+| Ajustes | `rtao`, `dxr_shadows`, `dxr_gi` no `cfg.ini`, cada um Desligado / Baixo / Médio / Alto, aplicados na hora |
+
+Cada etapa degrada para o raster puro, nunca para um quadro quebrado: hardware sem suporte, compilador de shader ausente, shader que falha ao compilar ou cena sem nada a traçar interrompem o passe e deixam a imagem rasterizada como está. O log sempre diz qual etapa parou.
+
+Para saber *por que* um valor é o que é, leia [`arx/src/graphics/dxr/README.md`](../../arx/src/graphics/dxr/README.md). Para onde as coisas ficam e o que quebra ao mudá-las, leia o [`docs/maintenance/`](../maintenance/README.md).
 
 ## Fontes Remix antigas
 

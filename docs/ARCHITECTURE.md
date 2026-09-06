@@ -1,6 +1,8 @@
 # Architecture
 
-How the Windows raster backends are wired. Where a comment in the source and this document disagree, read the source.
+How the Windows raster backends are wired, and how the ray tracing layer sits on top of one of them. Where a comment in the source and this document disagree, read the source.
+
+This is the overview. [`docs/maintenance/`](maintenance/README.md) is the working reference for people changing the code.
 
 ## One window, two backends
 
@@ -57,7 +59,23 @@ D3D9 is the historical Windows raster path, including CPU frustum clipping for `
 
 `runtime/user/` is a local user directory. It is not part of the public tree.
 
-Ray-traced AO (Option A) and later DXR shadows live under [`arx/src/graphics/dxr/`](../arx/src/graphics/dxr/README.md). RTAO is compiled with D3D12 and toggled from **Options → Ray tracing**.
+## The ray tracing layer
+
+`arx/src/graphics/dxr/` adds ray traced ambient occlusion, shadows and one bounce of indirect light on top of the finished D3D12 raster. It is a layer, not a replacement: the world is rastered first, and switching every effect off leaves the raster untouched.
+
+It is compiled with the D3D12 backend and is reached through one optional method on the renderer interface, which defaults to doing nothing, so the other backends need no knowledge of it. The call sits after the world is drawn and before particles, flares and the HUD, so additive effects are not multiplied by the world's shading.
+
+| | |
+|---|---|
+| Receivers | The depth buffer, one per screen pixel |
+| Casters | Nearby rooms, cached and rebuilt on room changes, plus in-scene entities every frame |
+| Lights | A bounded set chosen per frame from the level's lit lights, faded in and out so the set changing is never a visible pop |
+| Stability | Each result is denoised and blended with the previous frame, reprojected through the previous camera |
+| Settings | `rtao`, `dxr_shadows`, `dxr_gi` in `cfg.ini`, each Off / Low / Medium / High, applied immediately |
+
+Every stage degrades to plain raster rather than to a broken frame: unsupported hardware, a missing shader compiler, a shader that fails to build, or a scene with nothing to trace each stop the pass and leave the rastered image alone. The log always says which stage stopped.
+
+For why a given value is what it is, read [`arx/src/graphics/dxr/README.md`](../arx/src/graphics/dxr/README.md). For where things live and what breaks when you change them, read [`docs/maintenance/`](maintenance/README.md).
 
 ## Leftover Remix sources
 
