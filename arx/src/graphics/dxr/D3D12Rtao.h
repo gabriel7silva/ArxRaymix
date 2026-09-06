@@ -56,19 +56,21 @@ public:
 	              const unsigned short * indices, size_t nindices);
 	
 	[[nodiscard]] size_t triangleCount() const { return (m_positions.size() + m_roomPositions.size()) / 3; }
+	[[nodiscard]] size_t dynTriangleCount() const { return m_positions.size() / 3; }
 	
-	static constexpr size_t kMaxShadowLights = 8;
-	static constexpr float kCasterDistance = 4000.f;
+	static constexpr size_t kMaxShadowLights = 16;
+	static constexpr float kCasterDistance = 8000.f;
 	
 	struct GpuLight {
 		float x, y, z, intensity;
-		float fallstart, fallend, pad0, pad1;
+		float fallstart, fallend, radius, presence; // presence: 0..1 fade as a light enters / leaves the set
+		float r, g, b, pad2; // hue only (max component 1); GI bounce takes the light's colour
 	};
 	
 	bool apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuffer,
 	           ID3D12Resource * depth,
 	           const glm::mat4x4 & view, const glm::mat4x4 & proj,
-	           int width, int height, int quality, bool shadows,
+	           int width, int height, int aoQuality, int shadowQuality, int giQuality,
 	           const GpuLight * lights, size_t lightCount, std::uint64_t rtvPtr);
 	
 private:
@@ -136,11 +138,20 @@ private:
 	ComPtr<ID3D12Resource> m_shaderTable;
 	ComPtr<ID3D12Resource> m_ao;
 	ComPtr<ID3D12Resource> m_shadow;
+	ComPtr<ID3D12Resource> m_gi;
 	ComPtr<ID3D12Resource> m_colorCopy;
 	ComPtr<ID3D12Resource> m_lights;
-	
+	// Temporal history: last frame's accumulated AO / shadow and the raw depth
+	// RayGen saw, reprojected through m_prevViewProj on the next frame.
+	ComPtr<ID3D12Resource> m_aoPrev;
+	ComPtr<ID3D12Resource> m_shadowPrev;
+	ComPtr<ID3D12Resource> m_depthCur;
+	ComPtr<ID3D12Resource> m_depthPrev;
+	ComPtr<ID3D12Resource> m_giPrev;
+
 	std::vector<Pos> m_positions;
 	std::vector<Pos> m_roomPositions;
+	glm::mat4x4 m_prevViewProj = glm::mat4x4(1.f);
 	unsigned m_descriptorSize = 0;
 	int m_width = 0;
 	int m_height = 0;
@@ -148,7 +159,9 @@ private:
 	bool m_supported = false;
 	bool m_ready = false;
 	bool m_loggedCap = false;
+	bool m_histValid = false;
 	bool m_aoIsUav = true;
+	bool m_colorIsShader = false;
 	bool m_vertsAreSrv = false;
 	bool m_roomVertsAreSrv = false;
 	bool m_roomsDirty = true;

@@ -1172,34 +1172,24 @@ public:
 		
 		const bool available = GRenderer && GRenderer->supportsRayTracing();
 		
-		{
-			std::string_view label = getLocalised("system_menus_options_raytracing_rtao");
+		auto addQuality = [&](std::string_view label, int & setting) {
 			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
-			cb->valueChanged = [](int pos, std::string_view /* string */) {
-				config.video.rtao = pos;
+			int * value = &setting;
+			cb->valueChanged = [value](int pos, std::string_view /* string */) {
+				*value = pos;
 				config.save();
 			};
 			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
 			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_medium"));
 			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
-			cb->setValue(available ? config.video.rtao : 0);
+			cb->setValue(available ? setting : 0);
 			cb->setEnabled(available);
 			addCenter(std::move(cb));
-		}
-		
-		{
-			std::string_view label = getLocalised("system_menus_options_raytracing_shadows");
-			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
-			cb->valueChanged = [](int pos, std::string_view /* string */) {
-				config.video.dxrShadows = (pos != 0);
-				config.save();
-			};
-			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
-			cb->addEntry(getLocalised("system_menus_options_raytracing_on"));
-			cb->setValue((available && config.video.dxrShadows) ? 1 : 0);
-			cb->setEnabled(available);
-			addCenter(std::move(cb));
-		}
+		};
+		addQuality(getLocalised("system_menus_options_raytracing_rtao"), config.video.rtao);
+		addQuality(getLocalised("system_menus_options_raytracing_shadows"), config.video.dxrShadows);
+		addQuality(getLocalised("system_menus_options_raytracing_gi"), config.video.dxrGi);
 		
 		if(!available) {
 			auto txt = std::make_unique<TextWidget>(hFontMenu,

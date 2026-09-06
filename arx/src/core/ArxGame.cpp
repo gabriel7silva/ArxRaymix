@@ -1856,8 +1856,16 @@ void ArxGame::renderLevel() {
 	GRenderer->SetFogColor(g_fogColor);
 	
 	ARX_SCENE_Render();
-	
+
 	drawDebugRender();
+
+	// DXR AO / shadows / GI composite over the opaque world only. Particles,
+	// magic flares, spell effects and light flares are drawn afterwards so
+	// they are not multiplied by the shading of whatever surface is behind
+	// them (a spell's flare used to show the table's shadow through itself).
+	if(!isInCinematic()) {
+		GRenderer->applyWorldRayEffects();
+	}
 
 	// Begin Particles
 	g_particleManager.Render();
@@ -1900,11 +1908,7 @@ void ArxGame::renderLevel() {
 
 	updateLightFlares();
 	renderLightFlares();
-	
-	if(!isInCinematic()) {
-		GRenderer->applyWorldRayEffects();
-	}
-	
+
 	// Manage Death visual & Launch menu...
 	ARX_PLAYER_Manage_Death();
 

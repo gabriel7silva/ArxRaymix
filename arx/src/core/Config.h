@@ -148,10 +148,12 @@ public:
 		std::string bufferUpload;
 		std::string extensionOverride;
 		
-		//! 0 = Off, 1 = Low, 2 = High. Runtime toggle (no restart).
+		//! 0 = Off, 1 = Low, 2 = Medium, 3 = High. Runtime toggle (no restart).
 		int rtao;
-		//! Hybrid DXR shadows on the D3D12 raster. Runtime toggle (no restart).
-		bool dxrShadows;
+		//! Hybrid DXR shadows. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
+		int dxrShadows;
+		//! One-bounce diffuse GI. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
+		int dxrGi;
 		
 	} video;
 	

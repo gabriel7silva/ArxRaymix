@@ -169,6 +169,8 @@ private:
 	bool m_loggedRtaoOn = false;
 	bool m_loggedShadowsOff = false;
 	bool m_loggedShadowsOn = false;
+	bool m_loggedGiOff = false;
+	bool m_loggedGiOn = false;
 	
 	Rect m_viewport;
 	Rect m_scissor;
