@@ -163,6 +163,7 @@ private:
 	//! True while the Remix dll is hooked: the path tracer needs real world
 	//! positions, so entities are handed over untransformed with w == 0.
 	[[nodiscard]] bool wantsWorldSpaceEntities() const override;
+	[[nodiscard]] const char * getGraphicsApiName() const override { return "DirectX 9"; }
 	
 	bool drawUnprojectedTL(Primitive primitive, const TexturedVertex * vertices, size_t nvertices,
 	                       const unsigned short * indices, size_t nindices);

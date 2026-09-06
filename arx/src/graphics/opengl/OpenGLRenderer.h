@@ -89,6 +89,8 @@ public:
 	bool getSnapshot(Image & image) override;
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
 	
+	[[nodiscard]] const char * getGraphicsApiName() const override { return "OpenGL"; }
+	
 	GLTextureStage * GetTextureStage(size_t textureStage) {
 		return reinterpret_cast<GLTextureStage *>(Renderer::GetTextureStage(textureStage));
 	}

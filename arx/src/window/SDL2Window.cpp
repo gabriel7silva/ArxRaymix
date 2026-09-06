@@ -84,15 +84,20 @@ SDL2Window * SDL2Window::s_mainWindow = nullptr;
 #if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
 static bool wantsD3D9Renderer() {
 	if(const char * env = std::getenv("ARX_RENDERER")) {
-		if(boost::iequals(env, "d3d9") || boost::iequals(env, "Direct3D 9")) {
+		if(boost::iequals(env, "d3d9") || boost::iequals(env, "dx9")
+		   || boost::iequals(env, "Direct3D 9") || boost::iequals(env, "DirectX 9")) {
 			return true;
 		}
-		if(boost::iequals(env, "d3d12") || boost::iequals(env, "Direct3D 12")) {
+		if(boost::iequals(env, "d3d12") || boost::iequals(env, "dx12")
+		   || boost::iequals(env, "Direct3D 12") || boost::iequals(env, "DirectX 12")) {
 			return false;
 		}
 	}
 	return config.video.renderer == "Direct3D 9"
+	    || config.video.renderer == "DirectX 9"
 	    || config.video.renderer == "D3D9"
+	    || config.video.renderer == "dx9"
+	    || config.video.renderer == "DX9"
 	    || config.video.renderer == "Raymix"
 	    || config.video.renderer == "Remix";
 }

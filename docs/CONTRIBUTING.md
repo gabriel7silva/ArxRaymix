@@ -1,83 +1,58 @@
 # Contributing
 
-The Remix work is small and concentrated. Almost everything is in two directories.
+English is the default for file names, folders, comments, and documentation. Portuguese lives under [`pt-BR/`](pt-BR/).
 
 ## Where things live
 
 | Path | What it is |
 |---|---|
-| `arx/src/graphics/d3d9/D3D9Renderer.cpp` | The renderer. Device creation, vertex buffers, world-space submission, smooth normals, light conversion. Large and load-bearing |
-| `arx/src/graphics/remix/RemixApi.cpp` | Finds and loads the Remix DLL, wraps `Startup`/`Shutdown`, maps error codes to strings |
-| `arx/src/graphics/remix/RemixScene.cpp` | Runtime configuration and light selection |
-| `arx/src/graphics/remix/RemixProbe.cpp` | `--remix-probe` and the `--remix-dll` option |
-| `arx/src/graphics/remix/RemixConvert.h` | The `--remix-debug` bits |
-| `arx/src/graphics/remix/RemixTextures.cpp`, `RemixEntities.cpp`, `RemixRenderer.cpp` | The C API path. Not what the game runs — see [ARCHITECTURE.md](ARCHITECTURE.md) |
-| `arx/src/animation/AnimationRender.cpp` | Entity conversion to world space with posed normals |
-| `arx/src/graphics/Renderer.h` | `wantsWorldSpaceEntities()`, how a backend declares the space it wants |
-| `arx/src/gui/MainMenu.cpp` | The Raymix video options page |
-| `arx/third_party/rtx-remix/` | Vendored Remix C API header (MIT) |
+| `arx/src/graphics/d3d12/` | Direct3D 12 raster backend (default on Windows) |
+| `arx/src/graphics/d3d9/` | Direct3D 9 raster backend (fallback) |
+| `arx/src/window/SDL2Window.cpp` | Chooses the backend, creates the HWND and the device |
+| `arx/src/gui/MainMenu.cpp` | Video Options: current API, slider, restart notice |
+| `arx/src/core/Config.{h,cpp}` | `config.video.renderer` persistence |
+| `arx/src/graphics/Renderer.h` | `getGraphicsApiName()`, `needsHalfPixelOffset()` |
+| `scripts/run-d3d12.ps1` | Launch DirectX 12 |
+| `scripts/run-d3d9.ps1` | Launch DirectX 9 |
+| `scripts/Find-ArxFatalis.ps1` | Steam / GOG lookup, no hard-coded paths |
 
-Everything else under `arx/` is Arx Libertatis; [UPSTREAM.md](UPSTREAM.md) lists exactly what was
-changed there.
+`arx/src/graphics/remix/` is leftover and is not compiled in. Do not revive it in the product docs or the default launch path.
+
+Everything else under `arx/` is Arx Libertatis; [UPSTREAM.md](UPSTREAM.md) lists what diverged.
 
 ## Building and running
 
 ```bash
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DWITH_RTX_REMIX=ON
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 ```
 
 ```bash
 cmake --build build --config RelWithDebInfo --target arx --parallel
 ```
 
-```bash
-powershell -ExecutionPolicy Bypass -File scripts/run-remix-scene.ps1 -LoadLevel 1
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-d3d12.ps1
+powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 ```
 
-`-LoadLevel 1` drops straight into the first cell, which is small, enclosed and torch-lit — a fast
-loop for anything about light or geometry.
+Pass `-DataDir '<path to Arx Fatalis>'` if Steam / GOG detection cannot see the install. Logs: `runtime/user/arx.log`. Quit from the menu.
 
-## Debugging, and what counts as evidence
+## Debugging
 
-This integration punishes reasoning from logs. Some hard-won rules:
+- **One symptom at a time.** Prove it in `runtime/user/arx.log` before stacking hypotheses.
+- **`arx.exe --list-dirs`** settles which data directory is in use.
+- Do not dual-boot OpenGL on Windows unless that is the question.
 
-- **Judge by the screen.** The Remix log does not write per frame, so silence in it means nothing.
-  The developer menu (`Alt+X`) and its Debug View are the real instruments.
-- **Read both logs.** `runtime/user/arx.log` and `rtx-remix/logs/remix-dxvk.log` say different
-  things about the same frame.
-- **Check `user.conf` first** when a run misbehaves for no reason. It is written by the developer
-  menu and outranks everything else.
-- **`arx.exe --list-dirs`** settles any argument about which data directory is in use.
-- **Change one thing per run.** Most of the bugs already found were invisible individually and
-  obvious in isolation.
-- **`--remix-probe`** renders through the runtime with no game state. If the probe works and the game
-  does not, the problem is ours.
+## Privacy
 
-## Good places to start
+This repository is public. Never commit:
 
-These are the claims in the README that the code implements but nobody has confirmed by looking:
-
-- **Path tracing off.** The options page sets `rtx.enableRaytracing = False`, which should rasterise
-  the game's own draw calls. Whether the result is a correct image is unverified.
-- **The Raymix options page as a whole** — quality tiers, DLSS, ray reconstruction, denoiser, bloom.
-- **Linked items**, weapons and torches carried by NPCs.
-- **Smooth normal seams** where one surface spans two draw calls, since normals are accumulated per
-  batch.
-
-And the milestone in front of everything else:
-
-- **Get more of the level's lights to the tracer.** Fixed-function D3D9 caps how many lights are
-  active at once — `applyRemixLights()` reads `D3DCAPS9::MaxActiveLights` and logs it — while a
-  level holds several hundred. Arx's bake currently covers the difference, but baked light is paint:
-  the tracer cannot shadow or bounce it, so a torch behind a pillar still lights the wall in front
-  of it. Getting those lights in as real lights is what would make the shadows honest.
-
-  The A/B for anything here is `--remix-debug 2097152`, which discards the bake and leaves only the
-  real lights, so the difference is exactly what the tracer is doing.
+- User profile paths
+- Local clone drive letters
+- `runtime/user/` (config, logs, saves)
+- Generated `data.dirs`
+- Personal scripts that point at a GPU kit or Downloads folder
 
 ## Style
 
-Match the surrounding code: tabs, the existing brace style, and comments that explain *why* rather
-than restating the call. The comments in `D3D9Renderer.cpp` and `RemixScene.cpp` carry a lot of
-history about failed approaches — please keep that habit, since it is what stops the same wrong turn
-being taken twice.
+Match the surrounding code: tabs, the existing brace style, and comments that explain *why* rather than narrate the next line. D3D12 sources are compiled outside the unity blob (`d3d9.h` defines `interface`). No RTTI (`/GR-`); use `static_cast`, not WRL `ComPtr`.

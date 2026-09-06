@@ -617,6 +617,32 @@ public:
 	
 };
 
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
+static bool rendererChoiceIsD3D9(std::string_view name) {
+	return name == "Direct3D 9" || name == "DirectX 9" || name == "D3D9"
+	    || name == "dx9" || name == "DX9"
+	    || name == "Raymix" || name == "Remix";
+}
+
+static const char * activeGraphicsApiName() {
+	return GRenderer ? GRenderer->getGraphicsApiName() : "Unknown";
+}
+
+static bool activeGraphicsApiIsD3D9() {
+	return std::string_view(activeGraphicsApiName()) == "DirectX 9";
+}
+
+static void persistGraphicsApiChoice(bool useD3D9) {
+	config.video.renderer = useD3D9 ? "Direct3D 9" : "Direct3D 12";
+	config.save();
+}
+
+static std::string currentGraphicsApiLabel() {
+	return std::string(getLocalised("system_menus_options_video_graphics_api"))
+	       + ": " + activeGraphicsApiName();
+}
+#endif
+
 class VideoOptionsMenuPage final : public MenuPage {
 	
 	CheckboxWidget * m_fullscreenCheckbox;
@@ -624,6 +650,10 @@ class VideoOptionsMenuPage final : public MenuPage {
 	SliderWidget * m_gammaSlider;
 	CheckboxWidget * m_minimizeOnFocusLostCheckbox;
 	TextWidget * m_applyButton;
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
+	TextWidget * m_graphicsApiCurrent;
+	TextWidget * m_graphicsApiRestart;
+#endif
 	bool m_fullscreen;
 	DisplayMode m_mode;
 	
@@ -636,6 +666,10 @@ public:
 		, m_gammaSlider(nullptr)
 		, m_minimizeOnFocusLostCheckbox(nullptr)
 		, m_applyButton(nullptr)
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
+		, m_graphicsApiCurrent(nullptr)
+		, m_graphicsApiRestart(nullptr)
+#endif
 		, m_fullscreen(false)
 	{ }
 	
@@ -645,6 +679,35 @@ public:
 		
 		m_fullscreen = config.video.fullscreen;
 		m_mode = config.video.mode;
+		
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
+		{
+			auto current = std::make_unique<TextWidget>(hFontMenu, currentGraphicsApiLabel());
+			current->setEnabled(false);
+			m_graphicsApiCurrent = current.get();
+			addCenter(std::move(current));
+		}
+		{
+			std::string_view label = getLocalised("system_menus_options_video_graphics_api");
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
+			slider->valueChanged = [this](int pos, std::string_view /* string */) {
+				// Saved for the next launch only. The device is created at startup.
+				persistGraphicsApiChoice(pos == 1);
+				updateGraphicsApiRestartNotice();
+			};
+			slider->addEntry(getLocalised("system_menus_options_video_api_directx12"));
+			slider->addEntry(getLocalised("system_menus_options_video_api_directx9"));
+			slider->setValue(rendererChoiceIsD3D9(config.video.renderer) ? 1 : 0);
+			addCenter(std::move(slider));
+		}
+		{
+			auto restart = std::make_unique<TextWidget>(hFontMenu, "");
+			restart->setEnabled(false);
+			m_graphicsApiRestart = restart.get();
+			addCenter(std::move(restart));
+			updateGraphicsApiRestartNotice();
+		}
+#endif
 		
 		{
 			std::string_view label = getLocalised("system_menus_options_videos_full_screen");
@@ -863,6 +926,9 @@ public:
 				}
 				
 				g_mainMenu->bReInitAll = true;
+				// Resolution / fullscreen only. The graphics API is saved on
+				// the slider and is never recreated from this button.
+				config.save();
 				
 			};
 			txt->setEnabled(false);
@@ -910,6 +976,20 @@ private:
 		
 	}
 	
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
+	void updateGraphicsApiRestartNotice() {
+		if(!m_graphicsApiRestart) {
+			return;
+		}
+		const bool pendingD3D9 = rendererChoiceIsD3D9(config.video.renderer);
+		if(pendingD3D9 == activeGraphicsApiIsD3D9()) {
+			m_graphicsApiRestart->setText("");
+		} else {
+			m_graphicsApiRestart->setText(getLocalised("system_menus_options_video_api_restart"));
+		}
+	}
+#endif
+	
 };
 
 class RenderOptionsMenuPage final : public MenuPage {
@@ -926,54 +1006,6 @@ public:
 	void init() override {
 		
 		reserveBottom();
-		
-		// Renderer selection
-		{
-			std::string_view label = getLocalised("system_menus_options_video_renderer");
-			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
-			slider->valueChanged = [](int pos, std::string_view /* string */) {
-				switch(pos) {
-#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
-					case 0:  config.video.renderer = "auto"; break;
-					case 1:  config.video.renderer = "Direct3D 12"; break;
-					case 2:  config.video.renderer = "Direct3D 9"; break;
-#elif ARX_HAVE_D3D12
-					case 0:  config.video.renderer = "auto"; break;
-					case 1:  config.video.renderer = "Direct3D 12"; break;
-#elif ARX_HAVE_D3D9
-					case 0:  config.video.renderer = "auto"; break;
-					case 1:  config.video.renderer = "Direct3D 9"; break;
-#else
-					case 0:  config.video.renderer = "auto"; break;
-					case 1:  config.video.renderer = "OpenGL";  break;
-#endif
-					default: arx_unreachable();
-				}
-			};
-			slider->addEntry("Auto-Select");
-			slider->selectLast();
-#if ARX_HAVE_D3D12
-			slider->addEntry("Direct3D 12");
-			if(config.video.renderer == "Direct3D 12" || config.video.renderer == "D3D12") {
-				slider->selectLast();
-			}
-#endif
-#if ARX_HAVE_D3D9
-			slider->addEntry("Direct3D 9");
-			if(config.video.renderer == "Direct3D 9" || config.video.renderer == "Raymix"
-			   || config.video.renderer == "Remix") {
-				slider->selectLast();
-			}
-#elif !ARX_HAVE_D3D12
-			slider->addEntry("OpenGL");
-			if(config.video.renderer == "OpenGL") {
-				slider->selectLast();
-			}
-#endif
-			addCenter(std::move(slider));
-		}
-		
-		addCenter(std::make_unique<Spacer>(hFontMenu->getLineHeight() / 2));
 		
 		{
 			std::string_view label = getLocalised("system_menus_options_detail");

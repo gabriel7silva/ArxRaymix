@@ -35,6 +35,16 @@ Screenshots/
 # Session notes stay local
 /docs/dev/
 
+# Investigation notes — often contain machine paths or user folders
+/docs/superpowers/
+
+# Personal GPU / upscaler launchers (absolute user paths)
+/scripts/run-dlss5*
+
+# CMake may emit this next to the exe; never commit a stray copy
+/data.dirs
+*.dirs
+
 # Editor, IDE and agent scratch
 /.vs/
 /.cursor/

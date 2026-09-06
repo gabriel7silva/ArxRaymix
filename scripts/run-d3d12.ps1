@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-    Launch Arx Raymix with the Direct3D 12 raster renderer. No ray tracing.
+    Launch Arx Raymix with the Direct3D 12 / DirectX 12 raster renderer.
 
 .DESCRIPTION
-    Starts arx.exe with ARX_RENDERER=d3d12 (raster only, no DXR / Remix / PT):
+    Starts arx.exe with ARX_RENDERER=d3d12 (raster only, no DXR):
 
         arx.exe --user-dir runtime\user --data-dir <Arx Fatalis> [--loadlevel N]
 
     The Arx Fatalis install is located from the Steam and GOG registry entries.
     Pass -DataDir to override. Logs go to runtime\user\arx.log.
 
-    Expected log line:
-      Using D3D12 renderer WxH (raster only, adapter=...)
+    This environment variable overrides cfg.ini for this process only. The
+    in-game Video Options slider still writes the saved choice for later launches.
 
 .PARAMETER DataDir
     Arx Fatalis install directory (the one containing data.pak). Detected from
@@ -31,65 +31,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Join-PathLiteral {
-    param([string]$Base, [string]$Leaf)
-    return [System.IO.Path]::Combine($Base, $Leaf)
-}
+. (Join-Path $PSScriptRoot 'Find-ArxFatalis.ps1')
 
-function Test-ArxDataDir {
-    param([string]$Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    return (Test-Path -LiteralPath (Join-PathLiteral $Path 'data.pak') -ErrorAction SilentlyContinue)
-}
-
-function Get-SteamLibraryRoots {
-    try {
-        $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath
-    } catch {
-        return @()
-    }
-    if ([string]::IsNullOrWhiteSpace($steam)) { return @() }
-    $steam = $steam -replace '/', '\'
-
-    $roots = @($steam)
-
-    $vdf = Join-PathLiteral $steam 'steamapps\libraryfolders.vdf'
-    if (Test-Path -LiteralPath $vdf -ErrorAction SilentlyContinue) {
-        foreach ($line in Get-Content $vdf) {
-            if ($line -match '"path"\s+"(.+)"') {
-                $roots += ($matches[1] -replace '\\\\', '\')
-            }
-        }
-    }
-
-    return $roots
-}
-
-function Find-ArxFatalis {
-    foreach ($root in Get-SteamLibraryRoots) {
-        $candidate = Join-PathLiteral $root 'steamapps\common\Arx Fatalis'
-        if (Test-ArxDataDir $candidate) { return $candidate }
-    }
-
-    foreach ($key in 'HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games\*', 'HKLM:\SOFTWARE\GOG.com\Games\*') {
-        foreach ($game in (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue)) {
-            if ($game.gameName -like '*Arx Fatalis*' -and (Test-ArxDataDir $game.path)) {
-                return $game.path
-            }
-        }
-    }
-
-    return $null
-}
-
-$root = Split-Path -Parent $PSScriptRoot
-$exe = Join-Path $root "build\arx\$Config\arx.exe"
+$root = Get-ArxRepoRoot
+$exe = Get-ArxExecutable -Config $Config
 $userDir = Join-Path $root 'runtime\user'
 
 if (-not (Test-Path $exe)) {
     throw "arx.exe not found at $exe. Configure and build first:`n" +
-          "  cmake -S `"$root`" -B `"$root\build`" -A x64`n" +
-          "  cmake --build `"$root\build`" --config $Config --target arx --parallel"
+          "  cmake -S <repo> -B <repo>\build -A x64`n" +
+          "  cmake --build <repo>\build --config $Config --target arx --parallel"
 }
 
 if (-not $DataDir) {
@@ -112,7 +63,7 @@ Write-Host "exe    : $exe"
 Write-Host "data   : $DataDir"
 Write-Host "userdir: $userDir"
 Write-Host ''
-Write-Host 'Direct3D 12 raster only (no RT / Remix). Log: runtime\user\arx.log'
+Write-Host 'DirectX 12 raster. Log: runtime\user\arx.log'
 
 $env:ARX_RENDERER = 'd3d12'
 Set-Location $root
