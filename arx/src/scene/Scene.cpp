@@ -77,6 +77,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "graphics/Draw.h"
 #include "graphics/DrawLine.h"
+#include "graphics/Renderer.h"
 #include "graphics/GlobalFog.h"
 #include "graphics/Math.h"
 #include "graphics/Raycast.h"
@@ -257,7 +258,7 @@ bool VisibleSphere(const Sphere & sphere) {
 	
 	ARX_PROFILE_FUNC();
 	
-	if(fartherThan(sphere.origin, g_camera->m_pos, g_camera->cdepth * 0.5f + sphere.radius)) {
+	if(fartherThan(sphere.origin, g_camera->m_pos, g_camera->cdepth * fZFogEnd + sphere.radius)) {
 		return false;
 	}
 	
@@ -1055,6 +1056,13 @@ static void RenderWater() {
 			iNbIndice = 0;
 			indices = dynamicVertices.indices.data();
 			pVertex = dynamicVertices.append(iNbVertex);
+		}
+		
+		if(iNbVertex >= 3) {
+			GRenderer->addRayWaterTriangle(ep->v[0].p, ep->v[1].p, ep->v[2].p);
+			if(iNbVertex == 4) {
+				GRenderer->addRayWaterTriangle(ep->v[1].p, ep->v[2].p, ep->v[3].p);
+			}
 		}
 		
 		for(int j = 0; j < iNbVertex; ++j) {

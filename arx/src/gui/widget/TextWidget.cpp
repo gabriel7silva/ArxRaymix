@@ -33,6 +33,10 @@ TextWidget::TextWidget(Font * font, std::string_view text)
 
 void TextWidget::setText(std::string_view text) {
 	m_text = text;
+	if(m_text.empty()) {
+		m_rect = Rectf(m_rect.topLeft(), 0.f, 0.f);
+		return;
+	}
 	Vec2i textSize = m_font->getTextSize(m_text);
 	m_rect = Rectf(m_rect.topLeft(), float(textSize.x + 1), float(textSize.y + 1));
 }

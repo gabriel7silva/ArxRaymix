@@ -378,10 +378,12 @@ bool ARX_Text_Init(bool force) {
 	
 	FontCache::initialize();
 	
-	Font * nFontMainMenu   = createFont(file, "system_font_mainmenu_size", 58, scale);
-	Font * nFontMenu       = createFont(file, "system_font_menu_size", 32, scale);
-	Font * nFontControls   = createFont(file, "system_font_menucontrols_size", 22, scale);
-	Font * nFontCredits    = createFont(file, "system_font_menucredits_size", 36, scale);
+	// Menu type is a bit large at 1080p+; keep HUD/book fonts unchanged.
+	const float menuScale = scale * 0.84f;
+	Font * nFontMainMenu   = createFont(file, "system_font_mainmenu_size", 58, menuScale);
+	Font * nFontMenu       = createFont(file, "system_font_menu_size", 32, menuScale);
+	Font * nFontControls   = createFont(file, "system_font_menucontrols_size", 22, menuScale);
+	Font * nFontCredits    = createFont(file, "system_font_menucredits_size", 36, menuScale);
 	Font * nFontInGame     = createFont(file, "system_font_book_size", 18, smallScale);
 	Font * nFontInGameNote = createFont(file, "system_font_note_size", 18, smallScale, smallWeight);
 	Font * nFontInBook     = createFont(file, "system_font_book_size", 18, smallTextScale(scale), smallWeight);

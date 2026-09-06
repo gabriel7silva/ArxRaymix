@@ -385,11 +385,52 @@ public:
 	
 	virtual void showFrame() { }
 	
+	//! Bind scene color/depth at the Streamline render size when DLSS / RR is on.
+	virtual void beginSceneUpscale() { }
+	
+	struct DlssDebugState {
+		int displayW = 0;
+		int displayH = 0;
+		int renderW = 0;
+		int renderH = 0;
+		int mode = 0;
+		bool sceneRT = false;
+		bool rr = false;
+		bool fg = false;
+	};
+	
+	//! Last world-pass size (render res when scene RTs are live, else display).
+	[[nodiscard]] virtual Vec2i internalRenderSize() const { return Vec2i(0); }
+	
+	//! Predict Streamline's internal size for a cfg mode (0–5) at a display size.
+	[[nodiscard]] virtual Vec2i queryDlssInternalSize(int cfgMode, int displayW, int displayH) const {
+		ARX_UNUSED(cfgMode);
+		return Vec2i(displayW, displayH);
+	}
+	
+	[[nodiscard]] virtual DlssDebugState dlssDebugState() const { return { }; }
+	
 	//! DXR / RTAO after the world is rasterized and before HUD. Default is a no-op.
 	virtual void applyWorldRayEffects() { }
 	
+	//! Visible water surface (world space) for the DXR water mask / TLAS. Default is a no-op.
+	virtual void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) {
+		ARX_UNUSED(a);
+		ARX_UNUSED(b);
+		ARX_UNUSED(c);
+	}
+	
 	//! True when this session's device can run DXR (not D3D9, and RaytracingTier != NOT_SUPPORTED).
 	[[nodiscard]] virtual bool supportsRayTracing() const { return false; }
+	
+	//! True when Streamline loaded and DLSS Super Resolution / DLAA is supported.
+	[[nodiscard]] virtual bool supportsDlss() const { return false; }
+	
+	//! True when Streamline loaded and DLSS Ray Reconstruction is supported.
+	[[nodiscard]] virtual bool supportsDlssRr() const { return false; }
+	
+	//! True when Streamline loaded and DLSS Frame Generation + Reflex are supported.
+	[[nodiscard]] virtual bool supportsDlssG() const { return false; }
 	
 	/*!
 	 * Whether entity geometry should be handed over untransformed, in world

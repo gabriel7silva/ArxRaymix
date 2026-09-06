@@ -23,6 +23,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "graphics/Math.h"
+#include "math/Vector.h"
 #include "io/log/Logger.h"
 #include "platform/Platform.h"
 
@@ -30,16 +31,21 @@ namespace {
 
 constexpr size_t kMaxDynTriangles = 80000;
 constexpr size_t kMaxRoomTriangles = 120000;
+constexpr size_t kMaxWaterTriangles = 20000;
+constexpr size_t kMaxMetalTriangles = 30000;
 constexpr UINT kIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 constexpr UINT kShaderRecord = 64;
-// Heap layout: [0..9] RT SRVs (t0..t9), [10..13] RT UAVs (u0..u3),
-// [14..18] composite SRVs (color, ao, shadow, depth, gi).
-constexpr UINT kHeapCount = 19;
-constexpr UINT kRtSrvCount = 10;
-constexpr UINT kRtUavBase = 10;
-constexpr UINT kRtUavCount = 4;
-constexpr UINT kCompositeBase = 14;
-constexpr UINT kRootConstants = 52;
+// Heap: [0..14] RT SRVs t0-t14, [15..19] RT UAVs u0-u4,
+// [20..27] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
+constexpr UINT kHeapCount = 28;
+constexpr UINT kRtSrvCount = 15;
+constexpr UINT kRtUavBase = 15;
+constexpr UINT kRtUavCount = 5;
+constexpr UINT kCompositeBase = 20;
+constexpr UINT kRootConstants = 60;
+constexpr UINT kMaskRtvWater = 0;
+constexpr UINT kMaskRtvWaterDepth = 1;
+constexpr UINT kMaskRtvMetal = 2;
 // History blend weight for the current frame. 0.12 → ~90% converged after 18 frames.
 constexpr float kTemporalAlpha = 0.08f;
 
@@ -57,10 +63,16 @@ Texture2D<float> g_shadowPrev : register(t6);
 Texture2D<float> g_aoPrev : register(t7);
 Texture2D<float> g_depthPrev : register(t8);
 Texture2D<float4> g_giPrev : register(t9);
+Texture2D<float> g_waterMask : register(t10);
+Texture2D<float> g_waterDepth : register(t11);
+Texture2D<float4> g_specPrev : register(t12);
+Texture2D<float> g_metalMask : register(t13);
+StructuredBuffer<float4> g_waterVerts : register(t14);
 RWTexture2D<float> g_ao : register(u0);
 RWTexture2D<float> g_shadow : register(u1);
 RWTexture2D<float4> g_gi : register(u2);
 RWTexture2D<float> g_depthOut : register(u3);
+RWTexture2D<float4> g_spec : register(u4);
 
 // pad0/pad1 keep prevViewProj on a float4 boundary; the CPU struct mirrors this.
 cbuffer Params : register(b0) {
@@ -84,6 +96,18 @@ cbuffer Params : register(b0) {
 	float temporalAlpha;
 	float projA;
 	float projB;
+	uint specRays;
+	uint specHalfRes;
+	uint contactOn;
+	uint metalRays;
+	float specAlpha;
+	float contactTMax;
+	float giTemporalAlpha;
+	uint padSpec;
+};
+
+cbuffer ViewParams : register(b1) {
+	float4x4 viewProj;
 };
 
 // Only the cleared depth (1.0) is sky. Camera.cpp writes z = Q * (1 - near / w)
@@ -166,6 +190,7 @@ void RayGen() {
 		g_ao[pixel] = 1.0;
 		g_shadow[pixel] = 1.0;
 		g_depthOut[pixel] = z;
+		g_spec[pixel] = float4(0, 0, 0, 0);
 		if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
 			uint2 gp = pixel / 2;
 			if(gp.x < giWidth && gp.y < giHeight) {
@@ -240,7 +265,7 @@ void RayGen() {
 			aop.t = radius + 1.0;
 			aop.n = 0.xxx;
 			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-			         0xff, 0, 1, 0, ao, aop);
+			         0x01, 0, 1, 0, ao, aop);
 			if(aop.t >= 8.0 && aop.t < radius) {
 				occ += 1.0 - aop.t / radius;
 			}
@@ -293,8 +318,23 @@ void RayGen() {
 				shp.t = 1e7;
 				shp.n = 0.xxx;
 				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-				         0xff, 0, 1, 0, sh, shp);
+				         0x01, 0, 1, 0, sh, shp);
 				vis += (shp.t >= tmax) ? 1.0 : 0.0;
+			}
+			if(contactOn != 0u && disc) {
+				RayDesc cs;
+				cs.Origin = origin;
+				cs.Direction = ldir;
+				cs.TMin = shBias;
+				cs.TMax = max(contactTMax, shBias + 1.0);
+				RayPayload cp;
+				cp.t = 1e7;
+				cp.n = float3(0, 0, 0);
+				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+				         0x01, 0, 1, 0, cs, cp);
+				if(cp.t < cs.TMax) {
+					vis *= 0.35;
+				}
 			}
 			sumVis += (vis / float(samples)) * attn;
 			sumAttn += attn;
@@ -378,6 +418,149 @@ void RayGen() {
 	g_shadow[pixel] = shOut;
 	g_depthOut[pixel] = z;
 
+	float3 specRgb = float3(0, 0, 0);
+	float specF = 0.0;
+	const bool doSpec = (specRays + metalRays) > 0u
+		&& (specHalfRes == 0u || ((pixel.x | pixel.y) & 1u) == 0u);
+	if(doSpec) {
+		float wm = g_waterMask.Load(int3(pixel, 0)).r;
+		float mm = g_metalMask.Load(int3(pixel, 0)).r;
+		if(wm > 0.5 && specRays > 0u) {
+			float zw = g_waterDepth.Load(int3(pixel, 0)).r;
+			if(zw > 0.0 && zw < SKY_Z) {
+				float4 wposH = mul(invViewProj, float4(ndcX, ndcY, zw, 1.0));
+				float3 wpos = wposH.xyz / max(wposH.w, 1e-6);
+				float zWR = g_waterDepth.Load(int3(int(pixel.x) + 1, int(pixel.y), 0)).r;
+				float zWD = g_waterDepth.Load(int3(int(pixel.x), int(pixel.y) + 1, 0)).r;
+				float3 nW = n;
+				if(zWR > 0.0 && zWR < SKY_Z && zWD > 0.0 && zWD < SKY_Z) {
+					float2 uvHR = (float2(pixel) + float2(1.5, 0.5)) / float2(width, height);
+					float2 uvVR = (float2(pixel) + float2(0.5, 1.5)) / float2(width, height);
+					float4 wHR = mul(invViewProj, float4(uvHR.x * 2.0 - 1.0, 1.0 - uvHR.y * 2.0, zWR, 1.0));
+					float4 wVR = mul(invViewProj, float4(uvVR.x * 2.0 - 1.0, 1.0 - uvVR.y * 2.0, zWD, 1.0));
+					nW = normalize(cross(wHR.xyz / max(wHR.w, 1e-6) - wpos,
+					                     wVR.xyz / max(wVR.w, 1e-6) - wpos));
+					if(dot(nW, cameraPos - wpos) < 0.0) {
+						nW = -nW;
+					}
+				}
+				float3 V = normalize(cameraPos - wpos);
+				float ndv = saturate(dot(nW, V));
+				float F0 = 0.04;
+				specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+				uint nSpec = min(max(specRays, 1u), 2u);
+				float3 acc = float3(0, 0, 0);
+				for(uint s = 0; s < nSpec; ++s) {
+					float3 R = reflect(-V, nW);
+					if(s > 0u) {
+						R = normalize(R + hemisphereFixed(nW, s, rot) * 0.04);
+					}
+					RayDesc rd;
+					rd.Origin = wpos + nW * 6.0;
+					rd.Direction = R;
+					rd.TMin = 6.0;
+					rd.TMax = 4000.0;
+					RayPayload rp;
+					rp.t = 1e7;
+					rp.n = float3(0, 0, 0);
+					TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+					         0x01, 0, 1, 0, rd, rp);
+					if(rp.t >= 4000.0) {
+						continue;
+					}
+					float3 hit = rd.Origin + rd.Direction * rp.t;
+					float3 hn = rp.n;
+					if(dot(hn, hn) < 1e-6) {
+						hn = -rd.Direction;
+					}
+					float4 hc = mul(viewProj, float4(hit, 1.0));
+					float3 hitCol = float3(0, 0, 0);
+					if(hc.w > 1.0) {
+						float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
+						if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
+							int2 hp = int2(hu * float2(width, height));
+							float hz = g_depth.Load(int3(hp, 0)).r;
+							float hw = projB / max(hz - projA, 1e-4);
+							if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
+								hitCol = g_color.Load(int3(hp, 0)).rgb;
+							}
+						}
+					}
+					if(dot(hitCol, hitCol) < 1e-6) {
+						for(uint i = 0; i < lightCount; ++i) {
+							float4 a = g_lights[i * 3 + 0];
+							float4 b = g_lights[i * 3 + 1];
+							float4 col = g_lights[i * 3 + 2];
+							float3 toL = a.xyz - hit;
+							float d = length(toL);
+							if(d < 1.0) {
+								continue;
+							}
+							float ndotl = saturate(dot(hn, toL / d));
+							float span = max(b.y - b.x, 1e-3);
+							float fall = saturate((b.y - d) / span);
+							hitCol += col.rgb * min(a.w * fall * ndotl * b.w * 0.35, 0.6);
+						}
+					}
+					acc += hitCol;
+				}
+				specRgb = acc / float(nSpec);
+			}
+		} else if(mm > 0.5 && metalRays > 0u) {
+			float3 V = normalize(cameraPos - pos);
+			float ndv = saturate(dot(n, V));
+			float F0 = 0.56;
+			specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+			uint nSpec = min(max(metalRays, 1u), 2u);
+			float3 acc = float3(0, 0, 0);
+			for(uint s = 0; s < nSpec; ++s) {
+				float3 R = reflect(-V, n);
+				R = normalize(R + hemisphereFixed(n, s, rot) * 0.22);
+				RayDesc rd;
+				rd.Origin = pos + n * shBias;
+				rd.Direction = R;
+				rd.TMin = shBias;
+				rd.TMax = 2500.0;
+				RayPayload rp;
+				rp.t = 1e7;
+				rp.n = float3(0, 0, 0);
+				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+				         0x03, 0, 1, 0, rd, rp);
+				if(rp.t >= 2500.0) {
+					continue;
+				}
+				float3 hit = rd.Origin + rd.Direction * rp.t;
+				float3 hn = rp.n;
+				if(dot(hn, hn) < 1e-6) {
+					hn = -rd.Direction;
+				}
+				float3 hitCol = float3(0, 0, 0);
+				for(uint i = 0; i < lightCount; ++i) {
+					float4 a = g_lights[i * 3 + 0];
+					float4 b = g_lights[i * 3 + 1];
+					float4 col = g_lights[i * 3 + 2];
+					float3 toL = a.xyz - hit;
+					float d = length(toL);
+					if(d < 1.0) {
+						continue;
+					}
+					float ndotl = saturate(dot(hn, toL / d));
+					float span = max(b.y - b.x, 1e-3);
+					float fall = saturate((b.y - d) / span);
+					hitCol += col.rgb * min(a.w * fall * ndotl * b.w * 0.30, 0.55);
+				}
+				acc += hitCol;
+			}
+			specRgb = acc / float(nSpec);
+		}
+		if(specF > 0.0 && specAlpha > 0.0 && histOk) {
+			float4 prevS = g_specPrev.Load(int3(histPix, 0));
+			specRgb = lerp(prevS.rgb, specRgb, specAlpha);
+			specF = lerp(prevS.a, specF, specAlpha);
+		}
+	}
+	g_spec[pixel] = float4(specRgb, specF);
+
 	if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
 		uint2 gp = pixel / 2;
 		if(gp.x >= giWidth || gp.y >= giHeight) {
@@ -399,7 +582,7 @@ void RayGen() {
 			bp.t = 801.0;
 			bp.n = float3(0, 0, 0);
 			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-			         0xff, 0, 1, 0, bounce, bp);
+			         0x01, 0, 1, 0, bounce, bp);
 			if(bp.t < 8.0 || bp.t >= 800.0) {
 				continue;
 			}
@@ -437,7 +620,7 @@ void RayGen() {
 			gi *= 0.35 / lum;
 		}
 		if(histOk) {
-			gi = lerp(g_giPrev.Load(int3(histPix / 2, 0)).rgb, gi, temporalAlpha);
+			gi = lerp(g_giPrev.Load(int3(histPix / 2, 0)).rgb, gi, giTemporalAlpha);
 		}
 		g_gi[gp] = float4(gi, 1.0);
 	}
@@ -452,6 +635,10 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* att
 		v0 = g_roomVerts[prim * 3 + 0].xyz;
 		v1 = g_roomVerts[prim * 3 + 1].xyz;
 		v2 = g_roomVerts[prim * 3 + 2].xyz;
+	} else if(InstanceID() == 2) {
+		v0 = g_waterVerts[prim * 3 + 0].xyz;
+		v1 = g_waterVerts[prim * 3 + 1].xyz;
+		v2 = g_waterVerts[prim * 3 + 2].xyz;
 	} else {
 		v0 = g_verts[prim * 3 + 0].xyz;
 		v1 = g_verts[prim * 3 + 1].xyz;
@@ -477,7 +664,16 @@ Texture2D aoTex : register(t1);
 Texture2D shadowTex : register(t2);
 Texture2D<float> depthTex : register(t3);
 Texture2D giTex : register(t4);
+Texture2D specTex : register(t5);
+Texture2D<float> waterMaskTex : register(t6);
+Texture2D<float> metalMaskTex : register(t7);
 SamplerState samp : register(s0);
+cbuffer CompParams : register(b0) {
+	int shadowRadius;
+	int aoRadius;
+	int specHalf;
+	int padC;
+};
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 VSOut VSMain(uint id : SV_VertexID) {
 	float2 uv = float2((id << 1) & 2, id & 2);
@@ -549,8 +745,8 @@ float4 PSMain(VSOut i) : SV_Target {
 	// Strength tuned by the user ("triplica os efeitos"): AO up to 55 % dark,
 	// umbra keeps 10 % of the light, GI up to about +0.33 on lit stone.
 	// AO is low frequency: a wider blur than the shadow's hides the dither.
-	float ao = lerp(1.0, bilateral(aoTex, pix, 5, zCenter), 1.0);
-	float sh = lerp(0.10, 1.0, bilateral(shadowTex, pix, 3, zCenter));
+	float ao = lerp(1.0, bilateral(aoTex, pix, aoRadius, zCenter), 1.0);
+	float sh = lerp(0.10, 1.0, bilateral(shadowTex, pix, shadowRadius, zCenter));
 	// Bounce light scaled by the surface's own raster color (plus a small floor
 	// for the darkest stone) so it reads as light on the material, not grey haze.
 	// The lit raster colour stands in for albedo, so cap it (a surface already
@@ -558,8 +754,47 @@ float4 PSMain(VSOut i) : SV_Target {
 	// screen fashion so the sum never saturates to white.
 	float3 bounce = giUpsample(pix, zCenter) * (0.15 + min(c, 0.45)) * 2.0;
 	c = c + bounce * (1.0 - c);
-	// AO and shadow compound; keep a floor so nothing goes fully black.
-	return float4(saturate(c) * max(ao * sh, 0.08), 1);
+	float water = waterMaskTex.Load(int3(pix, 0)).r;
+	float metal = metalMaskTex.Load(int3(pix, 0)).r;
+	float4 specS = specTex.Load(int3(pix, 0));
+	if(specHalf != 0 && specS.a < 1e-4) {
+		specS = specTex.Load(int3(pix.x & ~1, pix.y & ~1, 0));
+	}
+	// Water keeps the raster enviro and is not multiplied by the floor's ao * sh.
+	if(water > 0.5) {
+		return float4(saturate(lerp(colorTex.SampleLevel(samp, i.uv, 0).rgb, specS.rgb, specS.a)), 1);
+	}
+	c = saturate(c) * max(ao * sh, 0.08);
+	if(metal > 0.5) {
+		c = lerp(c, specS.rgb, specS.a);
+	}
+	return float4(saturate(c), 1);
+}
+)";
+
+const char * kMask = R"(
+cbuffer MaskParams : register(b0) {
+	float4x4 viewProj;
+	float maskValue;
+	float pad0;
+	float pad1;
+	float pad2;
+};
+struct VSOut { float4 pos : SV_Position; };
+VSOut VSMain(float4 p : POSITION) {
+	VSOut o;
+	o.pos = mul(viewProj, float4(p.xyz, 1));
+	return o;
+}
+struct PSOut { float mask : SV_Target0; float z : SV_Target1; };
+PSOut PSWater(VSOut i) {
+	PSOut o;
+	o.mask = 1;
+	o.z = i.pos.z;
+	return o;
+}
+float PSMetal(VSOut i) : SV_Target {
+	return 1;
 }
 )";
 
@@ -730,8 +965,14 @@ void D3D12Rtao::shutdown() {
 	m_depthCur.reset();
 	m_depthPrev.reset();
 	m_giPrev.reset();
+	m_spec.reset();
+	m_specPrev.reset();
+	m_waterMask.reset();
+	m_waterDepth.reset();
+	m_metalMask.reset();
 	m_histValid = false;
 	m_lights.reset();
+	m_viewCbuf.reset();
 	m_shaderTable.reset();
 	m_instances.reset();
 	m_scratch.reset();
@@ -741,19 +982,30 @@ void D3D12Rtao::shutdown() {
 	m_vertUpload.reset();
 	m_roomDefault.reset();
 	m_roomUpload.reset();
+	m_waterDefault.reset();
+	m_waterUpload.reset();
+	m_metalUpload.reset();
 	m_roomBlas.reset();
+	m_waterBlas.reset();
 	m_heap.reset();
+	m_rtvHeap.reset();
 	m_compositePso.reset();
+	m_waterMaskPso.reset();
+	m_metalMaskPso.reset();
 	m_rtState.reset();
 	m_compositeRoot.reset();
+	m_maskRoot.reset();
 	m_rtRoot.reset();
 	m_dxil.clear();
 	m_device5.reset();
 	m_device = nullptr;
 	m_positions.clear();
 	m_roomPositions.clear();
+	m_waterPositions.clear();
+	m_metalPositions.clear();
 	m_roomsDirty = true;
 	m_colorIsShader = false;
+	m_maskIsSrv = false;
 }
 
 bool D3D12Rtao::init(ID3D12Device * device) {
@@ -779,11 +1031,15 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 	
 	m_supported = true;
 	m_descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	m_rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	
 	if(!compileRayLib() || !createPipeline()) {
 		LogError << "RTAO: DXR pipeline failed — raster only";
 		m_ready = false;
 		return true;
+	}
+	if(!createMaskPipeline()) {
+		LogWarning << "RTAO: mask pipeline failed — reflections off, AO/shadows/GI still on";
 	}
 	
 	D3D12_DESCRIPTOR_HEAP_DESC heap {};
@@ -797,6 +1053,18 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 	if(!createBuffer(device, UINT64(kMaxShadowLights * sizeof(GpuLight)), D3D12_HEAP_TYPE_UPLOAD,
 	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, m_lights.put())) {
 		LogError << "RTAO: light buffer failed";
+		return true;
+	}
+	if(!createBuffer(device, 256, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+	                 D3D12_RESOURCE_FLAG_NONE, m_viewCbuf.put())) {
+		LogError << "RTAO: view cbuffer failed";
+		return true;
+	}
+	D3D12_DESCRIPTOR_HEAP_DESC rtvHeap {};
+	rtvHeap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	rtvHeap.NumDescriptors = 3;
+	if(FAILED(device->CreateDescriptorHeap(&rtvHeap, IID_PPV_ARGS(m_rtvHeap.put())))) {
+		LogError << "RTAO: mask RTV heap failed";
 		return true;
 	}
 	
@@ -892,7 +1160,7 @@ bool D3D12Rtao::createPipeline() {
 	uav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 	uav.NumDescriptors = kRtUavCount;
 	uav.BaseShaderRegister = 0;
-	D3D12_ROOT_PARAMETER params[3] {};
+	D3D12_ROOT_PARAMETER params[4] {};
 	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 	params[0].Constants.Num32BitValues = kRootConstants;
 	params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -904,8 +1172,11 @@ bool D3D12Rtao::createPipeline() {
 	params[2].DescriptorTable.NumDescriptorRanges = 1;
 	params[2].DescriptorTable.pDescriptorRanges = &uav;
 	params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+	params[3].Descriptor.ShaderRegister = 1;
+	params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	D3D12_ROOT_SIGNATURE_DESC rs {};
-	rs.NumParameters = 3;
+	rs.NumParameters = 4;
 	rs.pParameters = params;
 	ComPtr<ID3DBlob> blob;
 	ComPtr<ID3DBlob> err;
@@ -977,13 +1248,16 @@ bool D3D12Rtao::createPipeline() {
 	
 	D3D12_DESCRIPTOR_RANGE colorSrv {};
 	colorSrv.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-	colorSrv.NumDescriptors = 5;
+	colorSrv.NumDescriptors = 8;
 	colorSrv.BaseShaderRegister = 0;
-	D3D12_ROOT_PARAMETER cparams[1] {};
-	cparams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-	cparams[0].DescriptorTable.NumDescriptorRanges = 1;
-	cparams[0].DescriptorTable.pDescriptorRanges = &colorSrv;
+	D3D12_ROOT_PARAMETER cparams[2] {};
+	cparams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	cparams[0].Constants.Num32BitValues = 4;
 	cparams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	cparams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	cparams[1].DescriptorTable.NumDescriptorRanges = 1;
+	cparams[1].DescriptorTable.pDescriptorRanges = &colorSrv;
+	cparams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 	D3D12_STATIC_SAMPLER_DESC samp {};
 	samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
 	samp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -991,7 +1265,7 @@ bool D3D12Rtao::createPipeline() {
 	samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
 	samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 	D3D12_ROOT_SIGNATURE_DESC crs {};
-	crs.NumParameters = 1;
+	crs.NumParameters = 2;
 	crs.pParameters = cparams;
 	crs.NumStaticSamplers = 1;
 	crs.pStaticSamplers = &samp;
@@ -1044,8 +1318,98 @@ bool D3D12Rtao::createPipeline() {
 	return true;
 }
 
+bool D3D12Rtao::createMaskPipeline() {
+	D3D12_ROOT_PARAMETER mp {};
+	mp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	mp.Constants.Num32BitValues = 20;
+	mp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	D3D12_ROOT_SIGNATURE_DESC mrs {};
+	mrs.NumParameters = 1;
+	mrs.pParameters = &mp;
+	ComPtr<ID3DBlob> blob;
+	ComPtr<ID3DBlob> err;
+	if(FAILED(D3D12SerializeRootSignature(&mrs, D3D_ROOT_SIGNATURE_VERSION_1, blob.put(), err.put()))) {
+		LogError << "RTAO: mask root signature failed";
+		return false;
+	}
+	if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+	                                        IID_PPV_ARGS(m_maskRoot.put())))) {
+		return false;
+	}
+	ComPtr<ID3DBlob> vs;
+	ComPtr<ID3DBlob> psW;
+	ComPtr<ID3DBlob> psM;
+	ComPtr<ID3DBlob> cerr;
+	if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
+	                     "VSMain", "vs_5_0", 0, 0, vs.put(), cerr.put()))) {
+		LogError << "RTAO: mask VS failed"
+		         << (cerr && cerr->GetBufferPointer()
+		             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
+		return false;
+	}
+	cerr.reset();
+	if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
+	                     "PSWater", "ps_5_0", 0, 0, psW.put(), cerr.put()))) {
+		LogError << "RTAO: water mask PS failed"
+		         << (cerr && cerr->GetBufferPointer()
+		             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
+		return false;
+	}
+	cerr.reset();
+	if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
+	                     "PSMetal", "ps_5_0", 0, 0, psM.put(), cerr.put()))) {
+		LogError << "RTAO: metal mask PS failed"
+		         << (cerr && cerr->GetBufferPointer()
+		             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
+		return false;
+	}
+	D3D12_INPUT_ELEMENT_DESC elem {};
+	elem.SemanticName = "POSITION";
+	elem.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	elem.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+	auto fill = [&](D3D12_GRAPHICS_PIPELINE_STATE_DESC & pd, ID3DBlob * ps, UINT nrt,
+	                DXGI_FORMAT f0, DXGI_FORMAT f1) {
+		pd = {};
+		pd.pRootSignature = m_maskRoot.Get();
+		pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+		pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+		// Single-channel RTs (R8 / R32) reject COLOR_WRITE_ENABLE_ALL (0xf).
+		pd.BlendState.IndependentBlendEnable = TRUE;
+		pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
+		pd.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
+		pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+		pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+		pd.RasterizerState.DepthClipEnable = TRUE;
+		pd.DepthStencilState.DepthEnable = FALSE;
+		pd.SampleMask = 0xffffffff;
+		pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+		pd.NumRenderTargets = nrt;
+		pd.RTVFormats[0] = f0;
+		pd.RTVFormats[1] = f1;
+		pd.SampleDesc.Count = 1;
+		pd.InputLayout.pInputElementDescs = &elem;
+		pd.InputLayout.NumElements = 1;
+	};
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC water {};
+	fill(water, psW.Get(), 2, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R32_FLOAT);
+	const HRESULT waterHr = m_device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(m_waterMaskPso.put()));
+	if(FAILED(waterHr)) {
+		LogError << "RTAO: water mask PSO failed (hr=" << long(waterHr) << ")";
+		return false;
+	}
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC metal {};
+	fill(metal, psM.Get(), 1, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_UNKNOWN);
+	const HRESULT metalHr = m_device->CreateGraphicsPipelineState(&metal, IID_PPV_ARGS(m_metalMaskPso.put()));
+	if(FAILED(metalHr)) {
+		LogError << "RTAO: metal mask PSO failed (hr=" << long(metalHr) << ")";
+		return false;
+	}
+	return true;
+}
+
 void D3D12Rtao::resize(int width, int height) {
-	if(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev) {
+	if(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
+	   && m_spec && m_waterMask && m_metalMask) {
 		return;
 	}
 	m_ao.reset();
@@ -1057,7 +1421,13 @@ void D3D12Rtao::resize(int width, int height) {
 	m_depthCur.reset();
 	m_depthPrev.reset();
 	m_giPrev.reset();
+	m_spec.reset();
+	m_specPrev.reset();
+	m_waterMask.reset();
+	m_waterDepth.reset();
+	m_metalMask.reset();
 	m_histValid = false;
+	m_maskIsSrv = false;
 	m_width = 0;
 	m_height = 0;
 	if(!m_device || width <= 0 || height <= 0) {
@@ -1138,7 +1508,10 @@ void D3D12Rtao::resize(int width, int height) {
 	   || !makeTex(ao, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, m_depthCur)
 	   || !makeTex(ao, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_depthPrev)
-	   || !makeTex(gi, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_giPrev)) {
+	   || !makeTex(gi, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_giPrev)
+	   || !makeTex(color, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, m_spec)
+	   || !makeTex(color, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_specPrev)) {
 		LogError << "RTAO: history targets failed";
 		m_ao.reset();
 		m_shadow.reset();
@@ -1149,8 +1522,50 @@ void D3D12Rtao::resize(int width, int height) {
 		m_depthCur.reset();
 		m_depthPrev.reset();
 		m_giPrev.reset();
+		m_spec.reset();
+		m_specPrev.reset();
 		return;
 	}
+	D3D12_RESOURCE_DESC mask = ao;
+	mask.Format = DXGI_FORMAT_R8_UNORM;
+	mask.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+	D3D12_CLEAR_VALUE maskClear {};
+	maskClear.Format = DXGI_FORMAT_R8_UNORM;
+	D3D12_RESOURCE_DESC wdepth = ao;
+	wdepth.Format = DXGI_FORMAT_R32_FLOAT;
+	wdepth.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+	D3D12_CLEAR_VALUE depthClear {};
+	depthClear.Format = DXGI_FORMAT_R32_FLOAT;
+	if(FAILED(m_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &mask,
+	                                            D3D12_RESOURCE_STATE_RENDER_TARGET, &maskClear,
+	                                            IID_PPV_ARGS(m_waterMask.put())))
+	   || FAILED(m_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &wdepth,
+	                                               D3D12_RESOURCE_STATE_RENDER_TARGET, &depthClear,
+	                                               IID_PPV_ARGS(m_waterDepth.put())))
+	   || FAILED(m_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &mask,
+	                                               D3D12_RESOURCE_STATE_RENDER_TARGET, &maskClear,
+	                                               IID_PPV_ARGS(m_metalMask.put())))) {
+		LogError << "RTAO: reflection mask targets failed";
+		m_ao.reset();
+		return;
+	}
+	if(m_rtvHeap && m_device) {
+		D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+		D3D12_RENDER_TARGET_VIEW_DESC r8 {};
+		r8.Format = DXGI_FORMAT_R8_UNORM;
+		r8.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+		D3D12_RENDER_TARGET_VIEW_DESC r32 {};
+		r32.Format = DXGI_FORMAT_R32_FLOAT;
+		r32.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+		m_device->CreateRenderTargetView(m_waterMask.Get(), &r8, rtv);
+		D3D12_CPU_DESCRIPTOR_HANDLE rtv1 = rtv;
+		rtv1.ptr += m_rtvSize;
+		m_device->CreateRenderTargetView(m_waterDepth.Get(), &r32, rtv1);
+		D3D12_CPU_DESCRIPTOR_HANDLE rtv2 = rtv;
+		rtv2.ptr += SIZE_T(2) * m_rtvSize;
+		m_device->CreateRenderTargetView(m_metalMask.Get(), &r8, rtv2);
+	}
+	m_maskIsSrv = false;
 	m_width = width;
 	m_height = height;
 	m_aoIsUav = true;
@@ -1166,7 +1581,8 @@ bool D3D12Rtao::ensureTargets(int width, int height) {
 		resize(width, height);
 	}
 	return m_ao && m_shadow && m_gi && m_colorCopy
-	       && m_aoPrev && m_shadowPrev && m_depthCur && m_depthPrev && m_giPrev;
+	       && m_aoPrev && m_shadowPrev && m_depthCur && m_depthPrev && m_giPrev
+	       && m_spec && m_specPrev && m_waterMask && m_waterDepth && m_metalMask;
 }
 
 void D3D12Rtao::updateDescriptors() {
@@ -1203,6 +1619,9 @@ void D3D12Rtao::updateDescriptors() {
 	}
 	if(m_roomDefault && !m_roomPositions.empty()) {
 		bindVerts(m_roomDefault.Get(), m_roomPositions.size(), 5);
+	}
+	if(m_waterDefault && !m_waterPositions.empty()) {
+		bindVerts(m_waterDefault.Get(), m_waterPositions.size(), 14);
 	}
 	if(m_lights) {
 		D3D12_SHADER_RESOURCE_VIEW_DESC lb {};
@@ -1264,6 +1683,37 @@ void D3D12Rtao::updateDescriptors() {
 			m_device->CreateShaderResourceView(m_giPrev.Get(), &giSrv, slot(9));
 		}
 	}
+	if(m_spec) {
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uavS {};
+		uavS.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		uavS.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		D3D12_SHADER_RESOURCE_VIEW_DESC specSrv {};
+		specSrv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		specSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		specSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		specSrv.Texture2D.MipLevels = 1;
+		m_device->CreateUnorderedAccessView(m_spec.Get(), nullptr, &uavS, slot(kRtUavBase + 4));
+		m_device->CreateShaderResourceView(m_spec.Get(), &specSrv, slot(kCompositeBase + 5));
+		if(m_specPrev) {
+			m_device->CreateShaderResourceView(m_specPrev.Get(), &specSrv, slot(12));
+		}
+	}
+	if(m_waterMask) {
+		m_device->CreateShaderResourceView(m_waterMask.Get(), &factorSrv, slot(10));
+		m_device->CreateShaderResourceView(m_waterMask.Get(), &factorSrv, slot(kCompositeBase + 6));
+	}
+	if(m_waterDepth) {
+		D3D12_SHADER_RESOURCE_VIEW_DESC dSrv {};
+		dSrv.Format = DXGI_FORMAT_R32_FLOAT;
+		dSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		dSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		dSrv.Texture2D.MipLevels = 1;
+		m_device->CreateShaderResourceView(m_waterDepth.Get(), &dSrv, slot(11));
+	}
+	if(m_metalMask) {
+		m_device->CreateShaderResourceView(m_metalMask.Get(), &factorSrv, slot(13));
+		m_device->CreateShaderResourceView(m_metalMask.Get(), &factorSrv, slot(kCompositeBase + 7));
+	}
 	if(m_colorCopy) {
 		D3D12_SHADER_RESOURCE_VIEW_DESC srv {};
 		srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -1277,6 +1727,8 @@ void D3D12Rtao::updateDescriptors() {
 
 void D3D12Rtao::beginWorldFrame() {
 	m_positions.clear();
+	m_waterPositions.clear();
+	m_metalPositions.clear();
 }
 
 void D3D12Rtao::clearRooms() {
@@ -1331,6 +1783,35 @@ void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX * verti
 	addTris(m_positions, kMaxDynTriangles, primitive, vertices, nvertices, indices, nindices);
 }
 
+void D3D12Rtao::addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c) {
+	if(dst.size() / 3 >= cap) {
+		if(!m_loggedCap) {
+			LogInfo << "DXR: triangle cap " << cap;
+			m_loggedCap = true;
+		}
+		return;
+	}
+	const Vec3f nrm = glm::cross(b - a, c - a);
+	if(glm::dot(nrm, nrm) < 1e-4f) {
+		return;
+	}
+	dst.push_back({ a.x, a.y, a.z, 1.f });
+	dst.push_back({ b.x, b.y, b.z, 1.f });
+	dst.push_back({ c.x, c.y, c.z, 1.f });
+}
+
+void D3D12Rtao::addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c) {
+	if(!m_supported) {
+		return;
+	}
+	addPosTri(m_waterPositions, kMaxWaterTriangles, a, b, c);
+}
+
+void D3D12Rtao::addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
+                         const unsigned short * indices, size_t nindices) {
+	addTris(m_metalPositions, kMaxMetalTriangles, primitive, vertices, nvertices, indices, nindices);
+}
+
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
                          const unsigned short * indices, size_t nindices) {
 	if(!m_supported || !vertices || nvertices == 0) {
@@ -1367,7 +1848,7 @@ void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vert
 }
 
 bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
-	if(!m_device || (m_positions.empty() && m_roomPositions.empty())) {
+	if(!m_device || (m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty())) {
 		return false;
 	}
 	auto upload = [&](const std::vector<Pos> & src, ComPtr<ID3D12Resource> & up,
@@ -1412,6 +1893,24 @@ bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 	if(m_roomsDirty && !upload(m_roomPositions, m_roomUpload, m_roomDefault, m_roomVertsAreSrv)) {
 		return false;
 	}
+	if(!upload(m_waterPositions, m_waterUpload, m_waterDefault, m_waterVertsAreSrv)) {
+		return false;
+	}
+	if(!m_metalPositions.empty()) {
+		const UINT64 bytes = UINT64(m_metalPositions.size() * sizeof(Pos));
+		if(!m_metalUpload || m_metalUpload->GetDesc().Width < bytes) {
+			m_metalUpload.reset();
+			if(!createBuffer(m_device, bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+			                 D3D12_RESOURCE_FLAG_NONE, m_metalUpload.put())) {
+				return false;
+			}
+		}
+		void * mapped = nullptr;
+		if(SUCCEEDED(m_metalUpload->Map(0, nullptr, &mapped)) && mapped) {
+			std::memcpy(mapped, m_metalPositions.data(), size_t(bytes));
+			m_metalUpload->Unmap(0, nullptr);
+		}
+	}
 	return true;
 }
 
@@ -1424,7 +1923,8 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	
 	const bool haveDyn = !m_positions.empty() && bool(m_vertDefault);
 	const bool haveRooms = !m_roomPositions.empty() && bool(m_roomDefault);
-	if(!haveDyn && !haveRooms) {
+	const bool haveWater = !m_waterPositions.empty() && bool(m_waterDefault);
+	if(!haveDyn && !haveRooms && !haveWater) {
 		list4->Release();
 		return false;
 	}
@@ -1441,11 +1941,14 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	
 	D3D12_RAYTRACING_GEOMETRY_DESC dynGeo {};
 	D3D12_RAYTRACING_GEOMETRY_DESC roomGeo {};
+	D3D12_RAYTRACING_GEOMETRY_DESC waterGeo {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS dynIn {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS roomIn {};
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS waterIn {};
 	UINT64 scratchBytes = 0;
 	UINT64 dynBlasBytes = 0;
 	UINT64 roomBlasBytes = 0;
+	UINT64 waterBlasBytes = 0;
 	
 	if(haveDyn) {
 		fillGeo(dynGeo, m_vertDefault.Get(), m_positions.size());
@@ -1469,11 +1972,22 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		roomBlasBytes = info.ResultDataMaxSizeInBytes;
 		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
 	}
+	if(haveWater) {
+		fillGeo(waterGeo, m_waterDefault.Get(), m_waterPositions.size());
+		waterIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+		waterIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+		waterIn.NumDescs = 1;
+		waterIn.pGeometryDescs = &waterGeo;
+		D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info {};
+		m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&waterIn, &info);
+		waterBlasBytes = info.ResultDataMaxSizeInBytes;
+		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
+	}
 	
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasIn {};
 	tlasIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
 	tlasIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
-	tlasIn.NumDescs = 2;
+	tlasIn.NumDescs = 3;
 	tlasIn.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasInfo {};
 	m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&tlasIn, &tlasInfo);
@@ -1505,6 +2019,15 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 			return false;
 		}
 	}
+	if(haveWater && (!m_waterBlas || m_waterBlas->GetDesc().Width < waterBlasBytes)) {
+		m_waterBlas.reset();
+		if(!createBuffer(m_device, waterBlasBytes, D3D12_HEAP_TYPE_DEFAULT,
+		                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+		                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, m_waterBlas.put())) {
+			list4->Release();
+			return false;
+		}
+	}
 	if(!m_tlas || m_tlas->GetDesc().Width < tlasInfo.ResultDataMaxSizeInBytes) {
 		m_tlas.reset();
 		if(!createBuffer(m_device, tlasInfo.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
@@ -1514,7 +2037,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 			return false;
 		}
 	}
-	const UINT64 instBytes = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * 2;
+	const UINT64 instBytes = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * 3;
 	if(!m_instances || m_instances->GetDesc().Width < instBytes) {
 		m_instances.reset();
 		if(!createBuffer(m_device, instBytes, D3D12_HEAP_TYPE_UPLOAD,
@@ -1542,6 +2065,14 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		list4->BuildRaytracingAccelerationStructure(&dynBlas, 0, nullptr);
 		uavBarrier(list, m_blas.Get());
 	}
+	if(haveWater) {
+		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC waterBlas {};
+		waterBlas.DestAccelerationStructureData = m_waterBlas->GetGPUVirtualAddress();
+		waterBlas.Inputs = waterIn;
+		waterBlas.ScratchAccelerationStructureData = m_scratch->GetGPUVirtualAddress();
+		list4->BuildRaytracingAccelerationStructure(&waterBlas, 0, nullptr);
+		uavBarrier(list, m_waterBlas.Get());
+	}
 	
 	D3D12_RAYTRACING_INSTANCE_DESC * inst = nullptr;
 	if(FAILED(m_instances->Map(0, nullptr, reinterpret_cast<void **>(&inst))) || !inst) {
@@ -1550,20 +2081,23 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	}
 	std::memset(inst, 0, size_t(instBytes));
 	UINT nInst = 0;
-	auto writeInst = [&](ID3D12Resource * blas, UINT id) {
+	auto writeInst = [&](ID3D12Resource * blas, UINT id, UINT mask) {
 		inst[nInst].Transform[0][0] = 1.f;
 		inst[nInst].Transform[1][1] = 1.f;
 		inst[nInst].Transform[2][2] = 1.f;
 		inst[nInst].InstanceID = id;
-		inst[nInst].InstanceMask = 0xff;
+		inst[nInst].InstanceMask = mask;
 		inst[nInst].AccelerationStructure = blas->GetGPUVirtualAddress();
 		nInst++;
 	};
 	if(haveRooms && m_roomBlas) {
-		writeInst(m_roomBlas.Get(), 0);
+		writeInst(m_roomBlas.Get(), 0, 0x1);
 	}
 	if(haveDyn && m_blas) {
-		writeInst(m_blas.Get(), 1);
+		writeInst(m_blas.Get(), 1, 0x1);
+	}
+	if(haveWater && m_waterBlas) {
+		writeInst(m_waterBlas.Get(), 2, 0x2);
 	}
 	m_instances->Unmap(0, nullptr);
 	if(nInst == 0) {
@@ -1584,18 +2118,98 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	return true;
 }
 
+void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj) {
+	if(!list || !m_rtvHeap || !m_waterMaskPso || !m_metalMaskPso || !m_maskRoot) {
+		return;
+	}
+	if(m_maskIsSrv) {
+		transition(list, m_waterMask.Get(),
+		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		           D3D12_RESOURCE_STATE_RENDER_TARGET);
+		transition(list, m_waterDepth.Get(),
+		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		           D3D12_RESOURCE_STATE_RENDER_TARGET);
+		transition(list, m_metalMask.Get(),
+		           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		           D3D12_RESOURCE_STATE_RENDER_TARGET);
+		m_maskIsSrv = false;
+	}
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv0 = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv1 = rtv0;
+	rtv1.ptr += m_rtvSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv2 = rtv0;
+	rtv2.ptr += SIZE_T(2) * m_rtvSize;
+	const float z0[4] = { 0.f, 0.f, 0.f, 0.f };
+	const float z1[4] = { 1.f, 0.f, 0.f, 0.f };
+	list->ClearRenderTargetView(rtv0, z0, 0, nullptr);
+	list->ClearRenderTargetView(rtv1, z1, 0, nullptr);
+	list->ClearRenderTargetView(rtv2, z0, 0, nullptr);
+	D3D12_VIEWPORT vp {};
+	vp.Width = float(m_width);
+	vp.Height = float(m_height);
+	vp.MaxDepth = 1.f;
+	D3D12_RECT sc { 0, 0, LONG(m_width), LONG(m_height) };
+	list->RSSetViewports(1, &vp);
+	list->RSSetScissorRects(1, &sc);
+	list->SetGraphicsRootSignature(m_maskRoot.Get());
+	struct MaskCb {
+		float viewProj[16];
+		float maskValue;
+		float pad0, pad1, pad2;
+	} cb {};
+	std::memcpy(cb.viewProj, glm::value_ptr(viewProj), sizeof(cb.viewProj));
+	cb.maskValue = 1.f;
+	list->SetGraphicsRoot32BitConstants(0, 20, &cb, 0);
+	list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	if(!m_waterPositions.empty() && m_waterUpload) {
+		D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = { rtv0, rtv1 };
+		list->OMSetRenderTargets(2, rts, FALSE, nullptr);
+		list->SetPipelineState(m_waterMaskPso.Get());
+		D3D12_VERTEX_BUFFER_VIEW vb {};
+		vb.BufferLocation = m_waterUpload->GetGPUVirtualAddress();
+		vb.SizeInBytes = UINT(m_waterPositions.size() * sizeof(Pos));
+		vb.StrideInBytes = sizeof(Pos);
+		list->IASetVertexBuffers(0, 1, &vb);
+		list->DrawInstanced(UINT(m_waterPositions.size()), 1, 0, 0);
+	}
+	if(!m_metalPositions.empty() && m_metalUpload) {
+		list->OMSetRenderTargets(1, &rtv2, FALSE, nullptr);
+		list->SetPipelineState(m_metalMaskPso.Get());
+		D3D12_VERTEX_BUFFER_VIEW vb {};
+		vb.BufferLocation = m_metalUpload->GetGPUVirtualAddress();
+		vb.SizeInBytes = UINT(m_metalPositions.size() * sizeof(Pos));
+		vb.StrideInBytes = sizeof(Pos);
+		list->IASetVertexBuffers(0, 1, &vb);
+		list->DrawInstanced(UINT(m_metalPositions.size()), 1, 0, 0);
+	}
+	transition(list, m_waterMask.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+	           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(list, m_waterDepth.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+	           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(list, m_metalMask.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+	           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	m_maskIsSrv = true;
+}
+
 bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuffer,
                       ID3D12Resource * depth,
                       const glm::mat4x4 & view, const glm::mat4x4 & proj,
-                      int width, int height, int aoQuality, int shadowQuality, int giQuality,
+                      int width, int height, const Settings & settings,
                       const GpuLight * lights, size_t lightCount, std::uint64_t rtvPtr) {
 	if(!m_ready || !list || !backbuffer || !depth) {
 		return false;
 	}
-	aoQuality = (std::max)(0, (std::min)(aoQuality, 3));
-	shadowQuality = (std::max)(0, (std::min)(shadowQuality, 3));
-	giQuality = (std::max)(0, (std::min)(giQuality, 3));
-	if(aoQuality <= 0 && shadowQuality <= 0 && giQuality <= 0) {
+	const int aoQuality = (std::max)(0, (std::min)(settings.aoQuality, 3));
+	const int shadowQuality = (std::max)(0, (std::min)(settings.shadowQuality, 3));
+	const int giQuality = (std::max)(0, (std::min)(settings.giQuality, 3));
+	const int transRefl = (std::max)(0, (std::min)(settings.transRefl, 3));
+	const int metalRefl = (std::max)(0, (std::min)(settings.metalRefl, 3));
+	const int shadowDenoise = (std::max)(0, (std::min)(settings.shadowDenoise, 1));
+	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, 2));
+	const int contact = settings.contact ? 1 : 0;
+	const bool skipTemporal = settings.skipTemporal;
+	if(aoQuality <= 0 && shadowQuality <= 0 && giQuality <= 0 && transRefl <= 0 && metalRefl <= 0
+	   && contact <= 0) {
 		return false;
 	}
 	if(!ensureTargets(width, height) || !m_lights) {
@@ -1603,7 +2217,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	}
 	const glm::mat4x4 invView = glm::inverse(view);
 	const glm::vec3 cam(invView[3]);
-	if(m_positions.empty() && m_roomPositions.empty()) {
+	if(m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty()) {
 		return false;
 	}
 	ID3D12GraphicsCommandList4 * list4 = nullptr;
@@ -1614,6 +2228,8 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		list4->Release();
 		return false;
 	}
+	const glm::mat4x4 viewProjEarly = proj * view;
+	rasterizeMasks(list, viewProjEarly);
 	D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv {};
 	depthSrv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 	depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -1645,6 +2261,8 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		transition(list, m_shadow.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
 		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
 		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		m_aoIsUav = true;
 	}
@@ -1684,6 +2302,14 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		float temporalAlpha;
 		float projA;
 		float projB;
+		UINT specRays;
+		UINT specHalfRes;
+		UINT contactOn;
+		UINT metalRays;
+		float specAlpha;
+		float contactTMax;
+		float giTemporalAlpha;
+		UINT padSpec;
 	} cb {};
 	static_assert(sizeof(cb) == kRootConstants * 4, "DXR root constants must match HLSL cbuffer");
 	std::memcpy(cb.invViewProj, glm::value_ptr(inv), sizeof(cb.invViewProj));
@@ -1713,10 +2339,22 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.giWidth = UINT((std::max)(m_width / 2, 1));
 	cb.giHeight = UINT((std::max)(m_height / 2, 1));
 	cb.giRays = giRayCount[giQuality];
-	cb.temporalAlpha = m_histValid ? kTemporalAlpha : 0.f;
+	const float shadowAlpha[] = { 0.15f, kTemporalAlpha };
+	const float giAlpha[] = { 0.20f, 0.12f, 0.08f };
+	cb.temporalAlpha = (m_histValid && !skipTemporal) ? shadowAlpha[shadowDenoise] : 0.f;
 	// Camera.cpp: clip.z = Q * zView - Q * near, clip.w = zView → zView = B / (z - A).
 	cb.projA = proj[2][2];
 	cb.projB = proj[3][2];
+	const UINT transRays[] = { 0u, 1u, 1u, 2u };
+	const UINT metalRayCount[] = { 0u, 1u, 2u, 2u };
+	cb.specRays = transRays[transRefl];
+	cb.specHalfRes = (transRefl == 1) ? 1u : 0u;
+	cb.contactOn = (contact && shadowQuality > 0) ? 1u : 0u;
+	cb.metalRays = metalRayCount[metalRefl];
+	cb.specAlpha = m_histValid ? 0.10f : 0.f;
+	cb.contactTMax = 60.f;
+	cb.giTemporalAlpha = (m_histValid && !skipTemporal) ? giAlpha[giDenoise] : 0.f;
+	cb.padSpec = 0;
 
 	ID3D12DescriptorHeap * heaps[] = { m_heap.Get() };
 	list->SetDescriptorHeaps(1, heaps);
@@ -1727,6 +2365,14 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	D3D12_GPU_DESCRIPTOR_HANDLE uav = gpu;
 	uav.ptr += SIZE_T(kRtUavBase) * m_descriptorSize;
 	list->SetComputeRootDescriptorTable(2, uav);
+	if(m_viewCbuf) {
+		void * mappedView = nullptr;
+		if(SUCCEEDED(m_viewCbuf->Map(0, nullptr, &mappedView)) && mappedView) {
+			std::memcpy(mappedView, glm::value_ptr(viewProj), 64);
+			m_viewCbuf->Unmap(0, nullptr);
+		}
+		list->SetComputeRootConstantBufferView(3, m_viewCbuf->GetGPUVirtualAddress());
+	}
 	
 	D3D12_DISPATCH_RAYS_DESC rays {};
 	const D3D12_GPU_VIRTUAL_ADDRESS table = m_shaderTable->GetGPUVirtualAddress();
@@ -1748,12 +2394,15 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	uavBarrier(list, m_shadow.Get());
 	uavBarrier(list, m_gi.Get());
 	uavBarrier(list, m_depthCur.Get());
+	uavBarrier(list, m_spec.Get());
 
 	transition(list, m_ao.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_shadow.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	m_aoIsUav = false;
 	
@@ -1762,9 +2411,13 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 	list->SetGraphicsRootSignature(m_compositeRoot.Get());
 	list->SetPipelineState(m_compositePso.Get());
+	const int shadowRadius = (shadowDenoise > 0) ? 3 : 2;
+	const int aoBlur = 5;
+	const UINT compCb[4] = { UINT(shadowRadius), UINT(aoBlur), cb.specHalfRes, 0 };
+	list->SetGraphicsRoot32BitConstants(0, 4, compCb, 0);
 	D3D12_GPU_DESCRIPTOR_HANDLE color = gpu;
 	color.ptr += SIZE_T(kCompositeBase) * m_descriptorSize;
-	list->SetGraphicsRootDescriptorTable(0, color);
+	list->SetGraphicsRootDescriptorTable(1, color);
 	list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	list->DrawInstanced(3, 1, 0, 0);
 	transition(list, depth,
@@ -1777,21 +2430,26 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	transition(list, m_shadow.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	transition(list, m_depthCur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	transition(list, m_aoPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_shadowPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_depthPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_giPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
+	transition(list, m_specPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	list->CopyResource(m_aoPrev.Get(), m_ao.Get());
 	list->CopyResource(m_shadowPrev.Get(), m_shadow.Get());
 	list->CopyResource(m_depthPrev.Get(), m_depthCur.Get());
 	list->CopyResource(m_giPrev.Get(), m_gi.Get());
+	list->CopyResource(m_specPrev.Get(), m_spec.Get());
 	transition(list, m_aoPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_shadowPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_depthPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_giPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
+	transition(list, m_specPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_ao.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_shadow.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_depthCur.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	m_prevViewProj = viewProj;
 	m_histValid = true;

@@ -47,8 +47,10 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/Color.h"
 #include "util/Flags.h"
 
-const float fZFogStart = 0.3f;
-const float fZFogEnd = 0.5f;
+// Original 0.3 / 0.5 hid the far clip behind hardware fog. D3D12 has fog
+// off, so 0.5 * cdepth was a hard black wall through every doorway.
+const float fZFogStart = 0.55f;
+const float fZFogEnd = 0.95f;
 
 enum GMODFlag {
 	GMOD_DCOLOR = 1 << 0,

@@ -1310,8 +1310,17 @@ if(WIN32)
 	set(ARX_D3D12_SOURCES
 		"${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d12/D3D12Renderer.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/dxr/D3D12Rtao.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/dxr/D3D12Streamline.cpp"
 	)
 	message(STATUS "D3D12 raster enabled (default). D3D9 kept as fallback source.")
+	set(STREAMLINE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/streamline")
+	if(EXISTS "${STREAMLINE_ROOT}/include/sl.h")
+		set(ARX_HAVE_STREAMLINE 1)
+		include_directories(SYSTEM "${STREAMLINE_ROOT}/include")
+		message(STATUS "Streamline SDK found — DLSS / DLSS-RR enabled when sl.interposer.dll is next to arx.exe")
+	else()
+		message(STATUS "Streamline SDK missing. Run scripts/fetch-streamline.ps1 — DLSS RR stays off.")
+	endif()
 endif()
 
 # Windowing / input
@@ -1853,6 +1862,15 @@ if(ARX_HAVE_D3D9)
 endif()
 if(ARX_HAVE_D3D12)
 	target_sources(arx PRIVATE ${ARX_D3D12_SOURCES})
+	if(ARX_HAVE_STREAMLINE)
+		file(GLOB STREAMLINE_DLLS "${STREAMLINE_ROOT}/bin/x64/*.dll")
+		if(STREAMLINE_DLLS)
+			add_custom_command(TARGET arx POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different ${STREAMLINE_DLLS} "$<TARGET_FILE_DIR:arx>"
+				COMMENT "Copy Streamline DLLs next to arx.exe"
+			)
+		endif()
+	endif()
 endif()
 
 if(BUILD_TESTS)

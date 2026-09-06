@@ -93,7 +93,18 @@ constexpr const int
 	quickLevelTransition = JumpToChangeLevel,
 	rtao = 0,
 	dxrShadows = 0,
-	dxrGi = 0;
+	dxrGi = 0,
+	dxrPreset = 0,
+	dxrReflections = 0,
+	dxrTransReflections = 0,
+	dxrShadowDenoise = 0,
+	dxrGiDenoise = 0,
+	dxrContact = 0,
+	dxrDebris = 0,
+	dxrTransparency = 0,
+	dxrDlss = 0,
+	dxrRr = 0,
+	dxrFg = 0;
 
 constexpr const bool
 	fullscreen = true,
@@ -230,7 +241,19 @@ constexpr const std::string_view
 	extensionOverride = "extension_override",
 	rtao = "rtao",
 	dxrShadows = "dxr_shadows",
-	dxrGi = "dxr_gi";
+	dxrGi = "dxr_gi",
+	dxrPreset = "dxr_preset",
+	dxrReflections = "dxr_reflections",
+	dxrTransReflections = "dxr_trans_reflections",
+	dxrShadowDenoise = "dxr_shadow_denoise",
+	dxrGiDenoise = "dxr_gi_denoise",
+	dxrContact = "dxr_contact",
+	dxrDebris = "dxr_debris",
+	dxrTransparency = "dxr_transparency",
+	dxrDlss = "dxr_dlss",
+	dxrRr = "dxr_rr",
+	dxrFg = "dxr_fg",
+	dlssSchema = "dlss_schema";
 
 // Interface options
 constexpr const std::string_view
@@ -493,6 +516,18 @@ bool Config::save() {
 	writer.writeKey(Key::rtao, video.rtao);
 	writer.writeKey(Key::dxrShadows, video.dxrShadows);
 	writer.writeKey(Key::dxrGi, video.dxrGi);
+	writer.writeKey(Key::dxrPreset, video.dxrPreset);
+	writer.writeKey(Key::dxrReflections, video.dxrReflections);
+	writer.writeKey(Key::dxrTransReflections, video.dxrTransReflections);
+	writer.writeKey(Key::dxrShadowDenoise, video.dxrShadowDenoise);
+	writer.writeKey(Key::dxrGiDenoise, video.dxrGiDenoise);
+	writer.writeKey(Key::dxrContact, video.dxrContact);
+	writer.writeKey(Key::dxrDebris, video.dxrDebris);
+	writer.writeKey(Key::dxrTransparency, video.dxrTransparency);
+	writer.writeKey(Key::dxrDlss, video.dxrDlss);
+	writer.writeKey(Key::dxrRr, video.dxrRr);
+	writer.writeKey(Key::dxrFg, video.dxrFg);
+	writer.writeKey(Key::dlssSchema, 1);
 	
 	// interface
 	writer.beginSection(Section::Interface);
@@ -630,6 +665,41 @@ bool Config::init(const fs::path & file) {
 	video.rtao = glm::clamp(reader.getKey(Section::Video, Key::rtao, Default::rtao), 0, 3);
 	video.dxrShadows = glm::clamp(reader.getKey(Section::Video, Key::dxrShadows, Default::dxrShadows), 0, 3);
 	video.dxrGi = glm::clamp(reader.getKey(Section::Video, Key::dxrGi, Default::dxrGi), 0, 3);
+	video.dxrReflections = glm::clamp(reader.getKey(Section::Video, Key::dxrReflections, Default::dxrReflections), 0, 3);
+	video.dxrTransReflections = glm::clamp(reader.getKey(Section::Video, Key::dxrTransReflections,
+	                                                    Default::dxrTransReflections), 0, 3);
+	video.dxrShadowDenoise = glm::clamp(reader.getKey(Section::Video, Key::dxrShadowDenoise,
+	                                                 Default::dxrShadowDenoise), 0, 1);
+	video.dxrGiDenoise = glm::clamp(reader.getKey(Section::Video, Key::dxrGiDenoise, Default::dxrGiDenoise), 0, 2);
+	video.dxrContact = reader.getKey(Section::Video, Key::dxrContact, Default::dxrContact) ? 1 : 0;
+	video.dxrDebris = reader.getKey(Section::Video, Key::dxrDebris, Default::dxrDebris) ? 1 : 0;
+	video.dxrTransparency = glm::clamp(reader.getKey(Section::Video, Key::dxrTransparency,
+	                                               Default::dxrTransparency), 0, 2);
+	{
+		const int raw = reader.getKey(Section::Video, Key::dxrDlss, Default::dxrDlss);
+		const int schema = reader.getKey(Section::Video, Key::dlssSchema, 0);
+		if(schema >= 1) {
+			video.dxrDlss = glm::clamp(raw, 0, 5);
+		} else if(raw == 6) {
+			video.dxrDlss = 1; // old DLAA
+		} else if(raw == 1) {
+			video.dxrDlss = 2; // old Auto → Quality
+		} else {
+			video.dxrDlss = glm::clamp(raw, 0, 5);
+		}
+	}
+	video.dxrRr = reader.getKey(Section::Video, Key::dxrRr, Default::dxrRr) ? 1 : 0;
+	video.dxrFg = reader.getKey(Section::Video, Key::dxrFg, Default::dxrFg) ? 1 : 0;
+	if(reader.getKey(Section::Video, Key::dxrPreset)) {
+		video.dxrPreset = glm::clamp(reader.getKey(Section::Video, Key::dxrPreset, Default::dxrPreset), 0, 4);
+		if(video.dxrPreset <= 3) {
+			applyDxrPreset(video.dxrPreset);
+		}
+	} else if(video.rtao || video.dxrShadows || video.dxrGi) {
+		video.dxrPreset = 4;
+	} else {
+		video.dxrPreset = 0;
+	}
 	
 	// Get interface settings
 	bool oldCrosshair = reader.getKey(Section::Video, Key::showCrosshair, Default::showCrosshair);
@@ -702,4 +772,70 @@ bool Config::init(const fs::path & file) {
 	misc.realtimeOverride = reader.getKey(Section::Misc, Key::realtimeOverride, Default::realtimeOverride);
 	
 	return loaded;
+}
+
+void Config::applyDxrPreset(int preset) {
+	video.dxrPreset = glm::clamp(preset, 0, 4);
+	if(video.dxrPreset == 4) {
+		return;
+	}
+	if(video.dxrPreset == 0) {
+		video.rtao = 0;
+		video.dxrShadows = 0;
+		video.dxrGi = 0;
+		video.dxrReflections = 0;
+		video.dxrTransReflections = 0;
+		video.dxrShadowDenoise = 0;
+		video.dxrGiDenoise = 0;
+		video.dxrContact = 0;
+		video.dxrDebris = 0;
+		video.dxrTransparency = 0;
+		video.dxrRr = 0;
+		return;
+	}
+	if(video.dxrPreset == 1) {
+		video.rtao = 1;
+		video.dxrShadows = 1;
+		video.dxrGi = 1;
+		video.dxrReflections = 0;
+		video.dxrTransReflections = 1;
+		video.dxrShadowDenoise = 0;
+		video.dxrGiDenoise = 0;
+		video.dxrContact = 0;
+		video.dxrDebris = 0;
+		video.dxrTransparency = 0;
+		video.dxrRr = 0;
+		return;
+	}
+	if(video.dxrPreset == 2) {
+		video.rtao = 2;
+		video.dxrShadows = 2;
+		video.dxrGi = 2;
+		video.dxrReflections = 1;
+		video.dxrTransReflections = 2;
+		video.dxrShadowDenoise = 1;
+		video.dxrGiDenoise = 1;
+		video.dxrContact = 1;
+		video.dxrDebris = 0;
+		video.dxrTransparency = 0;
+		video.dxrRr = 0;
+		return;
+	}
+	video.rtao = 3;
+	video.dxrShadows = 3;
+	video.dxrGi = 3;
+	video.dxrReflections = 2;
+	video.dxrTransReflections = 3;
+	video.dxrShadowDenoise = 1;
+	video.dxrGiDenoise = 2;
+	video.dxrContact = 1;
+	video.dxrDebris = 1;
+	video.dxrTransparency = 0;
+	video.dxrRr = 0;
+}
+
+bool Config::dxrEffectsEnabled() const {
+	return video.rtao > 0 || video.dxrShadows > 0 || video.dxrGi > 0
+	       || video.dxrReflections > 0 || video.dxrTransReflections > 0
+	       || video.dxrContact > 0;
 }

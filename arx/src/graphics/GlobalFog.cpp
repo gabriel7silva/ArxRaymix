@@ -58,8 +58,8 @@ GLOBAL_MODS g_currentFogParameters;
 GLOBAL_MODS g_desiredFogParameters;
 
 // change the clipping Z max & min
-static const float DEFAULT_ZCLIP = 6400.f;
-static const float DEFAULT_MINZCLIP = 1200.f;
+static const float DEFAULT_ZCLIP = 28000.f;
+static const float DEFAULT_MINZCLIP = 4000.f;
 
 Color g_fogColor;
 

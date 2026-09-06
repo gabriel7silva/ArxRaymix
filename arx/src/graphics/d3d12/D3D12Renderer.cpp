@@ -27,10 +27,12 @@
 
 #include "core/Config.h"
 #include "graphics/Color.h"
+#include "graphics/GraphicsTypes.h"
 #include "graphics/Math.h"
 #include "graphics/Vertex.h"
 #include "graphics/data/TextureContainer.h"
 #include "graphics/dxr/D3D12Rtao.h"
+#include "graphics/dxr/D3D12Streamline.h"
 #include "graphics/image/Image.h"
 #include "graphics/texture/Texture.h"
 #include "io/log/Logger.h"
@@ -82,6 +84,18 @@ constexpr UINT kUploadBytes = 16 * 1024 * 1024;
 constexpr float kNearW = 1.f;
 constexpr float kTLClipPad = 64.f;
 constexpr int kMaxClipVerts = 16;
+
+float halton(int index, int base) {
+	float f = 1.f;
+	float result = 0.f;
+	int i = index;
+	while(i > 0) {
+		f /= float(base);
+		result += f * float(i % base);
+		i /= base;
+	}
+	return result;
+}
 
 u32 toPacked(ColorRGBA rgba) {
 	return Color::fromRGBA(rgba).toBGRA().t;
@@ -330,7 +344,8 @@ size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t
 }
 
 void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
-                        const D3D12Rtao::GpuLight * lights, size_t lightCount) {
+                        const D3D12Rtao::GpuLight * lights, size_t lightCount,
+                        bool includeAlpha, bool collectMetal) {
 	if(!rtao || !g_rooms || !g_tiles || !g_camera) {
 		return;
 	}
@@ -386,14 +401,19 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 				continue;
 			}
 			const EERIEPOLY & ep = tile.polygons()[epd.idx];
-			if(ep.type & (POLY_IGNORE | POLY_NODRAW | POLY_HIDE | POLY_TRANS)) {
+			if(ep.type & (POLY_IGNORE | POLY_NODRAW | POLY_HIDE)) {
 				continue;
+			}
+			if((ep.type & POLY_TRANS) && !(ep.type & POLY_WATER)) {
+				continue;
+			}
+			if(ep.type & POLY_WATER) {
+				continue; // water comes from RenderWater (visible surface)
 			}
 			// Cutout decals (roots, webs, color-keyed grates) are opaque quads to
 			// the BLAS since rays never see the texture; they self-shadowed to black
-			// and cast solid rectangles. They neither cast nor block until any-hit
-			// alpha testing exists.
-			if(ep.tex && ep.tex->m_pTexture && ep.tex->m_pTexture->hasAlpha()) {
+			// and cast solid rectangles. High transparency includes them as casters.
+			if(!includeAlpha && ep.tex && ep.tex->m_pTexture && ep.tex->m_pTexture->hasAlpha()) {
 				alphaSkipped++;
 				continue;
 			}
@@ -404,11 +424,17 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 			verts[1].p = ep.v[1].p;
 			verts[2].p = ep.v[2].p;
 			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+			if(collectMetal && (ep.type & POLY_METAL)) {
+				rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+			}
 			if(ep.type & POLY_QUAD) {
 				verts[0].p = ep.v[3].p;
 				verts[1].p = ep.v[2].p;
 				verts[2].p = ep.v[1].p;
 				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+				if(collectMetal && (ep.type & POLY_METAL)) {
+					rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+				}
 			}
 		}
 	}
@@ -418,7 +444,8 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 // Returns a hash of every emitted vertex so the caller can tell whether entity
 // geometry actually moved between frames.
 u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
-                         const D3D12Rtao::GpuLight * lights, size_t lightCount) {
+                         const D3D12Rtao::GpuLight * lights, size_t lightCount,
+                         bool includeDebris, bool includeAlpha, bool collectMetal) {
 	u32 hash = 2166136261u;
 	if(!rtao || !g_camera) {
 		return hash;
@@ -443,7 +470,10 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 	SMY_VERTEX verts[3] {};
 	for(const Entity & entity : entities.inScene()) {
 		eh = 2166136261u;
-		if(entity.ioflags & (IO_NOSHADOW | IO_CAMERA | IO_MARKER | IO_GOLD)) {
+		if(entity.ioflags & (IO_CAMERA | IO_MARKER | IO_GOLD)) {
+			continue;
+		}
+		if((entity.ioflags & IO_NOSHADOW) && !includeDebris) {
 			continue;
 		}
 		if(entities.player() && &entity == entities.player()) {
@@ -474,7 +504,7 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 			if(face.facetype & (POLY_TRANS | POLY_HIDE | POLY_NODRAW | POLY_IGNORE)) {
 				continue;
 			}
-			if(size_t(face.material) < obj->materials.size()) {
+			if(!includeAlpha && size_t(face.material) < obj->materials.size()) {
 				const TextureContainer * tc = obj->materials[face.material];
 				if(tc && tc->m_pTexture && tc->m_pTexture->hasAlpha()) {
 					continue; // cutout: see collectRoomCasters
@@ -506,6 +536,9 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 				mix(v.z);
 			}
 			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+			if(collectMetal && (face.facetype & POLY_METAL)) {
+				rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+			}
 		}
 		if(curN < std::size(cur)) {
 			cur[curN++] = { &entity, eh };
@@ -1151,8 +1184,8 @@ VSOut VSMain(VSIn i) {
 	float clipW = 1.0 / rhw;
 	// D3D10+ pixel centers sit at +0.5. Draw.cpp skips its D3D9 −0.5 when
 	// needsHalfPixelOffset() is false, so fonts and bitmaps share this shift.
-	float ndcX = ((i.pos.x - 0.5) / rtW) * 2.0 - 1.0;
-	float ndcY = 1.0 - ((i.pos.y - 0.5) / rtH) * 2.0;
+	float ndcX = ((i.pos.x - 0.5) / rtW) * 2.0 - 1.0 + pad.x;
+	float ndcY = 1.0 - ((i.pos.y - 0.5) / rtH) * 2.0 + pad.y;
 	o.pos = float4(ndcX * clipW, ndcY * clipW, i.pos.z * clipW, clipW);
 	o.color = i.color;
 	o.fog = i.specular.a;
@@ -1206,6 +1239,28 @@ float4 PSMain(VSOut i) : SV_Target {
 }
 )";
 
+const char * kDepthBlitShader = R"(
+Texture2D depthTex : register(t0);
+SamplerState samp : register(s0);
+
+struct VSOut {
+	float4 pos : SV_Position;
+	float2 uv : TEXCOORD0;
+};
+
+VSOut VSDepthBlit(uint id : SV_VertexID) {
+	VSOut o;
+	float2 uv = float2((id << 1) & 2, id & 2);
+	o.pos = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+	o.uv = uv;
+	return o;
+}
+
+float PSDepthBlit(VSOut i) : SV_Depth {
+	return depthTex.SampleLevel(samp, i.uv, 0).r;
+}
+)";
+
 } // namespace
 
 struct D3D12Renderer::Impl {
@@ -1238,6 +1293,25 @@ struct D3D12Renderer::Impl {
 	void * uploadMapped = nullptr;
 	bool recording = false;
 	bool inPresentState = true;
+	bool worldPass = false;
+	bool sceneReady = false;
+	bool sceneUsed = false;
+	bool dlssReset = false;
+	int sceneW = 0;
+	int sceneH = 0;
+	int sceneAllocW = 0;
+	int sceneAllocH = 0;
+	int dlssMode = 0;
+	int jitterFrame = 0;
+	float jitterX = 0.f;
+	float jitterY = 0.f;
+	DxPtr<ID3D12Resource> sceneColor;
+	DxPtr<ID3D12Resource> sceneDepth;
+	UINT dsvSize = 0;
+	unsigned sceneDepthSrv = 0;
+	DxPtr<ID3D12PipelineState> depthBlitPso;
+	DxPtr<ID3DBlob> depthBlitVs;
+	DxPtr<ID3DBlob> depthBlitPs;
 	std::unordered_map<u32, DxPtr<ID3D12PipelineState>> psos;
 	DxPtr<ID3DBlob> vs;
 	DxPtr<ID3DBlob> ps;
@@ -1472,6 +1546,8 @@ D3D12Renderer::~D3D12Renderer() {
 	releaseDevice();
 	delete m_rtao;
 	m_rtao = nullptr;
+	delete m_sl;
+	m_sl = nullptr;
 	delete m;
 	m = nullptr;
 }
@@ -1647,6 +1723,42 @@ bool D3D12Renderer::createPipeline() {
 	                                         IID_PPV_ARGS(m->root.put())))) {
 		return false;
 	}
+	
+	if(FAILED(D3DCompile(kDepthBlitShader, std::strlen(kDepthBlitShader), "d3d12-depth",
+	                     nullptr, nullptr, "VSDepthBlit", "vs_5_0", 0, 0,
+	                     m->depthBlitVs.put(), err.put()))) {
+		LogError << "D3D12: depth blit VS failed: "
+		         << (err ? static_cast<const char *>(err->GetBufferPointer()) : "");
+		return false;
+	}
+	if(FAILED(D3DCompile(kDepthBlitShader, std::strlen(kDepthBlitShader), "d3d12-depth",
+	                     nullptr, nullptr, "PSDepthBlit", "ps_5_0", 0, 0,
+	                     m->depthBlitPs.put(), err.put()))) {
+		LogError << "D3D12: depth blit PS failed: "
+		         << (err ? static_cast<const char *>(err->GetBufferPointer()) : "");
+		return false;
+	}
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC blit {};
+	blit.pRootSignature = m->root.Get();
+	blit.VS = { m->depthBlitVs->GetBufferPointer(), m->depthBlitVs->GetBufferSize() };
+	blit.PS = { m->depthBlitPs->GetBufferPointer(), m->depthBlitPs->GetBufferSize() };
+	blit.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+	blit.SampleMask = 0xffffffff;
+	blit.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+	blit.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+	blit.RasterizerState.DepthClipEnable = FALSE;
+	blit.DepthStencilState.DepthEnable = TRUE;
+	blit.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+	blit.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+	blit.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	blit.NumRenderTargets = 1;
+	blit.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+	blit.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	blit.SampleDesc.Count = 1;
+	if(FAILED(m->device->CreateGraphicsPipelineState(&blit, IID_PPV_ARGS(m->depthBlitPso.put())))) {
+		LogError << "D3D12: depth blit PSO failed";
+		return false;
+	}
 	return true;
 }
 
@@ -1657,13 +1769,14 @@ bool D3D12Renderer::createFrameResources() {
 	
 	D3D12_DESCRIPTOR_HEAP_DESC rtvDesc {};
 	rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-	rtvDesc.NumDescriptors = kFrameCount;
+	rtvDesc.NumDescriptors = kFrameCount + 1;
 	if(FAILED(m->device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(m->rtvHeap.put())))) {
 		return false;
 	}
+	m->dsvSize = m->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 	D3D12_DESCRIPTOR_HEAP_DESC dsvDesc {};
 	dsvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-	dsvDesc.NumDescriptors = 1;
+	dsvDesc.NumDescriptors = 2;
 	if(FAILED(m->device->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(m->dsvHeap.put())))) {
 		return false;
 	}
@@ -1756,6 +1869,7 @@ bool D3D12Renderer::createFrameResources() {
 	createTextureSrv(m->white.Get(), 0);
 	const u32 whitePx = 0xffffffffu;
 	uploadTextureData(m->white.Get(), &whitePx, 1, 1, false);
+	m->sceneDepthSrv = allocateSrv();
 	return true;
 }
 
@@ -1764,6 +1878,7 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 		return;
 	}
 	waitGpu();
+	releaseSceneTargets();
 	for(UINT i = 0; i < kFrameCount; ++i) {
 		m->backbuffers[i].reset();
 	}
@@ -1811,6 +1926,9 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 	if(m_rtao) {
 		m_rtao->resize(width, height);
 	}
+	if(m_sl) {
+		m_sl->resize(width, height);
+	}
 }
 
 bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
@@ -1821,6 +1939,11 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	}
 	releaseDevice();
 	m->hwnd = hwnd;
+	
+	if(!m_sl) {
+		m_sl = new D3D12Streamline();
+	}
+	m_sl->init();
 	
 	DxPtr<IDXGIFactory6> factory;
 	if(FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.put())))) {
@@ -1882,10 +2005,26 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	m_rtao = new D3D12Rtao();
 	m_rtao->init(m->device.Get());
 	m_rtao->resize(width, height);
+	if(m_sl) {
+		m_sl->setDevice(m->device.Get(), adapter.Get());
+	}
+	LogInfo << "Ray tracing: DXR=" << (supportsRayTracing() ? "yes" : "no")
+	        << " DLSS=" << (supportsDlss() ? "yes" : "no")
+	        << " DLSS-RR=" << (supportsDlssRr() ? "yes" : "no");
+	if(config.video.dxrDlss > 0 && !supportsDlss()) {
+		LogWarning << "Streamline: dxr_dlss ignored — DLSS not supported on this GPU";
+	}
+	if(config.video.dxrRr > 0 && !supportsDlssRr()) {
+		LogWarning << "Streamline: dxr_rr=1 ignored — DLSS-RR not supported on this GPU";
+	}
 	m_loggedRtaoOff = false;
 	m_loggedRtaoOn = false;
 	m_loggedShadowsOff = false;
 	m_loggedShadowsOn = false;
+	m_loggedGiOff = false;
+	m_loggedGiOn = false;
+	m_loggedReflOff = false;
+	m_loggedReflOn = false;
 	return true;
 }
 
@@ -1894,6 +2033,9 @@ void D3D12Renderer::releaseDevice() {
 		return;
 	}
 	waitGpu();
+	if(m_sl) {
+		m_sl->shutdown();
+	}
 	if(m_rtao) {
 		m_rtao->shutdown();
 	}
@@ -2010,23 +2152,7 @@ bool D3D12Renderer::beginRecording() {
 		           D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		m->inPresentState = false;
 	}
-	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
-	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
-	m->list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
-	D3D12_VIEWPORT vp {};
-	vp.Width = float(m_width);
-	vp.Height = float(m_height);
-	vp.MaxDepth = 1.f;
-	m->list->RSSetViewports(1, &vp);
-	D3D12_RECT sc { 0, 0, LONG(m_width), LONG(m_height) };
-	if(m_scissor.isValid()) {
-		sc.left = LONG(m_scissor.left);
-		sc.top = LONG(m_scissor.top);
-		sc.right = LONG(m_scissor.right);
-		sc.bottom = LONG(m_scissor.bottom);
-	}
-	m->list->RSSetScissorRects(1, &sc);
+	bindPassTargets();
 	ID3D12DescriptorHeap * heaps[] = { m->srvHeap.Get(), m->samplerHeap.Get() };
 	m->list->SetDescriptorHeaps(2, heaps);
 	m->list->SetGraphicsRootSignature(m->root.Get());
@@ -2035,19 +2161,23 @@ bool D3D12Renderer::beginRecording() {
 
 void D3D12Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clearDepth,
                           size_t nrects, Rect * rect) {
-	if((bufferFlags & ColorBuffer) && m_rtao && m_rtao->supported()
-	   && (config.video.rtao > 0 || config.video.dxrShadows > 0 || config.video.dxrGi > 0)) {
+	if((bufferFlags & ColorBuffer) && m_rtao && m_rtao->supported() && config.dxrEffectsEnabled()) {
 		m_rtao->beginWorldFrame();
 	}
 	if(!beginRecording()) {
 		return;
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	if(usingSceneTargets()) {
+		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
+		dsv.ptr += m->dsvSize;
+	} else {
+		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
+	}
 	D3D12_RECT rects[8];
 	UINT n = 0;
-	if(nrects > 0 && rect) {
+	if(!m->worldPass && nrects > 0 && rect) {
 		n = UINT((std::min)(nrects, size_t(8)));
 		for(UINT i = 0; i < n; ++i) {
 			rects[i].left = LONG(rect[i].left);
@@ -2159,6 +2289,10 @@ void D3D12Renderer::bindDrawState(Primitive primitive) {
 		1.f,
 		0.f, 0.f, 0.f
 	};
+	if(m->worldPass && m->sceneW > 0 && m->sceneH > 0) {
+		constants[10] = m->jitterX * 2.f / float(m->sceneW);
+		constants[11] = -m->jitterY * 2.f / float(m->sceneH);
+	}
 	auto * stage0 = static_cast<D3D12TextureStage *>(GetTextureStage(0));
 	auto * stage1 = static_cast<D3D12TextureStage *>(GetTextureStage(1));
 	auto * stage2 = static_cast<D3D12TextureStage *>(GetTextureStage(2));
@@ -2413,33 +2547,372 @@ bool D3D12Renderer::supportsRayTracing() const {
 	return m_rtao && m_rtao->supported();
 }
 
-void D3D12Renderer::restoreRasterBind() {
+bool D3D12Renderer::supportsDlss() const {
+	return m_sl && m_sl->supportsDlss();
+}
+
+bool D3D12Renderer::supportsDlssRr() const {
+	return m_sl && m_sl->supportsRr();
+}
+
+Vec2i D3D12Renderer::internalRenderSize() const {
+	if(m && m->sceneUsed && m->sceneW > 0 && m->sceneH > 0) {
+		return Vec2i(m->sceneW, m->sceneH);
+	}
+	return Vec2i(m_width, m_height);
+}
+
+Vec2i D3D12Renderer::queryDlssInternalSize(int cfgMode, int displayW, int displayH) const {
+	if(!m_sl || cfgMode <= 0 || displayW <= 0 || displayH <= 0) {
+		return Vec2i(displayW, displayH);
+	}
+	const int slMode = D3D12Streamline::resolveDlssMode(cfgMode, displayH);
+	int rw = displayW;
+	int rh = displayH;
+	m_sl->queryOptimalSize(slMode, displayW, displayH, rw, rh);
+	rw = (std::max)(8, (std::min)(rw, displayW));
+	rh = (std::max)(8, (std::min)(rh, displayH));
+	return Vec2i(rw, rh);
+}
+
+Renderer::DlssDebugState D3D12Renderer::dlssDebugState() const {
+	DlssDebugState s;
+	s.displayW = m_width;
+	s.displayH = m_height;
+	s.renderW = (m && m->sceneUsed && m->sceneW > 0) ? m->sceneW : m_width;
+	s.renderH = (m && m->sceneUsed && m->sceneH > 0) ? m->sceneH : m_height;
+	s.mode = config.video.dxrDlss;
+	s.sceneRT = m && m->sceneUsed && m->sceneReady;
+	s.rr = config.video.dxrRr > 0 && supportsDlssRr() && supportsRayTracing()
+	       && config.dxrEffectsEnabled();
+	return s;
+}
+
+bool D3D12Renderer::usingSceneTargets() const {
+	return m && m->worldPass && m->sceneReady && m->sceneColor && m->sceneDepth;
+}
+
+void D3D12Renderer::bindPassTargets() {
 	if(!m->list || !m->backbuffers[m->frame]) {
 		return;
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	if(usingSceneTargets()) {
+		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
+		dsv.ptr += m->dsvSize;
+	} else {
+		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
+	}
 	m->list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+	const int pw = passWidth();
+	const int ph = passHeight();
 	D3D12_VIEWPORT vp {};
-	vp.Width = float(m_width);
-	vp.Height = float(m_height);
+	vp.Width = float(pw);
+	vp.Height = float(ph);
 	vp.MaxDepth = 1.f;
 	m->list->RSSetViewports(1, &vp);
-	D3D12_RECT sc { 0, 0, LONG(m_width), LONG(m_height) };
+	D3D12_RECT sc { 0, 0, LONG(pw), LONG(ph) };
+	if(!m->worldPass && m_scissor.isValid()) {
+		sc.left = LONG(m_scissor.left);
+		sc.top = LONG(m_scissor.top);
+		sc.right = LONG(m_scissor.right);
+		sc.bottom = LONG(m_scissor.bottom);
+	}
 	m->list->RSSetScissorRects(1, &sc);
+}
+
+void D3D12Renderer::restoreRasterBind() {
+	if(!m->list || !m->backbuffers[m->frame]) {
+		return;
+	}
+	bindPassTargets();
 	ID3D12DescriptorHeap * heaps[] = { m->srvHeap.Get(), m->samplerHeap.Get() };
 	m->list->SetDescriptorHeaps(2, heaps);
 	m->list->SetGraphicsRootSignature(m->root.Get());
 }
 
+void D3D12Renderer::blitSceneDepthToDisplay() {
+	if(!m || !m->list || !m->sceneReady || !m->sceneDepth || !m->depth
+	   || !m->depthBlitPso || m->sceneDepthSrv == 0 || m->worldPass) {
+		return;
+	}
+	transition(m->list.Get(), m->sceneDepth.Get(),
+	           D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	bindPassTargets();
+	ID3D12DescriptorHeap * heaps[] = { m->srvHeap.Get(), m->samplerHeap.Get() };
+	m->list->SetDescriptorHeaps(2, heaps);
+	m->list->SetGraphicsRootSignature(m->root.Get());
+	m->list->SetPipelineState(m->depthBlitPso.Get());
+	D3D12_GPU_DESCRIPTOR_HANDLE srv = m->srvHeap->GetGPUDescriptorHandleForHeapStart();
+	srv.ptr += UINT64(m->sceneDepthSrv) * m->srvSize;
+	m->list->SetGraphicsRootDescriptorTable(1, srv);
+	// Point + clamp
+	D3D12_GPU_DESCRIPTOR_HANDLE samp = m->samplerHeap->GetGPUDescriptorHandleForHeapStart();
+	samp.ptr += UINT64(1 + 3) * m->sampSize;
+	m->list->SetGraphicsRootDescriptorTable(4, samp);
+	m->list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	m->list->DrawInstanced(3, 1, 0, 0);
+	transition(m->list.Get(), m->sceneDepth.Get(),
+	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+}
+
+void D3D12Renderer::releaseSceneTargets() {
+	if(!m) {
+		return;
+	}
+	m->sceneColor.reset();
+	m->sceneDepth.reset();
+	m->sceneReady = false;
+	m->sceneUsed = false;
+	m->sceneAllocW = 0;
+	m->sceneAllocH = 0;
+}
+
+bool D3D12Renderer::ensureSceneTargets(int rw, int rh) {
+	if(!m || !m->device || !m->rtvHeap || !m->dsvHeap || rw <= 0 || rh <= 0) {
+		return false;
+	}
+	if(m->sceneColor && m->sceneDepth && m->sceneReady
+	   && m->sceneAllocW == rw && m->sceneAllocH == rh) {
+		return true;
+	}
+	waitGpu();
+	m->sceneColor.reset();
+	m->sceneDepth.reset();
+	m->sceneReady = false;
+	
+	D3D12_HEAP_PROPERTIES heap {};
+	heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+	
+	D3D12_RESOURCE_DESC colorDesc {};
+	colorDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	colorDesc.Width = UINT(rw);
+	colorDesc.Height = UINT(rh);
+	colorDesc.DepthOrArraySize = 1;
+	colorDesc.MipLevels = 1;
+	colorDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	colorDesc.SampleDesc.Count = 1;
+	colorDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+	D3D12_CLEAR_VALUE colorClear {};
+	colorClear.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	if(FAILED(m->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &colorDesc,
+	                                             D3D12_RESOURCE_STATE_RENDER_TARGET, &colorClear,
+	                                             IID_PPV_ARGS(m->sceneColor.put())))) {
+		LogError << "D3D12: scene color failed";
+		return false;
+	}
+	
+	D3D12_RESOURCE_DESC depthDesc {};
+	depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	depthDesc.Width = UINT(rw);
+	depthDesc.Height = UINT(rh);
+	depthDesc.DepthOrArraySize = 1;
+	depthDesc.MipLevels = 1;
+	depthDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+	depthDesc.SampleDesc.Count = 1;
+	depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+	D3D12_CLEAR_VALUE depthClear {};
+	depthClear.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	depthClear.DepthStencil.Depth = 1.f;
+	if(FAILED(m->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &depthDesc,
+	                                             D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
+	                                             IID_PPV_ARGS(m->sceneDepth.put())))) {
+		LogError << "D3D12: scene depth failed";
+		m->sceneColor.reset();
+		return false;
+	}
+	
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
+	m->device->CreateRenderTargetView(m->sceneColor.Get(), nullptr, rtv);
+	
+	D3D12_DEPTH_STENCIL_VIEW_DESC dsv {};
+	dsv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	D3D12_CPU_DESCRIPTOR_HANDLE dsvH = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	dsvH.ptr += m->dsvSize;
+	m->device->CreateDepthStencilView(m->sceneDepth.Get(), &dsv, dsvH);
+	if(m->sceneDepthSrv != 0) {
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv {};
+		srv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+		srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srv.Texture2D.MipLevels = 1;
+		D3D12_CPU_DESCRIPTOR_HANDLE cpu = m->srvHeap->GetCPUDescriptorHandleForHeapStart();
+		cpu.ptr += SIZE_T(m->sceneDepthSrv) * m->srvSize;
+		m->device->CreateShaderResourceView(m->sceneDepth.Get(), &srv, cpu);
+	}
+	m->sceneAllocW = rw;
+	m->sceneAllocH = rh;
+	m->sceneReady = true;
+	return true;
+}
+
+void D3D12Renderer::addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) {
+	if(m_rtao && config.video.dxrTransReflections > 0) {
+		m_rtao->addWater(a, b, c);
+	}
+}
+
+int D3D12Renderer::passWidth() const {
+	return (m && m->worldPass && m->sceneW > 0) ? m->sceneW : m_width;
+}
+
+int D3D12Renderer::passHeight() const {
+	return (m && m->worldPass && m->sceneH > 0) ? m->sceneH : m_height;
+}
+
+void D3D12Renderer::beginSceneUpscale() {
+	if(!m) {
+		return;
+	}
+	m->worldPass = false;
+	m->sceneUsed = false;
+	m->sceneW = m_width;
+	m->sceneH = m_height;
+	m->dlssMode = 0;
+	m->jitterX = 0.f;
+	m->jitterY = 0.f;
+	
+	const bool wantDlss = m_sl && m_sl->supportsDlss() && config.video.dxrDlss > 0;
+	const bool wantRr = m_sl && m_sl->supportsRr() && config.video.dxrRr > 0
+	                    && supportsRayTracing() && config.dxrEffectsEnabled();
+	if(!wantDlss && !wantRr) {
+		if(m->sceneColor || m->sceneDepth) {
+			waitGpu();
+			releaseSceneTargets();
+		}
+		if(m_rtao) {
+			m_rtao->resize(m_width, m_height);
+		}
+		return;
+	}
+	
+	int slMode = 0;
+	int rw = m_width;
+	int rh = m_height;
+	if(wantDlss) {
+		slMode = D3D12Streamline::resolveDlssMode(config.video.dxrDlss, m_height);
+		if(slMode > 0) {
+			m_sl->queryOptimalSize(slMode, m_width, m_height, rw, rh);
+			rw = (std::max)(8, (std::min)(rw, m_width));
+			rh = (std::max)(8, (std::min)(rh, m_height));
+		}
+	} else {
+		slMode = 6; // Streamline eDLAA — RR-only stays at display res
+	}
+	m->dlssMode = slMode;
+	if(slMode <= 0) {
+		if(m_rtao) {
+			m_rtao->resize(m_width, m_height);
+		}
+		return;
+	}
+	
+	m->sceneW = rw;
+	m->sceneH = rh;
+	if(!ensureSceneTargets(rw, rh)) {
+		m->sceneW = m_width;
+		m->sceneH = m_height;
+		if(m_rtao) {
+			m_rtao->resize(m_width, m_height);
+		}
+		LogWarning << "D3D12: scene targets failed — native raster";
+		return;
+	}
+	m->worldPass = true;
+	m->sceneUsed = true;
+	m->jitterFrame++;
+	m->jitterX = halton(m->jitterFrame, 2) - 0.5f;
+	m->jitterY = halton(m->jitterFrame, 3) - 0.5f;
+	if(m_rtao) {
+		m_rtao->resize(rw, rh);
+	}
+	static int s_mode = -1, s_rw = 0, s_rh = 0;
+	if(slMode != s_mode || rw != s_rw || rh != s_rh) {
+		const char * name = "Off";
+		switch(slMode) {
+			case 1: name = "Performance"; break;
+			case 2: name = "Balanced"; break;
+			case 3: name = "Quality"; break;
+			case 4: name = "UltraPerformance"; break;
+			case 5: name = "UltraQuality"; break;
+			case 6: name = "DLAA"; break;
+			default: break;
+		}
+		m->dlssReset = true;
+		LogInfo << "Streamline: DLSS " << name << " render=" << rw << "x" << rh
+		        << " output=" << m_width << "x" << m_height
+		        << " sceneRT=" << (m->sceneReady ? "yes" : "no");
+		s_mode = slMode;
+		s_rw = rw;
+		s_rh = rh;
+	}
+}
+
+void D3D12Renderer::applyStreamlineRr() {
+	if(!m_sl) {
+		m->worldPass = false;
+		return;
+	}
+	const bool wantRr = config.video.dxrRr > 0 && m_sl->supportsRr()
+	                    && supportsRayTracing() && config.dxrEffectsEnabled();
+	const bool wantDlss = config.video.dxrDlss > 0 && m_sl->supportsDlss();
+	if(!wantRr && !wantDlss) {
+		m->worldPass = false;
+		return;
+	}
+	if(!beginRecording()) {
+		m->worldPass = false;
+		return;
+	}
+	const int slMode = m->dlssMode > 0 ? m->dlssMode : 6;
+	const bool haveScene = m->sceneReady && m->sceneColor && m->sceneDepth;
+	D3D12Streamline::Frame frame;
+	frame.list = m->list.Get();
+	frame.color = haveScene ? m->sceneColor.Get() : m->backbuffers[m->frame].Get();
+	frame.colorOut = m->backbuffers[m->frame].Get();
+	frame.depth = haveScene ? m->sceneDepth.Get() : m->depth.Get();
+	frame.view = m_view;
+	frame.proj = m_proj;
+	frame.width = haveScene ? m->sceneW : passWidth();
+	frame.height = haveScene ? m->sceneH : passHeight();
+	frame.outputWidth = m_width;
+	frame.outputHeight = m_height;
+	frame.dlssMode = slMode > 0 ? slMode : 6;
+	frame.jitterX = m->jitterX;
+	frame.jitterY = m->jitterY;
+	frame.reset = m->dlssReset;
+	frame.wantRr = wantRr;
+	frame.wantDlss = wantDlss;
+	if(g_camera) {
+		frame.cameraPos = glm::vec3(g_camera->m_pos.x, g_camera->m_pos.y, g_camera->m_pos.z);
+		frame.cameraFar = (std::max)(g_camera->cdepth, 1.f);
+		frame.cameraFov = g_camera->fov();
+	} else {
+		const glm::mat4x4 invView = glm::inverse(m_view);
+		frame.cameraPos = glm::vec3(invView[3]);
+	}
+	frame.cameraNear = kNearW;
+	m_sl->evaluate(frame);
+	m->dlssReset = false;
+	m->worldPass = false;
+	restoreRasterBind();
+	blitSceneDepthToDisplay();
+}
+
 void D3D12Renderer::applyWorldRayEffects() {
 	if(!m_rtao || !m_rtao->supported()) {
+		applyStreamlineRr();
 		return;
 	}
 	const bool aoOn = config.video.rtao > 0;
 	const bool shadowsOn = config.video.dxrShadows > 0;
 	const bool giOn = config.video.dxrGi > 0;
+	const bool transOn = config.video.dxrTransReflections > 0;
+	const bool metalOn = config.video.dxrReflections > 0;
+	const bool contactOn = config.video.dxrContact > 0;
 	if(!aoOn) {
 		if(!m_loggedRtaoOff) {
 			LogInfo << "RTAO disabled";
@@ -2461,45 +2934,64 @@ void D3D12Renderer::applyWorldRayEffects() {
 		}
 		m_loggedGiOn = false;
 	}
-	if(!aoOn && !shadowsOn && !giOn) {
+	if(!transOn && !metalOn) {
+		if(!m_loggedReflOff) {
+			LogInfo << "DXR reflections disabled";
+			m_loggedReflOff = true;
+		}
+		m_loggedReflOn = false;
+	}
+	if(!config.dxrEffectsEnabled()) {
 		m_rtao->beginWorldFrame();
+		applyStreamlineRr();
 		return;
 	}
 	if(!m_rtao->ready()) {
+		applyStreamlineRr();
 		return;
 	}
 	if(!beginRecording()) {
+		m->worldPass = false;
 		return;
 	}
 	
 	const float casterDist = D3D12Rtao::kCasterDistance;
 	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
 	size_t nlights = 0;
-	if(shadowsOn || giOn) {
+	if(shadowsOn || giOn || transOn || metalOn || contactOn) {
 		const glm::vec3 cam(glm::inverse(m_view)[3]);
 		nlights = fillShadowLights(cam, lights, D3D12Rtao::kMaxShadowLights);
 	}
 	static RoomHandle s_roomKey;
 	static const void * s_roomsPtr = nullptr;
 	static Vec3f s_roomCam(0.f);
+	static int s_roomAlpha = -1;
+	static int s_roomMetal = -1;
 	RoomHandle start;
 	if(g_rooms && g_camera) {
 		start = ARX_PORTALS_GetRoomNumForPosition(g_camera->m_pos, RoomPositionForCamera);
 	}
+	const bool includeAlpha = config.video.dxrTransparency >= 2;
+	const bool collectMetal = metalOn;
 	const bool moved = g_camera && fartherThan(s_roomCam, g_camera->m_pos, 1800.f);
-	if(g_rooms != s_roomsPtr || start != s_roomKey || moved) {
+	if(g_rooms != s_roomsPtr || start != s_roomKey || moved
+	   || s_roomAlpha != int(includeAlpha) || s_roomMetal != int(collectMetal)) {
 		m_rtao->clearRooms();
-		collectRoomCasters(m_rtao, casterDist, lights, nlights);
+		collectRoomCasters(m_rtao, casterDist, lights, nlights, includeAlpha, collectMetal);
 		s_roomKey = start;
 		s_roomsPtr = g_rooms;
+		s_roomAlpha = int(includeAlpha);
+		s_roomMetal = int(collectMetal);
 		if(g_camera) {
 			s_roomCam = g_camera->m_pos;
 		}
 		LogInfo << "DXR room cache tris=" << m_rtao->triangleCount()
 		        << " lights=" << nlights;
 	}
-	collectEntityCasters(m_rtao, casterDist, lights, nlights);
+	collectEntityCasters(m_rtao, casterDist, lights, nlights,
+	                     config.video.dxrDebris > 0, includeAlpha, collectMetal);
 	if(m_rtao->triangleCount() == 0) {
+		applyStreamlineRr();
 		return;
 	}
 	if(aoOn && !m_loggedRtaoOn) {
@@ -2520,14 +3012,36 @@ void D3D12Renderer::applyWorldRayEffects() {
 		m_loggedGiOn = true;
 		m_loggedGiOff = false;
 	}
+	if((transOn || metalOn) && !m_loggedReflOn) {
+		LogInfo << "DXR reflections trans=" << config.video.dxrTransReflections
+		        << " metal=" << config.video.dxrReflections;
+		m_loggedReflOn = true;
+		m_loggedReflOff = false;
+	}
 	
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
-	m_rtao->apply(m->list.Get(), m->backbuffers[m->frame].Get(), m->depth.Get(), m_view, m_proj,
-	              m_width, m_height, config.video.rtao, config.video.dxrShadows, config.video.dxrGi,
-	              lights, nlights, std::uint64_t(rtv.ptr));
+	if(usingSceneTargets()) {
+		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
+	} else {
+		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
+	}
+	D3D12Rtao::Settings dxr {};
+	dxr.aoQuality = config.video.rtao;
+	dxr.shadowQuality = config.video.dxrShadows;
+	dxr.giQuality = config.video.dxrGi;
+	dxr.transRefl = config.video.dxrTransReflections;
+	dxr.metalRefl = config.video.dxrReflections;
+	dxr.shadowDenoise = config.video.dxrShadowDenoise;
+	dxr.giDenoise = config.video.dxrGiDenoise;
+	dxr.contact = config.video.dxrContact;
+	dxr.skipTemporal = config.video.dxrRr > 0;
+	ID3D12Resource * color = usingSceneTargets() ? m->sceneColor.Get() : m->backbuffers[m->frame].Get();
+	ID3D12Resource * depth = usingSceneTargets() ? m->sceneDepth.Get() : m->depth.Get();
+	m_rtao->apply(m->list.Get(), color, depth, m_view, m_proj,
+	              passWidth(), passHeight(), dxr, lights, nlights, std::uint64_t(rtv.ptr));
 	restoreRasterBind();
 	m_rtao->beginWorldFrame();
+	applyStreamlineRr();
 }
 
 void D3D12Renderer::showFrame() {
