@@ -4,7 +4,7 @@
 
 # Arx Raymix
 
-**Arx Raymix** é um remaster de *Arx Fatalis* para Windows. Mantém o motor Arx Libertatis e adiciona um backend raster **Direct3D 12**. **Direct3D 9** continua como fallback. Uma janela, um dispositivo, sem ray tracing.
+**Arx Raymix** é um remaster de *Arx Fatalis* para Windows. Mantém o motor Arx Libertatis e adiciona um backend raster **Direct3D 12**, com uma camada **DXR** opcional que traça oclusão ambiente, sombras e um salto de luz indireta sobre esse raster. **Direct3D 9** continua como fallback. Uma janela, um dispositivo.
 
 Este repositório não distribui os dados do jogo. É preciso ter o próprio *Arx Fatalis* (Steam ou GOG).
 
@@ -28,19 +28,20 @@ O histórico upstream não vem neste repositório. [`UPSTREAM.md`](UPSTREAM.md) 
 Veja as barras em [`docs/assets/status.svg`](../assets/status.svg) e o [README em inglês](../../README.md).
 
 - Direct3D 12 é o padrão. Se a criação do dispositivo falhar, a sessão cai para D3D9.
+- **Ray tracing sobre o raster.** Com uma GPU compatível com DXR, o backend D3D12 acrescenta oclusão ambiente traçada, sombras das próprias luzes do nível e um salto de luz indireta. Cada um tem **Desligado / Baixo / Médio / Alto** em Opções → Ray tracing. Os resultados passam por *denoise* e são reaproveitados entre quadros, então ficam estáveis em movimento. Sem suporte a DXR o jogo roda só o raster e registra isso no log.
 - Direct3D 9 é fallback de primeira classe.
 - **Opções → Vídeo** escolhe DirectX 9 ou DirectX 12. A troca é salva e só vale no próximo arranque. A sessão atual mostra a API ativa.
 - Scripts separados para cada backend: [`scripts/README.md`](../../scripts/README.md).
 - **Português (Brasil)** no seletor Opções → Idioma (texto e, com os WAV importados, áudio).
 
-Não é um path tracer. Experiências antigas com RTX Remix não são o produto.
+Não é um path tracer. O mundo é rasterizado e os raios são traçados sobre a imagem pronta; desligar o ray tracing deixa um renderizador completo, não um quebrado. Experiências antigas com RTX Remix não são o produto.
 
 ## Requisitos
 
 | | |
 |---|---|
 | Sistema | Windows 10 ou 11, x64 |
-| GPU | Direct3D 12 para o backend padrão; Direct3D 9 para o fallback |
+| GPU | Direct3D 12 para o backend padrão; Direct3D 9 para o fallback. O ray tracing exige suporte a DXR e se desliga sozinho sem ele |
 | Jogo | Cópia própria de **Arx Fatalis** (Steam ou GOG) |
 | Ferramentas | Visual Studio 2022 ou mais recente (C++ desktop), CMake 3.12+ |
 
@@ -85,6 +86,8 @@ Saia pelo **menu**.
 | [Contribuição](../CONTRIBUTING.md) | [Contribuição](CONTRIBUTING.md) |
 | [Upstream](../UPSTREAM.md) | [Upstream](UPSTREAM.md) |
 | [Scripts](../../scripts/README.md) | (os mesmos scripts) |
+| [Ray tracing](../../arx/src/graphics/dxr/README.md) | (o mesmo README) |
+| [Guia de manutenção](../maintenance/README.md) | (somente em inglês) |
 
 ## Créditos e licença
 
