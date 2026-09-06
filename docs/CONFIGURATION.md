@@ -24,7 +24,7 @@ Launch scripts set `ARX_RENDERER` for that process only. They do not rewrite `cf
 |---|---|
 | `--data-dir` | Arx Fatalis install (`data.pak`). Detected from Steam / GOG when using the scripts |
 | `--user-dir` | Saves, `cfg.ini`, `arx.log`. The scripts use `runtime/user/` under the repo |
-| `data.dirs` next to `arx.exe` | Generated at build time so overlay localisation is found. Do not commit it |
+| `data.dirs` next to `arx.exe` | Generated at build time so overlay localisation and `speech/portugues/` are found. Do not commit it |
 
 `--list-dirs` prints the data directories in priority order.
 

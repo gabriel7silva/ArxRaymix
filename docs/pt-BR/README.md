@@ -31,6 +31,7 @@ Veja as barras em [`docs/assets/status.svg`](../assets/status.svg) e o [README e
 - Direct3D 9 é fallback de primeira classe.
 - **Opções → Vídeo** escolhe DirectX 9 ou DirectX 12. A troca é salva e só vale no próximo arranque. A sessão atual mostra a API ativa.
 - Scripts separados para cada backend: [`scripts/README.md`](../../scripts/README.md).
+- **Português (Brasil)** no seletor Opções → Idioma (texto e, com os WAV importados, áudio).
 
 Não é um path tracer. Experiências antigas com RTX Remix não são o produto.
 

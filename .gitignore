@@ -41,6 +41,9 @@ Screenshots/
 # Personal GPU / upscaler launchers (absolute user paths)
 /scripts/run-dlss5*
 
+# Local PT-BR speech binaries (imported; too large for git)
+/arx/data/core/speech/portugues/*.wav
+
 # CMake may emit this next to the exe; never commit a stray copy
 /data.dirs
 *.dirs
