@@ -1901,6 +1901,10 @@ void ArxGame::renderLevel() {
 	updateLightFlares();
 	renderLightFlares();
 	
+	if(!isInCinematic()) {
+		GRenderer->applyWorldRayEffects();
+	}
+	
 	// Manage Death visual & Launch menu...
 	ARX_PLAYER_Manage_Death();
 

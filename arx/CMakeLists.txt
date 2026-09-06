@@ -1307,7 +1307,10 @@ if(WIN32)
 	list(APPEND ARX_LIBRARIES d3d9 d3d12 dxgi d3dcompiler dxguid)
 	# Compiled outside the custom unity blob: d3d9.h #defines `interface`.
 	set(ARX_D3D9_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d9/D3D9Renderer.cpp")
-	set(ARX_D3D12_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d12/D3D12Renderer.cpp")
+	set(ARX_D3D12_SOURCES
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d12/D3D12Renderer.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/dxr/D3D12Rtao.cpp"
+	)
 	message(STATUS "D3D12 raster enabled (default). D3D9 kept as fallback source.")
 endif()
 
