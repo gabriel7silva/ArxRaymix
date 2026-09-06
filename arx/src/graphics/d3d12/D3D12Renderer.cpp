@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -28,8 +29,10 @@
 #include "graphics/Color.h"
 #include "graphics/Math.h"
 #include "graphics/Vertex.h"
+#include "graphics/data/TextureContainer.h"
 #include "graphics/dxr/D3D12Rtao.h"
 #include "graphics/image/Image.h"
+#include "graphics/texture/Texture.h"
 #include "io/log/Logger.h"
 #include "io/resource/ResourcePath.h"
 #include "platform/Platform.h"
@@ -88,62 +91,246 @@ void emitShadowLight(D3D12Rtao::GpuLight & out, const EERIE_LIGHT * el) {
 	out.x = el->pos.x;
 	out.y = el->pos.y;
 	out.z = el->pos.z;
-	out.intensity = el->intensity;
+	out.intensity = (std::max)(el->intensity, 0.35f);
 	out.fallstart = el->fallstart;
-	out.fallend = el->fallend;
-	out.pad0 = 0.f;
-	out.pad1 = 0.f;
+	out.fallend = (std::max)(el->fallend, el->fallstart + 80.f);
+	const float rad = (std::max)(el->ex_radius, el->fallstart * 0.08f);
+	out.radius = glm::clamp(rad, 8.f, 36.f);
+	out.presence = 1.f;
+	const float m = (std::max)((std::max)(el->rgb.r, el->rgb.g), el->rgb.b);
+	if(m > 1e-3f) {
+		out.r = el->rgb.r / m;
+		out.g = el->rgb.g / m;
+		out.b = el->rgb.b / m;
+	} else {
+		out.r = out.g = out.b = 1.f;
+	}
+	out.pad2 = 0.f;
+}
+
+void describeShadowLight(const char * tag, const EERIE_LIGHT * el, const glm::vec3 & cam) {
+	const bool isStatic = !g_staticLights.empty() && el >= g_staticLights.data()
+	                      && el < g_staticLights.data() + g_staticLights.size();
+	const float dist = glm::distance(Vec3f(cam.x, cam.y, cam.z), el->pos);
+	LogInfo << "DXR light " << tag
+	        << (isStatic ? "static#" : "dyn@")
+	        << (isStatic ? std::to_string(size_t(el - g_staticLights.data()))
+	                     : std::to_string(reinterpret_cast<std::uintptr_t>(el) & 0xffffu))
+	        << " pos=(" << el->pos.x << ", " << el->pos.y << ", " << el->pos.z << ")"
+	        << " dist=" << dist << " intensity=" << el->intensity
+	        << " fall=" << el->fallstart << "/" << el->fallend
+	        << " exists=" << (el->m_exists ? 1 : 0)
+	        << " ignition=" << (el->m_isIgnitionLight ? 1 : 0)
+	        << " lit=" << (el->m_ignitionStatus ? 1 : 0)
+	        << " timed=" << ((el->duration == 0) ? 0 : 1);
 }
 
 size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t maxLights) {
 	struct Cand {
-		float dist2;
-		float power;
+		float score;
 		const EERIE_LIGHT * light;
 	};
-	Cand cands[g_dynamicLightsMax];
+	Cand cands[256];
 	size_t n = 0;
-	for(size_t i = 0; i < g_culledDynamicLightsCount && n < g_dynamicLightsMax; ++i) {
-		const EERIE_LIGHT * el = g_culledDynamicLights[i];
-		if(!el || !el->m_exists || el->intensity <= 0.f || el->fallend <= 0.f) {
-			continue;
+	static const EERIE_LIGHT * kept[D3D12Rtao::kMaxShadowLights] { };
+	static size_t keptN = 0;
+	auto already = [&](const EERIE_LIGHT * el) {
+		for(size_t i = 0; i < n; ++i) {
+			if(cands[i].light == el) {
+				return true;
+			}
 		}
-		if(el->rgb == Color3f::black || (el->extras & EXTRAS_NOCASTED)) {
-			continue;
+		return false;
+	};
+	auto wasKept = [&](const EERIE_LIGHT * el) {
+		for(size_t i = 0; i < keptN; ++i) {
+			if(kept[i] == el) {
+				return true;
+			}
+		}
+		return false;
+	};
+	auto consider = [&](const EERIE_LIGHT * el) {
+		if(!el || !el->m_exists || already(el) || n >= std::size(cands)) {
+			return;
+		}
+		if(el->intensity <= 0.f || el->fallend <= 0.f) {
+			return;
+		}
+		if(el->extras & (EXTRAS_NOCASTED | EXTRAS_OFF)) {
+			return;
 		}
 		if(el == lightHandleGet(torchLightHandle)) {
-			continue;
+			return;
 		}
 		const float dx = el->pos.x - cam.x;
 		const float dy = el->pos.y - cam.y;
 		const float dz = el->pos.z - cam.z;
-		const float dist2 = dx * dx + dy * dy + dz * dz;
-		if(dist2 < 80.f * 80.f) {
+		const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+		const bool keptBefore = wasKept(el);
+		// Only a degenerate light (inside the camera) is skipped. An 80-unit near
+		// cut made the cell torch flap in and out of the set as the idle animation
+		// bobbed the camera, and a 40-unit one still dropped it when the player
+		// walked up to it; the player is not a caster, so a close light is fine.
+		if(dist < 8.f) {
+			return;
+		}
+		const float slack = keptBefore ? 1600.f : 900.f;
+		if(dist > el->fallend + slack) {
+			return;
+		}
+		// Rank by what can reach visible geometry: a light whose shadow range
+		// (fallend * 1.35, matching RayGen) holds the camera comes first, others
+		// fall off with the square of how far outside that range the camera is.
+		// Ranking by raw intensity * fallend let bright far lights evict the cell
+		// torch as soon as the player stepped back from it.
+		const float shadowEnd = el->fallend * 1.35f;
+		const float outside = (std::max)(dist - shadowEnd, 0.f) + 200.f;
+		// A light already casting keeps its slot unless a newcomer clearly beats it.
+		const float bonus = keptBefore ? 1.35f : 1.f;
+		cands[n++] = { el->intensity * el->fallend * bonus / (outside * outside), el };
+	};
+	for(const EERIE_LIGHT & light : g_staticLights) {
+		if(light.m_exists && light.m_ignitionStatus) {
+			consider(&light);
+		}
+	}
+	for(EERIE_LIGHT & light : g_dynamicLights) {
+		if(light.m_exists && !light.m_isIgnitionLight) {
+			consider(&light);
+		}
+	}
+	const size_t take = (std::min)(n, (std::min)(maxLights, D3D12Rtao::kMaxShadowLights));
+	if(take) {
+		std::partial_sort(cands, cands + take, cands + n,
+		                  [](const Cand & a, const Cand & b) { return a.score > b.score; });
+	}
+	// Diagnostics: count set churn (pointers) and parameter churn (pos / falloff /
+	// intensity of the same set) so the log can prove or rule out light flicker.
+	const EERIE_LIGHT * prevKept[D3D12Rtao::kMaxShadowLights] { };
+	const size_t prevN = keptN;
+	std::copy(kept, kept + keptN, prevKept);
+	auto inPrev = [&](const EERIE_LIGHT * el) {
+		return std::find(prevKept, prevKept + prevN, el) != prevKept + prevN;
+	};
+	auto inNew = [&](const EERIE_LIGHT * el) {
+		for(size_t j = 0; j < take; ++j) {
+			if(cands[j].light == el) {
+				return true;
+			}
+		}
+		return false;
+	};
+	size_t added = 0;
+	for(size_t i = 0; i < take; ++i) {
+		added += inPrev(cands[i].light) ? 0 : 1;
+	}
+	size_t removed = 0;
+	for(size_t i = 0; i < prevN; ++i) {
+		removed += inNew(prevKept[i]) ? 0 : 1;
+	}
+	keptN = take;
+	u32 hash = 0;
+	for(size_t i = 0; i < take; ++i) {
+		D3D12Rtao::GpuLight tmp {};
+		emitShadowLight(tmp, cands[i].light);
+		kept[i] = cands[i].light;
+		u32 h = 2166136261u;
+		const unsigned char * bytes = reinterpret_cast<const unsigned char *>(&tmp);
+		for(size_t b = 0; b < sizeof(tmp); ++b) {
+			h = (h ^ bytes[b]) * 16777619u;
+		}
+		hash ^= h; // order independent
+	}
+	static u32 s_hash = 0;
+	static unsigned s_setChanges = 0;
+	static unsigned s_paramChanges = 0;
+	if(added || removed) {
+		s_setChanges++;
+		if(s_setChanges <= 40 || s_setChanges % 120 == 0) {
+			LogInfo << "DXR lights set changed #" << s_setChanges << " n=" << take
+			        << " cands=" << n << " added=" << added << " removed=" << removed;
+			for(size_t i = 0; i < take; ++i) {
+				if(!inPrev(cands[i].light)) {
+					describeShadowLight("+", cands[i].light, cam);
+				}
+			}
+			for(size_t i = 0; i < prevN; ++i) {
+				if(!inNew(prevKept[i])) {
+					describeShadowLight("-", prevKept[i], cam);
+				}
+			}
+		}
+	} else if(hash != s_hash) {
+		s_paramChanges++;
+		if(s_paramChanges <= 40 || s_paramChanges % 120 == 0) {
+			LogInfo << "DXR lights params changed #" << s_paramChanges << " n=" << take;
+		}
+	}
+	s_hash = hash;
+
+	// Presence fade. A light that enters the set ramps its weight 0 → 1 over
+	// kPresenceFrames; one that leaves keeps its slot and ramps down before it is
+	// dropped. Either way a set change is a short fade, never a one-frame pop.
+	struct Slot {
+		const EERIE_LIGHT * light;
+		float presence;
+		bool selected;
+	};
+	static Slot slots[D3D12Rtao::kMaxShadowLights] { };
+	static size_t slotN = 0;
+	constexpr float kPresenceStep = 1.f / 10.f;
+	for(size_t i = 0; i < slotN; ++i) {
+		slots[i].selected = false;
+	}
+	for(size_t i = 0; i < take; ++i) {
+		const EERIE_LIGHT * el = cands[i].light;
+		Slot * slot = nullptr;
+		for(size_t j = 0; j < slotN; ++j) {
+			if(slots[j].light == el) {
+				slot = &slots[j];
+				break;
+			}
+		}
+		if(!slot) {
+			if(slotN < std::size(slots)) {
+				slot = &slots[slotN++];
+			} else {
+				for(size_t j = 0; j < slotN; ++j) {
+					if(!slots[j].selected && (!slot || slots[j].presence < slot->presence)) {
+						slot = &slots[j];
+					}
+				}
+				if(!slot) {
+					continue;
+				}
+			}
+			slot->light = el;
+			slot->presence = 0.f;
+		}
+		slot->selected = true;
+	}
+	size_t live = 0;
+	for(size_t i = 0; i < slotN; ++i) {
+		Slot slot = slots[i];
+		slot.presence = slot.selected ? (std::min)(slot.presence + kPresenceStep, 1.f)
+		                              : (std::max)(slot.presence - kPresenceStep, 0.f);
+		if(!slot.selected && slot.presence <= 0.f) {
 			continue;
 		}
-		cands[n++] = { dist2, el->intensity * el->fallend, el };
+		slots[live++] = slot;
 	}
-	if(n == 0 || maxLights == 0) {
-		return 0;
+	slotN = live;
+	const size_t emit = (std::min)(slotN, maxLights);
+	for(size_t i = 0; i < emit; ++i) {
+		emitShadowLight(out[i], slots[i].light);
+		out[i].presence = slots[i].presence;
 	}
-	std::sort(cands, cands + n, [](const Cand & a, const Cand & b) { return a.dist2 < b.dist2; });
-	const size_t nearN = (std::min)(n, maxLights / 2);
-	for(size_t i = 0; i < nearN; ++i) {
-		emitShadowLight(out[i], cands[i].light);
-	}
-	size_t take = nearN;
-	if(n > nearN && take < maxLights) {
-		std::partial_sort(cands + nearN, cands + nearN + (std::min)(n - nearN, maxLights - take),
-		                  cands + n,
-		                  [](const Cand & a, const Cand & b) { return a.power > b.power; });
-		for(size_t i = nearN; i < n && take < maxLights; ++i) {
-			emitShadowLight(out[take++], cands[i].light);
-		}
-	}
-	return take;
+	return emit;
 }
 
-void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
+void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
+                        const D3D12Rtao::GpuLight * lights, size_t lightCount) {
 	if(!rtao || !g_rooms || !g_tiles || !g_camera) {
 		return;
 	}
@@ -151,8 +338,8 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
 	if(!start || size_t(start) >= g_rooms->rooms.size()) {
 		return;
 	}
-	constexpr size_t kMaxRooms = 8;
-	constexpr int kHops = 2;
+	constexpr size_t kMaxRooms = 16;
+	constexpr int kHops = 3;
 	RoomHandle rooms[kMaxRooms];
 	int hops[kMaxRooms];
 	size_t n = 0;
@@ -170,6 +357,13 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
 		n++;
 	};
 	push(start, 0);
+	if(lights) {
+		for(size_t i = 0; i < lightCount; ++i) {
+			const Vec3f lp(lights[i].x, lights[i].y, lights[i].z);
+			const RoomHandle lit = ARX_PORTALS_GetRoomNumForPosition(lp, RoomPositionForCamera);
+			push(lit, 0);
+		}
+	}
 	for(size_t i = 0; i < n; ++i) {
 		for(PortalHandle portalIndex : g_rooms->rooms[rooms[i]].portals) {
 			if(!portalIndex || size_t(portalIndex) >= g_rooms->portals.size()) {
@@ -184,6 +378,7 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
 		}
 	}
 	SMY_VERTEX verts[3] {};
+	size_t alphaSkipped = 0;
 	for(size_t r = 0; r < n; ++r) {
 		for(const EP_DATA & epd : g_rooms->rooms[rooms[r]].epdata) {
 			auto tile = g_tiles->get(epd.tile);
@@ -192,6 +387,14 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
 			}
 			const EERIEPOLY & ep = tile.polygons()[epd.idx];
 			if(ep.type & (POLY_IGNORE | POLY_NODRAW | POLY_HIDE | POLY_TRANS)) {
+				continue;
+			}
+			// Cutout decals (roots, webs, color-keyed grates) are opaque quads to
+			// the BLAS since rays never see the texture; they self-shadowed to black
+			// and cast solid rectangles. They neither cast nor block until any-hit
+			// alpha testing exists.
+			if(ep.tex && ep.tex->m_pTexture && ep.tex->m_pTexture->hasAlpha()) {
+				alphaSkipped++;
 				continue;
 			}
 			if(fartherThan(ep.center, g_camera->m_pos, casterDist)) {
@@ -209,21 +412,57 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
 			}
 		}
 	}
+	LogInfo << "DXR room casters rooms=" << n << " alphaSkipped=" << alphaSkipped;
 }
 
-void collectEntityCasters(D3D12Rtao * rtao, float casterDist) {
+// Returns a hash of every emitted vertex so the caller can tell whether entity
+// geometry actually moved between frames.
+u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
+                         const D3D12Rtao::GpuLight * lights, size_t lightCount) {
+	u32 hash = 2166136261u;
 	if(!rtao || !g_camera) {
-		return;
+		return hash;
 	}
+	// Per-entity hashes name what actually moved between frames (diagnostic).
+	struct EntityHash {
+		const Entity * entity;
+		u32 hash;
+	};
+	static EntityHash s_prev[512];
+	static size_t s_prevN = 0;
+	static unsigned s_moveEvents = 0;
+	EntityHash cur[512];
+	size_t curN = 0;
+	u32 eh = 0;
+	auto mix = [&](float f) {
+		u32 bits;
+		std::memcpy(&bits, &f, sizeof(bits));
+		hash = (hash ^ bits) * 16777619u;
+		eh = (eh ^ bits) * 16777619u;
+	};
 	SMY_VERTEX verts[3] {};
 	for(const Entity & entity : entities.inScene()) {
+		eh = 2166136261u;
 		if(entity.ioflags & (IO_NOSHADOW | IO_CAMERA | IO_MARKER | IO_GOLD)) {
 			continue;
 		}
 		if(entities.player() && &entity == entities.player()) {
 			continue;
 		}
-		if(!entity.obj || fartherThan(entity.pos, g_camera->m_pos, casterDist)) {
+		if(!entity.obj) {
+			continue;
+		}
+		bool keep = !fartherThan(entity.pos, g_camera->m_pos, casterDist);
+		if(!keep && lights) {
+			for(size_t i = 0; i < lightCount; ++i) {
+				const Vec3f lp(lights[i].x, lights[i].y, lights[i].z);
+				if(!fartherThan(entity.pos, lp, lights[i].fallend + 400.f)) {
+					keep = true;
+					break;
+				}
+			}
+		}
+		if(!keep) {
 			continue;
 		}
 		const EERIE_3DOBJ * obj = entity.obj;
@@ -234,6 +473,12 @@ void collectEntityCasters(D3D12Rtao * rtao, float casterDist) {
 		for(const EERIE_FACE & face : obj->facelist) {
 			if(face.facetype & (POLY_TRANS | POLY_HIDE | POLY_NODRAW | POLY_IGNORE)) {
 				continue;
+			}
+			if(size_t(face.material) < obj->materials.size()) {
+				const TextureContainer * tc = obj->materials[face.material];
+				if(tc && tc->m_pTexture && tc->m_pTexture->hasAlpha()) {
+					continue; // cutout: see collectRoomCasters
+				}
 			}
 			Vec3f p[3];
 			bool ok = true;
@@ -255,9 +500,46 @@ void collectEntityCasters(D3D12Rtao * rtao, float casterDist) {
 			verts[0].p = p[0];
 			verts[1].p = p[1];
 			verts[2].p = p[2];
+			for(const Vec3f & v : p) {
+				mix(v.x);
+				mix(v.y);
+				mix(v.z);
+			}
 			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
 		}
+		if(curN < std::size(cur)) {
+			cur[curN++] = { &entity, eh };
+		}
 	}
+	{
+		std::string moved;
+		unsigned count = 0;
+		for(size_t i = 0; i < curN; ++i) {
+			for(size_t j = 0; j < s_prevN; ++j) {
+				if(s_prev[j].entity != cur[i].entity) {
+					continue;
+				}
+				if(s_prev[j].hash != cur[i].hash) {
+					if(count < 6) {
+						moved += ' ';
+						moved += cur[i].entity->idString();
+					}
+					count++;
+				}
+				break;
+			}
+		}
+		if(count) {
+			s_moveEvents++;
+			if(s_moveEvents <= 12 || s_moveEvents % 3000 == 0) {
+				LogInfo << "DXR entity movers #" << s_moveEvents << " n=" << count
+				        << " tris=" << rtao->dynTriangleCount() << ":" << moved;
+			}
+		}
+		std::copy(cur, cur + curN, s_prev);
+		s_prevN = curN;
+	}
+	return hash;
 }
 
 u32 fogFactorSpecular(float depth, bool enable, float start, float end) {
@@ -1754,7 +2036,7 @@ bool D3D12Renderer::beginRecording() {
 void D3D12Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clearDepth,
                           size_t nrects, Rect * rect) {
 	if((bufferFlags & ColorBuffer) && m_rtao && m_rtao->supported()
-	   && (config.video.rtao > 0 || config.video.dxrShadows)) {
+	   && (config.video.rtao > 0 || config.video.dxrShadows > 0 || config.video.dxrGi > 0)) {
 		m_rtao->beginWorldFrame();
 	}
 	if(!beginRecording()) {
@@ -2156,7 +2438,8 @@ void D3D12Renderer::applyWorldRayEffects() {
 		return;
 	}
 	const bool aoOn = config.video.rtao > 0;
-	const bool shadowsOn = config.video.dxrShadows;
+	const bool shadowsOn = config.video.dxrShadows > 0;
+	const bool giOn = config.video.dxrGi > 0;
 	if(!aoOn) {
 		if(!m_loggedRtaoOff) {
 			LogInfo << "RTAO disabled";
@@ -2171,7 +2454,14 @@ void D3D12Renderer::applyWorldRayEffects() {
 		}
 		m_loggedShadowsOn = false;
 	}
-	if(!aoOn && !shadowsOn) {
+	if(!giOn) {
+		if(!m_loggedGiOff) {
+			LogInfo << "DXR GI disabled";
+			m_loggedGiOff = true;
+		}
+		m_loggedGiOn = false;
+	}
+	if(!aoOn && !shadowsOn && !giOn) {
 		m_rtao->beginWorldFrame();
 		return;
 	}
@@ -2183,29 +2473,34 @@ void D3D12Renderer::applyWorldRayEffects() {
 	}
 	
 	const float casterDist = D3D12Rtao::kCasterDistance;
+	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
+	size_t nlights = 0;
+	if(shadowsOn || giOn) {
+		const glm::vec3 cam(glm::inverse(m_view)[3]);
+		nlights = fillShadowLights(cam, lights, D3D12Rtao::kMaxShadowLights);
+	}
 	static RoomHandle s_roomKey;
 	static const void * s_roomsPtr = nullptr;
+	static Vec3f s_roomCam(0.f);
 	RoomHandle start;
 	if(g_rooms && g_camera) {
 		start = ARX_PORTALS_GetRoomNumForPosition(g_camera->m_pos, RoomPositionForCamera);
 	}
-	if(g_rooms != s_roomsPtr || start != s_roomKey) {
+	const bool moved = g_camera && fartherThan(s_roomCam, g_camera->m_pos, 1800.f);
+	if(g_rooms != s_roomsPtr || start != s_roomKey || moved) {
 		m_rtao->clearRooms();
-		collectRoomCasters(m_rtao, casterDist);
+		collectRoomCasters(m_rtao, casterDist, lights, nlights);
 		s_roomKey = start;
 		s_roomsPtr = g_rooms;
-		LogInfo << "DXR room cache tris=" << m_rtao->triangleCount();
+		if(g_camera) {
+			s_roomCam = g_camera->m_pos;
+		}
+		LogInfo << "DXR room cache tris=" << m_rtao->triangleCount()
+		        << " lights=" << nlights;
 	}
-	collectEntityCasters(m_rtao, casterDist);
+	collectEntityCasters(m_rtao, casterDist, lights, nlights);
 	if(m_rtao->triangleCount() == 0) {
 		return;
-	}
-	
-	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
-	size_t nlights = 0;
-	if(shadowsOn) {
-		const glm::vec3 cam(glm::inverse(m_view)[3]);
-		nlights = fillShadowLights(cam, lights, D3D12Rtao::kMaxShadowLights);
 	}
 	if(aoOn && !m_loggedRtaoOn) {
 		LogInfo << "RTAO enabled quality=" << config.video.rtao
@@ -2214,17 +2509,23 @@ void D3D12Renderer::applyWorldRayEffects() {
 		m_loggedRtaoOff = false;
 	}
 	if(shadowsOn && !m_loggedShadowsOn) {
-		LogInfo << "DXR shadows enabled lights=" << nlights
+		LogInfo << "DXR shadows enabled quality=" << config.video.dxrShadows
+		        << " lights=" << nlights
 		        << " tris=" << m_rtao->triangleCount();
 		m_loggedShadowsOn = true;
 		m_loggedShadowsOff = false;
+	}
+	if(giOn && !m_loggedGiOn) {
+		LogInfo << "DXR GI enabled quality=" << config.video.dxrGi;
+		m_loggedGiOn = true;
+		m_loggedGiOff = false;
 	}
 	
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
 	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
 	m_rtao->apply(m->list.Get(), m->backbuffers[m->frame].Get(), m->depth.Get(), m_view, m_proj,
-	              m_width, m_height, config.video.rtao, shadowsOn, lights, nlights,
-	              std::uint64_t(rtv.ptr));
+	              m_width, m_height, config.video.rtao, config.video.dxrShadows, config.video.dxrGi,
+	              lights, nlights, std::uint64_t(rtv.ptr));
 	restoreRasterBind();
 	m_rtao->beginWorldFrame();
 }
