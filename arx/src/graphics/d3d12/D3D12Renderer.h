@@ -108,6 +108,7 @@ public:
 	void SetFillMode(FillMode mode) override;
 	
 	[[nodiscard]] bool needsHalfPixelOffset() const override { return false; }
+	[[nodiscard]] const char * getGraphicsApiName() const override { return "DirectX 12"; }
 	
 	[[nodiscard]] float getMaxSupportedAnisotropy() const override { return 16.f; }
 	void setMaxAnisotropy(float value) override { m_anisotropy = value; }

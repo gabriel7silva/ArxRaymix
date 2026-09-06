@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 260" width="1000" height="260" role="img" aria-label="Arx Raymix - Arx Fatalis path traced with RTX Remix">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 260" width="1000" height="260" role="img" aria-label="Arx Raymix - Arx Fatalis remastered with Direct3D 12">
   <defs>
     <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#161210"/>
@@ -99,10 +99,10 @@
     <text x="500" y="128" font-size="76" letter-spacing="10" fill="url(#title)">ARX RAYMIX</text>
     <text x="500" y="128" font-size="76" letter-spacing="10" fill="url(#sweep)">ARX RAYMIX</text>
     <text x="500" y="166" font-size="19" letter-spacing="5.5" fill="#c9ac86" opacity="0.95">
-      ARX FATALIS · PATH TRACED WITH RTX REMIX
+      ARX FATALIS · DIRECT3D 12 RASTER REMASTER
     </text>
     <text x="500" y="212" font-size="13" letter-spacing="3" fill="#7d6a58" font-family="Consolas, monospace">
-      1.4 · WINDOWS x64 · D3D9 → dxvk-remix
+      1.4 · WINDOWS x64 · DIRECTX 12 / DIRECTX 9
     </text>
   </g>
 </svg>

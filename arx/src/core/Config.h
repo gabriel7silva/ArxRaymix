@@ -123,7 +123,7 @@ public:
 	// section 'video'
 	struct {
 		
-		//! "auto" | "Raymix" on Windows Raymix builds. OpenGL is not a runtime backend.
+		//! "auto" (Direct3D 12 on Windows), "Direct3D 12" / "DirectX 12", or "Direct3D 9" / "DirectX 9".
 		std::string renderer;
 		
 		bool fullscreen;
