@@ -1,5 +1,5 @@
 /*
- * Arx Raymix — D3D9 renderer (one HWND). System d3d9.dll, or Remix via --remix-dll.
+ * Arx Raymix — D3D9 raster renderer (one HWND, system d3d9.dll).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

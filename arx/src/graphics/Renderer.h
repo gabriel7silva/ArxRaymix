@@ -397,6 +397,9 @@ public:
 	 */
 	[[nodiscard]] virtual bool wantsWorldSpaceEntities() const { return false; }
 	
+	//! D3D9 texel-to-pixel (−0.5 in Draw.cpp). D3D10+/12 apply that shift in the VS instead.
+	[[nodiscard]] virtual bool needsHalfPixelOffset() const { return true; }
+	
 	void setRenderState(RenderState state) noexcept { m_state = state; }
 	[[nodiscard]] RenderState getRenderState() const noexcept { return m_state; }
 	

@@ -933,9 +933,16 @@ public:
 			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
 			slider->valueChanged = [](int pos, std::string_view /* string */) {
 				switch(pos) {
-#if ARX_HAVE_D3D9
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
 					case 0:  config.video.renderer = "auto"; break;
-					case 1:  config.video.renderer = "Raymix"; break;
+					case 1:  config.video.renderer = "Direct3D 12"; break;
+					case 2:  config.video.renderer = "Direct3D 9"; break;
+#elif ARX_HAVE_D3D12
+					case 0:  config.video.renderer = "auto"; break;
+					case 1:  config.video.renderer = "Direct3D 12"; break;
+#elif ARX_HAVE_D3D9
+					case 0:  config.video.renderer = "auto"; break;
+					case 1:  config.video.renderer = "Direct3D 9"; break;
 #else
 					case 0:  config.video.renderer = "auto"; break;
 					case 1:  config.video.renderer = "OpenGL";  break;
@@ -945,12 +952,19 @@ public:
 			};
 			slider->addEntry("Auto-Select");
 			slider->selectLast();
-#if ARX_HAVE_D3D9
-			slider->addEntry("Raymix");
-			if(config.video.renderer == "Raymix" || config.video.renderer == "Remix") {
+#if ARX_HAVE_D3D12
+			slider->addEntry("Direct3D 12");
+			if(config.video.renderer == "Direct3D 12" || config.video.renderer == "D3D12") {
 				slider->selectLast();
 			}
-#else
+#endif
+#if ARX_HAVE_D3D9
+			slider->addEntry("Direct3D 9");
+			if(config.video.renderer == "Direct3D 9" || config.video.renderer == "Raymix"
+			   || config.video.renderer == "Remix") {
+				slider->selectLast();
+			}
+#elif !ARX_HAVE_D3D12
 			slider->addEntry("OpenGL");
 			if(config.video.renderer == "OpenGL") {
 				slider->selectLast();

@@ -148,16 +148,6 @@ public:
 		std::string bufferUpload;
 		std::string extensionOverride;
 		
-		//! RTX Remix backend (WITH_RTX_REMIX). Ignored by the OpenGL renderer.
-		struct {
-			bool pathTracing;        //!< false = 0 bounces, still Remix Present
-			int quality;             //!< 0 Low, 1 Medium, 2 High, 3 Ultra
-			bool dlss;
-			bool rayReconstruction;
-			bool denoiser;
-			bool bloom;
-		} remix;
-		
 	} video;
 	
 	// section 'interface'

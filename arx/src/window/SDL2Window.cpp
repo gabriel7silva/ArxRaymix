@@ -24,6 +24,9 @@
 #include <cstdlib>
 
 #include "Configure.h"
+#if ARX_HAVE_D3D12
+#include "graphics/d3d12/D3D12Renderer.h"
+#endif
 #if ARX_HAVE_D3D9
 #include "graphics/d3d9/D3D9Renderer.h"
 #endif
@@ -78,6 +81,23 @@ struct ARX_SDL_SysWMinfo {
 
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
+#if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
+static bool wantsD3D9Renderer() {
+	if(const char * env = std::getenv("ARX_RENDERER")) {
+		if(boost::iequals(env, "d3d9") || boost::iequals(env, "Direct3D 9")) {
+			return true;
+		}
+		if(boost::iequals(env, "d3d12") || boost::iequals(env, "Direct3D 12")) {
+			return false;
+		}
+	}
+	return config.video.renderer == "Direct3D 9"
+	    || config.video.renderer == "D3D9"
+	    || config.video.renderer == "Raymix"
+	    || config.video.renderer == "Remix";
+}
+#endif
+
 SDL2Window::SDL2Window()
 	: m_window(nullptr)
 	, m_glcontext(nullptr)
@@ -89,7 +109,15 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
-#if ARX_HAVE_D3D9
+#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
+	if(wantsD3D9Renderer()) {
+		m_renderer = new D3D9Renderer;
+	} else {
+		m_renderer = new D3D12Renderer;
+	}
+#elif ARX_HAVE_D3D12
+	m_renderer = new D3D12Renderer;
+#elif ARX_HAVE_D3D9
 	m_renderer = new D3D9Renderer;
 #elif ARX_HAVE_RTX_REMIX
 	m_renderer = new remix::RemixRenderer;
@@ -381,14 +409,14 @@ bool SDL2Window::initialize() {
 	
 	arx_assert(!m_displayModes.empty());
 	
-#if ARX_HAVE_D3D9
+#if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	Uint32 windowFlags = getSDLFlagsForMode(m_mode.resolution, m_fullscreen);
 	windowFlags |= SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
 	
 	m_window = SDL_CreateWindow(m_title.c_str(), x, y, m_mode.resolution.x, m_mode.resolution.y, windowFlags);
 	if(!m_window) {
-		LogError << "Could not create Raymix SDL window: " << SDL_GetError();
+		LogError << "Could not create D3D SDL window: " << SDL_GetError();
 		return false;
 	}
 	
@@ -412,7 +440,7 @@ bool SDL2Window::initialize() {
 	}
 #endif
 	if(!hwnd) {
-		LogError << "D3D9: could not obtain HWND";
+		LogError << "D3D: could not obtain HWND";
 		SDL_DestroyWindow(m_window);
 		m_window = nullptr;
 		return false;
@@ -427,8 +455,28 @@ bool SDL2Window::initialize() {
 	int backbufferH = m_mode.resolution.y;
 	SDL_GetWindowSize(m_window, &backbufferW, &backbufferH);
 	
-	D3D9Renderer * d3d = static_cast<D3D9Renderer *>(m_renderer);
-	if(!d3d->createDevice(hwnd, backbufferW, backbufferH)) {
+	bool created = false;
+#if ARX_HAVE_D3D12
+	if(!wantsD3D9Renderer()) {
+		created = static_cast<D3D12Renderer *>(m_renderer)->createDevice(hwnd, backbufferW, backbufferH);
+		if(!created) {
+			LogWarning << "D3D12 createDevice failed, falling back to D3D9";
+#if ARX_HAVE_D3D9
+			auto * fallback = new D3D9Renderer;
+			fallback->adoptListeners(*m_renderer);
+			delete m_renderer;
+			m_renderer = fallback;
+#endif
+		}
+	}
+#endif
+#if ARX_HAVE_D3D9
+	if(!created) {
+		created = static_cast<D3D9Renderer *>(m_renderer)->createDevice(hwnd, backbufferW, backbufferH);
+	}
+#endif
+	if(!created) {
+		LogError << "Could not create a D3D device";
 		SDL_DestroyWindow(m_window);
 		m_window = nullptr;
 		return false;
@@ -926,7 +974,7 @@ void SDL2Window::processEvents(bool waitForEvent) {
 
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
-#if ARX_HAVE_D3D9
+#if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
 	if(m_renderer) {
 		m_renderer->showFrame();
 	}
