@@ -3,7 +3,7 @@
     Launch Arx Raymix with the Direct3D 12 / DirectX 12 raster renderer.
 
 .DESCRIPTION
-    Starts arx.exe with ARX_RENDERER=d3d12 (raster only, no DXR):
+    Starts arx.exe with ARX_RENDERER=d3d12 (raster; RTAO is an in-game toggle):
 
         arx.exe --user-dir runtime\user --data-dir <Arx Fatalis> [--loadlevel N]
 
@@ -63,7 +63,7 @@ Write-Host "exe    : $exe"
 Write-Host "data   : $DataDir"
 Write-Host "userdir: $userDir"
 Write-Host ''
-Write-Host 'DirectX 12 raster. Log: runtime\user\arx.log'
+Write-Host 'DirectX 12 raster. RTAO: Options -> Ray tracing. Log: runtime\user\arx.log'
 
 $env:ARX_RENDERER = 'd3d12'
 Set-Location $root

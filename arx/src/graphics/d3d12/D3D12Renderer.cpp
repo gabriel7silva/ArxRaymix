@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -19,14 +20,25 @@
 #include <d3d12.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
+#ifdef interface
+#undef interface
+#endif
 
+#include "core/Config.h"
 #include "graphics/Color.h"
 #include "graphics/Math.h"
 #include "graphics/Vertex.h"
+#include "graphics/dxr/D3D12Rtao.h"
 #include "graphics/image/Image.h"
 #include "io/log/Logger.h"
 #include "io/resource/ResourcePath.h"
 #include "platform/Platform.h"
+#include "scene/Light.h"
+#include "game/Camera.h"
+#include "game/EntityManager.h"
+#include "scene/Rooms.h"
+#include "scene/Scene.h"
+#include "scene/Tiles.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -70,6 +82,182 @@ constexpr int kMaxClipVerts = 16;
 
 u32 toPacked(ColorRGBA rgba) {
 	return Color::fromRGBA(rgba).toBGRA().t;
+}
+
+void emitShadowLight(D3D12Rtao::GpuLight & out, const EERIE_LIGHT * el) {
+	out.x = el->pos.x;
+	out.y = el->pos.y;
+	out.z = el->pos.z;
+	out.intensity = el->intensity;
+	out.fallstart = el->fallstart;
+	out.fallend = el->fallend;
+	out.pad0 = 0.f;
+	out.pad1 = 0.f;
+}
+
+size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t maxLights) {
+	struct Cand {
+		float dist2;
+		float power;
+		const EERIE_LIGHT * light;
+	};
+	Cand cands[g_dynamicLightsMax];
+	size_t n = 0;
+	for(size_t i = 0; i < g_culledDynamicLightsCount && n < g_dynamicLightsMax; ++i) {
+		const EERIE_LIGHT * el = g_culledDynamicLights[i];
+		if(!el || !el->m_exists || el->intensity <= 0.f || el->fallend <= 0.f) {
+			continue;
+		}
+		if(el->rgb == Color3f::black || (el->extras & EXTRAS_NOCASTED)) {
+			continue;
+		}
+		if(el == lightHandleGet(torchLightHandle)) {
+			continue;
+		}
+		const float dx = el->pos.x - cam.x;
+		const float dy = el->pos.y - cam.y;
+		const float dz = el->pos.z - cam.z;
+		const float dist2 = dx * dx + dy * dy + dz * dz;
+		if(dist2 < 80.f * 80.f) {
+			continue;
+		}
+		cands[n++] = { dist2, el->intensity * el->fallend, el };
+	}
+	if(n == 0 || maxLights == 0) {
+		return 0;
+	}
+	std::sort(cands, cands + n, [](const Cand & a, const Cand & b) { return a.dist2 < b.dist2; });
+	const size_t nearN = (std::min)(n, maxLights / 2);
+	for(size_t i = 0; i < nearN; ++i) {
+		emitShadowLight(out[i], cands[i].light);
+	}
+	size_t take = nearN;
+	if(n > nearN && take < maxLights) {
+		std::partial_sort(cands + nearN, cands + nearN + (std::min)(n - nearN, maxLights - take),
+		                  cands + n,
+		                  [](const Cand & a, const Cand & b) { return a.power > b.power; });
+		for(size_t i = nearN; i < n && take < maxLights; ++i) {
+			emitShadowLight(out[take++], cands[i].light);
+		}
+	}
+	return take;
+}
+
+void collectRoomCasters(D3D12Rtao * rtao, float casterDist) {
+	if(!rtao || !g_rooms || !g_tiles || !g_camera) {
+		return;
+	}
+	const RoomHandle start = ARX_PORTALS_GetRoomNumForPosition(g_camera->m_pos, RoomPositionForCamera);
+	if(!start || size_t(start) >= g_rooms->rooms.size()) {
+		return;
+	}
+	constexpr size_t kMaxRooms = 8;
+	constexpr int kHops = 2;
+	RoomHandle rooms[kMaxRooms];
+	int hops[kMaxRooms];
+	size_t n = 0;
+	auto push = [&](RoomHandle h, int hop) {
+		if(!h || size_t(h) >= g_rooms->rooms.size() || hop > kHops || n >= kMaxRooms) {
+			return;
+		}
+		for(size_t i = 0; i < n; ++i) {
+			if(rooms[i] == h) {
+				return;
+			}
+		}
+		rooms[n] = h;
+		hops[n] = hop;
+		n++;
+	};
+	push(start, 0);
+	for(size_t i = 0; i < n; ++i) {
+		for(PortalHandle portalIndex : g_rooms->rooms[rooms[i]].portals) {
+			if(!portalIndex || size_t(portalIndex) >= g_rooms->portals.size()) {
+				continue;
+			}
+			const RoomPortal & portal = g_rooms->portals[portalIndex];
+			if(fartherThan(portal.bounds.origin, g_camera->m_pos, casterDist + portal.bounds.radius)) {
+				continue;
+			}
+			push(portal.room0, hops[i] + 1);
+			push(portal.room1, hops[i] + 1);
+		}
+	}
+	SMY_VERTEX verts[3] {};
+	for(size_t r = 0; r < n; ++r) {
+		for(const EP_DATA & epd : g_rooms->rooms[rooms[r]].epdata) {
+			auto tile = g_tiles->get(epd.tile);
+			if(!tile.valid() || epd.idx < 0 || size_t(epd.idx) >= tile.polygons().size()) {
+				continue;
+			}
+			const EERIEPOLY & ep = tile.polygons()[epd.idx];
+			if(ep.type & (POLY_IGNORE | POLY_NODRAW | POLY_HIDE | POLY_TRANS)) {
+				continue;
+			}
+			if(fartherThan(ep.center, g_camera->m_pos, casterDist)) {
+				continue;
+			}
+			verts[0].p = ep.v[0].p;
+			verts[1].p = ep.v[1].p;
+			verts[2].p = ep.v[2].p;
+			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+			if(ep.type & POLY_QUAD) {
+				verts[0].p = ep.v[3].p;
+				verts[1].p = ep.v[2].p;
+				verts[2].p = ep.v[1].p;
+				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+			}
+		}
+	}
+}
+
+void collectEntityCasters(D3D12Rtao * rtao, float casterDist) {
+	if(!rtao || !g_camera) {
+		return;
+	}
+	SMY_VERTEX verts[3] {};
+	for(const Entity & entity : entities.inScene()) {
+		if(entity.ioflags & (IO_NOSHADOW | IO_CAMERA | IO_MARKER | IO_GOLD)) {
+			continue;
+		}
+		if(entities.player() && &entity == entities.player()) {
+			continue;
+		}
+		if(!entity.obj || fartherThan(entity.pos, g_camera->m_pos, casterDist)) {
+			continue;
+		}
+		const EERIE_3DOBJ * obj = entity.obj;
+		const bool haveWorld = !obj->vertexlist.empty()
+		                       && obj->vertexWorldPositions.size() == obj->vertexlist.size();
+		const glm::quat rot = toQuaternion(entity.angle);
+		const float scale = (entity.scale > 0.f) ? entity.scale : 1.f;
+		for(const EERIE_FACE & face : obj->facelist) {
+			if(face.facetype & (POLY_TRANS | POLY_HIDE | POLY_NODRAW | POLY_IGNORE)) {
+				continue;
+			}
+			Vec3f p[3];
+			bool ok = true;
+			for(int i = 0; i < 3; ++i) {
+				const VertexId id = face.vid[i];
+				if(!id || size_t(id) >= obj->vertexlist.size()) {
+					ok = false;
+					break;
+				}
+				if(haveWorld) {
+					p[i] = obj->vertexWorldPositions[id].v;
+				} else {
+					p[i] = entity.pos + (rot * obj->vertexlist[id].v) * scale;
+				}
+			}
+			if(!ok) {
+				continue;
+			}
+			verts[0].p = p[0];
+			verts[1].p = p[1];
+			verts[2].p = p[2];
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+		}
+	}
 }
 
 u32 fogFactorSpecular(float depth, bool enable, float start, float end) {
@@ -1000,6 +1188,8 @@ D3D12Renderer::~D3D12Renderer() {
 		m_initialized = false;
 	}
 	releaseDevice();
+	delete m_rtao;
+	m_rtao = nullptr;
 	delete m;
 	m = nullptr;
 }
@@ -1315,11 +1505,11 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 	depthDesc.Height = UINT(height);
 	depthDesc.DepthOrArraySize = 1;
 	depthDesc.MipLevels = 1;
-	depthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	depthDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
 	depthDesc.SampleDesc.Count = 1;
 	depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 	D3D12_CLEAR_VALUE clear {};
-	clear.Format = depthDesc.Format;
+	clear.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
 	clear.DepthStencil.Depth = 1.f;
 	D3D12_HEAP_PROPERTIES heap {};
 	heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -1329,10 +1519,16 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 		LogError << "D3D12: depth buffer failed";
 		return;
 	}
-	m->device->CreateDepthStencilView(m->depth.Get(), nullptr,
+	D3D12_DEPTH_STENCIL_VIEW_DESC dsv {};
+	dsv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+	m->device->CreateDepthStencilView(m->depth.Get(), &dsv,
 	                                  m->dsvHeap->GetCPUDescriptorHandleForHeapStart());
 	m->frame = m->swapchain->GetCurrentBackBufferIndex();
 	m->inPresentState = true;
+	if(m_rtao) {
+		m_rtao->resize(width, height);
+	}
 }
 
 bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
@@ -1398,7 +1594,16 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	char name[128] {};
 	WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, name, int(sizeof(name)), nullptr, nullptr);
 	LogInfo << "Using D3D12 renderer " << width << "x" << height
-	        << " (raster only, adapter=" << name << ")";
+	        << " (raster + optional RTAO, adapter=" << name << ")";
+	
+	delete m_rtao;
+	m_rtao = new D3D12Rtao();
+	m_rtao->init(m->device.Get());
+	m_rtao->resize(width, height);
+	m_loggedRtaoOff = false;
+	m_loggedRtaoOn = false;
+	m_loggedShadowsOff = false;
+	m_loggedShadowsOn = false;
 	return true;
 }
 
@@ -1407,6 +1612,9 @@ void D3D12Renderer::releaseDevice() {
 		return;
 	}
 	waitGpu();
+	if(m_rtao) {
+		m_rtao->shutdown();
+	}
 	if(m->uploadMapped && m->upload) {
 		m->upload->Unmap(0, nullptr);
 		m->uploadMapped = nullptr;
@@ -1545,6 +1753,10 @@ bool D3D12Renderer::beginRecording() {
 
 void D3D12Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clearDepth,
                           size_t nrects, Rect * rect) {
+	if((bufferFlags & ColorBuffer) && m_rtao && m_rtao->supported()
+	   && (config.video.rtao > 0 || config.video.dxrShadows)) {
+		m_rtao->beginWorldFrame();
+	}
 	if(!beginRecording()) {
 		return;
 	}
@@ -1797,10 +2009,29 @@ void D3D12Renderer::drawTextured(Primitive primitive, const TexturedVertex * ver
 	drawGpuVerts(primitive, converted.data(), sizeof(GpuVert), converted.size());
 }
 
+void D3D12Renderer::collectWorld(Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
+                                 const unsigned short * indices, size_t nindices) {
+	ARX_UNUSED(primitive);
+	ARX_UNUSED(vertices);
+	ARX_UNUSED(nvertices);
+	ARX_UNUSED(indices);
+	ARX_UNUSED(nindices);
+}
+
+void D3D12Renderer::collectWorld(Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
+                                 const unsigned short * indices, size_t nindices) {
+	ARX_UNUSED(primitive);
+	ARX_UNUSED(vertices);
+	ARX_UNUSED(nvertices);
+	ARX_UNUSED(indices);
+	ARX_UNUSED(nindices);
+}
+
 void D3D12Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * vertices, size_t count) {
 	if(!vertices || count == 0) {
 		return;
 	}
+	collectWorld(primitive, vertices, count, nullptr, 0);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
@@ -1814,6 +2045,7 @@ void D3D12Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * v
 	if(!vertices || count == 0) {
 		return;
 	}
+	collectWorld(primitive, vertices, count, nullptr, 0);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
@@ -1827,6 +2059,7 @@ void D3D12Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX * ver
 	if(!vertices || !indices || nvertices == 0 || nindices == 0) {
 		return;
 	}
+	collectWorld(primitive, vertices, nvertices, indices, nindices);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
@@ -1841,6 +2074,7 @@ void D3D12Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX3 * ve
 	if(!vertices || !indices || nvertices == 0 || nindices == 0) {
 		return;
 	}
+	collectWorld(primitive, vertices, nvertices, indices, nindices);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
@@ -1891,6 +2125,108 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 	ARX_UNUSED(width);
 	ARX_UNUSED(height);
 	return false;
+}
+
+bool D3D12Renderer::supportsRayTracing() const {
+	return m_rtao && m_rtao->supported();
+}
+
+void D3D12Renderer::restoreRasterBind() {
+	if(!m->list || !m->backbuffers[m->frame]) {
+		return;
+	}
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	m->list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+	D3D12_VIEWPORT vp {};
+	vp.Width = float(m_width);
+	vp.Height = float(m_height);
+	vp.MaxDepth = 1.f;
+	m->list->RSSetViewports(1, &vp);
+	D3D12_RECT sc { 0, 0, LONG(m_width), LONG(m_height) };
+	m->list->RSSetScissorRects(1, &sc);
+	ID3D12DescriptorHeap * heaps[] = { m->srvHeap.Get(), m->samplerHeap.Get() };
+	m->list->SetDescriptorHeaps(2, heaps);
+	m->list->SetGraphicsRootSignature(m->root.Get());
+}
+
+void D3D12Renderer::applyWorldRayEffects() {
+	if(!m_rtao || !m_rtao->supported()) {
+		return;
+	}
+	const bool aoOn = config.video.rtao > 0;
+	const bool shadowsOn = config.video.dxrShadows;
+	if(!aoOn) {
+		if(!m_loggedRtaoOff) {
+			LogInfo << "RTAO disabled";
+			m_loggedRtaoOff = true;
+		}
+		m_loggedRtaoOn = false;
+	}
+	if(!shadowsOn) {
+		if(!m_loggedShadowsOff) {
+			LogInfo << "DXR shadows disabled";
+			m_loggedShadowsOff = true;
+		}
+		m_loggedShadowsOn = false;
+	}
+	if(!aoOn && !shadowsOn) {
+		m_rtao->beginWorldFrame();
+		return;
+	}
+	if(!m_rtao->ready()) {
+		return;
+	}
+	if(!beginRecording()) {
+		return;
+	}
+	
+	const float casterDist = D3D12Rtao::kCasterDistance;
+	static RoomHandle s_roomKey;
+	static const void * s_roomsPtr = nullptr;
+	RoomHandle start;
+	if(g_rooms && g_camera) {
+		start = ARX_PORTALS_GetRoomNumForPosition(g_camera->m_pos, RoomPositionForCamera);
+	}
+	if(g_rooms != s_roomsPtr || start != s_roomKey) {
+		m_rtao->clearRooms();
+		collectRoomCasters(m_rtao, casterDist);
+		s_roomKey = start;
+		s_roomsPtr = g_rooms;
+		LogInfo << "DXR room cache tris=" << m_rtao->triangleCount();
+	}
+	collectEntityCasters(m_rtao, casterDist);
+	if(m_rtao->triangleCount() == 0) {
+		return;
+	}
+	
+	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
+	size_t nlights = 0;
+	if(shadowsOn) {
+		const glm::vec3 cam(glm::inverse(m_view)[3]);
+		nlights = fillShadowLights(cam, lights, D3D12Rtao::kMaxShadowLights);
+	}
+	if(aoOn && !m_loggedRtaoOn) {
+		LogInfo << "RTAO enabled quality=" << config.video.rtao
+		        << " tris=" << m_rtao->triangleCount();
+		m_loggedRtaoOn = true;
+		m_loggedRtaoOff = false;
+	}
+	if(shadowsOn && !m_loggedShadowsOn) {
+		LogInfo << "DXR shadows enabled lights=" << nlights
+		        << " tris=" << m_rtao->triangleCount();
+		m_loggedShadowsOn = true;
+		m_loggedShadowsOff = false;
+	}
+	
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
+	m_rtao->apply(m->list.Get(), m->backbuffers[m->frame].Get(), m->depth.Get(), m_view, m_proj,
+	              m_width, m_height, config.video.rtao, shadowsOn, lights, nlights,
+	              std::uint64_t(rtv.ptr));
+	restoreRasterBind();
+	m_rtao->beginWorldFrame();
 }
 
 void D3D12Renderer::showFrame() {

@@ -42,6 +42,8 @@ OpenGL é o caminho fora do Windows. No Windows não é escolha em tempo de exec
 
 `runtime/user/` é local. Não faz parte da árvore pública.
 
+AO por raios (opção A) e sombras DXR posteriores estão em [`arx/src/graphics/dxr/`](../../arx/src/graphics/dxr/README.md). O RTAO compila com o D3D12 e liga-se em **Opções → Ray tracing**.
+
 ## Fontes Remix antigas
 
 `arx/src/graphics/remix/` e `arx/third_party/rtx-remix/` restam de um experimento. `ARX_HAVE_RTX_REMIX` não está ligado. Não é o caminho de lançamento.

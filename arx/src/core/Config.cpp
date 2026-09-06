@@ -90,7 +90,8 @@ constexpr const int
 	migration = Config::OriginalAssets,
 	quicksaveSlots = 3,
 	bufferSize = 0,
-	quickLevelTransition = JumpToChangeLevel;
+	quickLevelTransition = JumpToChangeLevel,
+	rtao = 0;
 
 constexpr const bool
 	fullscreen = true,
@@ -113,7 +114,8 @@ constexpr const bool
 	rawMouseInput = true,
 	borderTurning = true,
 	useAltRuneRecognition = true,
-	improvedBowAim = true;
+	improvedBowAim = true,
+	dxrShadows = false;
 
 #ifdef ARX_DEBUG
 const bool allowConsole = true;
@@ -224,7 +226,9 @@ constexpr const std::string_view
 	alphaCutoutAntialiasing = "alpha_cutout_antialiasing",
 	bufferSize = "buffer_size",
 	bufferUpload = "buffer_upload",
-	extensionOverride = "extension_override";
+	extensionOverride = "extension_override",
+	rtao = "rtao",
+	dxrShadows = "dxr_shadows";
 
 // Interface options
 constexpr const std::string_view
@@ -484,6 +488,8 @@ bool Config::save() {
 	writer.writeKey(Key::bufferSize, video.bufferSize);
 	writer.writeKey(Key::bufferUpload, video.bufferUpload);
 	writer.writeKey(Key::extensionOverride, video.extensionOverride);
+	writer.writeKey(Key::rtao, video.rtao);
+	writer.writeKey(Key::dxrShadows, video.dxrShadows);
 	
 	// interface
 	writer.beginSection(Section::Interface);
@@ -618,6 +624,8 @@ bool Config::init(const fs::path & file) {
 	video.bufferSize = std::max(reader.getKey(Section::Video, Key::bufferSize, Default::bufferSize), 0);
 	video.bufferUpload = reader.getKey(Section::Video, Key::bufferUpload, Default::bufferUpload);
 	video.extensionOverride = reader.getKey(Section::Video, Key::extensionOverride, Default::extensionOverride);
+	video.rtao = glm::clamp(reader.getKey(Section::Video, Key::rtao, Default::rtao), 0, 2);
+	video.dxrShadows = reader.getKey(Section::Video, Key::dxrShadows, Default::dxrShadows);
 	
 	// Get interface settings
 	bool oldCrosshair = reader.getKey(Section::Video, Key::showCrosshair, Default::showCrosshair);

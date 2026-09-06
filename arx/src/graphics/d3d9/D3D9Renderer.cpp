@@ -1734,6 +1734,7 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 #endif
 	LogInfo << "Using D3D9 renderer " << width << "x" << height
 	        << " (system d3d9.dll, 2D+3D raster, one HWND, hwFog=0)";
+	LogInfo << "Ray tracing unavailable (D3D9)";
 	return true;
 }
 
