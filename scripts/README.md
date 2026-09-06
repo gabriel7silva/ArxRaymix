@@ -9,6 +9,7 @@ These scripts start a built `arx.exe` against your own Arx Fatalis install. They
 | `run-d3d12.ps1` / `run-dx12.ps1` | Direct3D 12 / DirectX 12 (default renderer) |
 | `run-d3d9.ps1` / `run-dx9.ps1` | Direct3D 9 / DirectX 9 (fallback) |
 | `Find-ArxFatalis.ps1` | Shared Steam / GOG lookup (dot-sourced, not launched) |
+| `import-speech-portugues.ps1` | Copy PT-BR speech WAVs into `arx/data/core/speech/portugues/` |
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-d3d12.ps1

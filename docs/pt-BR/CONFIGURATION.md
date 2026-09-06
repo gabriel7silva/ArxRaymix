@@ -26,7 +26,7 @@ Os scripts de lançamento definem `ARX_RENDERER` só para aquele processo. Não 
 |---|---|
 | `--data-dir` | Instalação do Arx Fatalis (`data.pak`) |
 | `--user-dir` | Saves, `cfg.ini`, `arx.log`. Os scripts usam `runtime/user/` no repositório |
-| `data.dirs` ao lado do `arx.exe` | Gerado no build. Não commitar |
+| `data.dirs` ao lado do `arx.exe` | Gerado no build para achar o overlay de texto e `speech/portugues/`. Não commitar |
 
 `--list-dirs` lista os diretórios de dados por prioridade.
 

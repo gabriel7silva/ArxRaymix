@@ -236,6 +236,41 @@ void loadLocalisation(PakDirectory * dir, std::string_view name) {
 	
 }
 
+bool looksLikeUtf16Le(std::string_view data) {
+	if(data.size() >= 2 && u8(data[0]) == 0xff && u8(data[1]) == 0xfe) {
+		return true;
+	}
+	// Original loc.pak files are UTF-16 LE without relying on a BOM: '[' → 5B 00
+	return data.size() >= 2 && data[1] == '\0';
+}
+
+bool loadUtextLanguage(std::string_view language, bool merge) {
+	
+	const std::string filename = (std::string("localisation/utext_") += language) += ".ini";
+	PakFile * file = g_resources->getFile(filename);
+	if(!file) {
+		return false;
+	}
+	
+	std::string buffer = file->read();
+	if(buffer.empty()) {
+		LogWarning << "Error reading localisation file " << filename;
+		return false;
+	}
+	
+	if(looksLikeUtf16Le(buffer)) {
+		buffer = util::convert<util::UTF16LE, util::UTF8>(buffer);
+	}
+	
+	LogInfo << "Loading: utext_" << language << ".ini";
+	
+	if(!g_localisation.read(buffer, merge)) {
+		LogWarning << "Error parsing localisation file " << filename;
+	}
+	
+	return true;
+}
+
 void loadLocalisations() {
 	
 	const std::string_view suffix = ".ini";
@@ -372,21 +407,14 @@ bool initLocalisation() {
 	
 	arx_assert(!config.interface.language.empty());
 	
-	std::string buffer = file->read();
-	if(buffer.empty()) {
-		return false;
-	}
-	
-	LogDebug("Loaded localisation file of size " << buffer.size());
-	buffer = util::convert<util::UTF16LE, util::UTF8>(buffer);
-	LogDebug("Converted to UTF8 string of length " << buffer.size());
-	
-	if(!buffer.empty()) {
-		LogDebug("Preparing to parse localisation file");
-		if(!g_localisation.read(buffer)) {
-			LogWarning << "Error parsing localisation file localisation/utext_"
-			           << config.interface.language << ".ini";
+	// English first so a partial translation keeps English instead of raw keys.
+	if(config.interface.language != "english") {
+		loadUtextLanguage("english", false);
+		if(!loadUtextLanguage(config.interface.language, true)) {
+			return false;
 		}
+	} else if(!loadUtextLanguage("english", false)) {
+		return false;
 	}
 	
 	loadLocalisations();
