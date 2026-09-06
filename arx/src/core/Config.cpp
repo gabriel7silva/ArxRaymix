@@ -90,8 +90,7 @@ constexpr const int
 	migration = Config::OriginalAssets,
 	quicksaveSlots = 3,
 	bufferSize = 0,
-	quickLevelTransition = JumpToChangeLevel,
-	remixQuality = 2;
+	quickLevelTransition = JumpToChangeLevel;
 
 constexpr const bool
 	fullscreen = true,
@@ -114,12 +113,7 @@ constexpr const bool
 	rawMouseInput = true,
 	borderTurning = true,
 	useAltRuneRecognition = true,
-	improvedBowAim = true,
-	remixPathTracing = true,
-	remixDlss = false,
-	remixRayReconstruction = false,
-	remixDenoiser = true,
-	remixBloom = false;
+	improvedBowAim = true;
 
 #ifdef ARX_DEBUG
 const bool allowConsole = true;
@@ -230,13 +224,7 @@ constexpr const std::string_view
 	alphaCutoutAntialiasing = "alpha_cutout_antialiasing",
 	bufferSize = "buffer_size",
 	bufferUpload = "buffer_upload",
-	extensionOverride = "extension_override",
-	remixPathTracing = "remix_path_tracing",
-	remixQuality = "remix_quality",
-	remixDlss = "remix_dlss",
-	remixRayReconstruction = "remix_ray_reconstruction",
-	remixDenoiser = "remix_denoiser",
-	remixBloom = "remix_bloom";
+	extensionOverride = "extension_override";
 
 // Interface options
 constexpr const std::string_view
@@ -496,12 +484,6 @@ bool Config::save() {
 	writer.writeKey(Key::bufferSize, video.bufferSize);
 	writer.writeKey(Key::bufferUpload, video.bufferUpload);
 	writer.writeKey(Key::extensionOverride, video.extensionOverride);
-	writer.writeKey(Key::remixPathTracing, video.remix.pathTracing);
-	writer.writeKey(Key::remixQuality, video.remix.quality);
-	writer.writeKey(Key::remixDlss, video.remix.dlss);
-	writer.writeKey(Key::remixRayReconstruction, video.remix.rayReconstruction);
-	writer.writeKey(Key::remixDenoiser, video.remix.denoiser);
-	writer.writeKey(Key::remixBloom, video.remix.bloom);
 	
 	// interface
 	writer.beginSection(Section::Interface);
@@ -636,12 +618,6 @@ bool Config::init(const fs::path & file) {
 	video.bufferSize = std::max(reader.getKey(Section::Video, Key::bufferSize, Default::bufferSize), 0);
 	video.bufferUpload = reader.getKey(Section::Video, Key::bufferUpload, Default::bufferUpload);
 	video.extensionOverride = reader.getKey(Section::Video, Key::extensionOverride, Default::extensionOverride);
-	video.remix.pathTracing = reader.getKey(Section::Video, Key::remixPathTracing, Default::remixPathTracing);
-	video.remix.quality = glm::clamp(reader.getKey(Section::Video, Key::remixQuality, Default::remixQuality), 0, 3);
-	video.remix.dlss = reader.getKey(Section::Video, Key::remixDlss, Default::remixDlss);
-	video.remix.rayReconstruction = reader.getKey(Section::Video, Key::remixRayReconstruction, Default::remixRayReconstruction);
-	video.remix.denoiser = reader.getKey(Section::Video, Key::remixDenoiser, Default::remixDenoiser);
-	video.remix.bloom = reader.getKey(Section::Video, Key::remixBloom, Default::remixBloom);
 	
 	// Get interface settings
 	bool oldCrosshair = reader.getKey(Section::Video, Key::showCrosshair, Default::showCrosshair);

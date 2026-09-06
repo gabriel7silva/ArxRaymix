@@ -1,26 +1,26 @@
 <#
 .SYNOPSIS
-    Launch Arx Raymix with the system Direct3D 9 renderer.
+    Launch Arx Raymix with the Direct3D 12 raster renderer. No ray tracing.
 
 .DESCRIPTION
-    Resolves the two things a run needs and checks each one before starting:
+    Starts arx.exe with ARX_RENDERER=d3d12 (raster only, no DXR / Remix / PT):
 
         arx.exe --user-dir runtime\user --data-dir <Arx Fatalis> [--loadlevel N]
 
-    The Arx Fatalis install is located automatically from the Steam and GOG
-    registry entries. Pass -DataDir to override that, for a portable install or
-    a second copy.
+    The Arx Fatalis install is located from the Steam and GOG registry entries.
+    Pass -DataDir to override. Logs go to runtime\user\arx.log.
 
-    The log is kept in runtime\user\ instead of the user's Saved Games folder, so
-    a run is self-contained and can be thrown away.
+    Expected log line:
+      Using D3D12 renderer WxH (raster only, adapter=...)
 
 .PARAMETER DataDir
     Arx Fatalis install directory (the one containing data.pak). Detected from
     Steam and GOG when omitted.
 
 .EXAMPLE
-    .\scripts\run-remix-scene.ps1 -LoadLevel 1
-    .\scripts\run-remix-scene.ps1 -DataDir 'D:\Games\Arx Fatalis'
+    .\scripts\run-d3d12.ps1
+    .\scripts\run-d3d12.ps1 -LoadLevel 1
+    .\scripts\run-d3d12.ps1 -DataDir 'D:\Games\Arx Fatalis'
 #>
 [CmdletBinding()]
 param(
@@ -31,10 +31,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# [IO.Path]::Combine, not Join-Path: Join-Path resolves the drive, so a path on a
-# drive that does not exist - a typo in -DataDir, or a Steam library on a disk
-# that is not plugged in - throws, and $ErrorActionPreference = 'Stop' turns that
-# into a stack trace instead of the message at the bottom of this script.
 function Join-PathLiteral {
     param([string]$Base, [string]$Leaf)
     return [System.IO.Path]::Combine($Base, $Leaf)
@@ -47,8 +43,6 @@ function Test-ArxDataDir {
 }
 
 function Get-SteamLibraryRoots {
-    # SteamPath is written with forward slashes; Join-Path copes, but normalise
-    # it anyway so error messages read like Windows paths.
     try {
         $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath
     } catch {
@@ -59,8 +53,6 @@ function Get-SteamLibraryRoots {
 
     $roots = @($steam)
 
-    # Extra library folders live in a VDF file. Rather than parse VDF properly,
-    # pull out the quoted "path" values - the only ones that look like paths.
     $vdf = Join-PathLiteral $steam 'steamapps\libraryfolders.vdf'
     if (Test-Path -LiteralPath $vdf -ErrorAction SilentlyContinue) {
         foreach ($line in Get-Content $vdf) {
@@ -111,8 +103,7 @@ if (-not (Test-ArxDataDir $DataDir)) {
 
 New-Item -ItemType Directory -Force -Path $userDir | Out-Null
 
-$arguments = @('--user-dir', $userDir)
-$arguments += @('--data-dir', $DataDir)
+$arguments = @('--user-dir', $userDir, '--data-dir', $DataDir)
 if ($LoadLevel -ne 0) {
     $arguments += @('--loadlevel', "$LoadLevel")
 }
@@ -121,7 +112,8 @@ Write-Host "exe    : $exe"
 Write-Host "data   : $DataDir"
 Write-Host "userdir: $userDir"
 Write-Host ''
-Write-Host 'Direct3D 9 raster. Log: runtime\user\arx.log'
+Write-Host 'Direct3D 12 raster only (no RT / Remix). Log: runtime\user\arx.log'
 
+$env:ARX_RENDERER = 'd3d12'
 Set-Location $root
 & $exe @arguments

@@ -61,6 +61,12 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 CircularVertexBuffer<TexturedVertex> * pDynamicVertexBuffer_TLVERTEX;
 
+static void applyBitmapPixelOffset(Rectf & rect) {
+	if(!GRenderer || GRenderer->needsHalfPixelOffset()) {
+		rect.move(-.5f, -.5f);
+	}
+}
+
 void EERIEDRAWPRIM(Renderer::Primitive primitive, const TexturedVertex * vertices, size_t count, bool nocount) {
 	
 	if(!nocount) {
@@ -216,7 +222,7 @@ void EERIEDrawSprite(const Vec3f & in, float siz, TextureContainer * tex, Color 
 static void CreateBitmap(TexturedQuad & s, Rectf rect, float z, TextureContainer * tex,
                          Color color) {
 	
-	rect.move(-.5f, -.5f);
+	applyBitmapPixelOffset(rect);
 	
 	Vec2f uv = (tex) ? tex->uv : Vec2f(0.f);
 	ColorRGBA col = color.toRGBA();
@@ -243,7 +249,7 @@ void EERIEDrawBitmap(const Rectf & rect, float z, TextureContainer * tex, Color 
 void EERIEDrawBitmap_uv(Rectf rect, float z, TextureContainer * tex,
                         Color color, float u0, float v0, float u1, float v1) {
 	
-	rect.move(-.5f, -.5f);
+	applyBitmapPixelOffset(rect);
 	
 	Vec2f uv = (tex) ? tex->uv : Vec2f(1.f);
 	u0 *= uv.x, u1 *= uv.x, v0 *= uv.y, v1 *= uv.y;
@@ -260,7 +266,7 @@ void EERIEDrawBitmap_uv(Rectf rect, float z, TextureContainer * tex,
 void EERIEDrawBitmapUVs(Rectf rect, float z, TextureContainer * tex,
                         Color color, Vec2f uv0, Vec2f uv1, Vec2f uv2, Vec2f uv3) {
 	
-	rect.move(-.5f, -.5f);
+	applyBitmapPixelOffset(rect);
 	
 	ColorRGBA col = color.toRGBA();
 	TexturedVertex v[4];
@@ -273,7 +279,7 @@ void EERIEDrawBitmapUVs(Rectf rect, float z, TextureContainer * tex,
 
 void EERIEDrawBitmap2DecalY(Rectf rect, float z, TextureContainer * tex, Color color, float _fDeltaY) {
 	
-	rect.move(-.5f, -.5f);
+	applyBitmapPixelOffset(rect);
 	
 	rect.top = rect.top + _fDeltaY * rect.height();
 	

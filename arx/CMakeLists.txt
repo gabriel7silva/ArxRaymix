@@ -77,11 +77,6 @@ option(INSTALL_SCRIPTS "Install the data install script" ON)
 # Optional dependencies
 option(USE_OPENAL "Build the OpenAL audio backend" ON)
 option(USE_OPENGL "Build the OpenGL renderer backend" ON)
-set(default_WITH_RTX_REMIX OFF)
-if(WIN32)
-	set(default_WITH_RTX_REMIX OFF)
-endif()
-option(WITH_RTX_REMIX "Build RTX Remix SDK probe integration (Windows x64)" ${default_WITH_RTX_REMIX})
 option(USE_WINHTTP "Use the native WinHTTP API instead of CURL on Windows" ON)
 option(USE_NATIVE_FS "Use the native filesystem backend directly instead of boost" ON)
 set(default_USE_X11 OFF)
@@ -1306,30 +1301,14 @@ else()
 	unset(ARX_HAVE_SDL2)
 endif()
 
-if(WITH_RTX_REMIX)
-	if(NOT WIN32)
-		message(FATAL_ERROR "WITH_RTX_REMIX requires Windows")
-	endif()
-	set(RTX_REMIX_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rtx-remix/include")
-	if(NOT EXISTS "${RTX_REMIX_INCLUDE_DIR}/remix/remix_c.h")
-		message(FATAL_ERROR "WITH_RTX_REMIX: missing ${RTX_REMIX_INCLUDE_DIR}/remix/remix_c.h")
-	endif()
-	set(ARX_HAVE_RTX_REMIX 1)
+if(WIN32)
 	set(ARX_HAVE_D3D9 1)
-	list(APPEND GRAPHICS_SOURCES
-		src/graphics/remix/RemixApi.cpp
-		src/graphics/remix/RemixConvert.cpp
-		src/graphics/remix/RemixEntities.cpp
-		src/graphics/remix/RemixProbe.cpp
-		src/graphics/remix/RemixRenderer.cpp
-		src/graphics/remix/RemixScene.cpp
-		src/graphics/remix/RemixTextures.cpp
-	)
-	include_directories(SYSTEM ${RTX_REMIX_INCLUDE_DIR})
-	list(APPEND ARX_LIBRARIES d3d9)
-	message(STATUS "RTX Remix + D3D9 enabled (one HWND; OpenGL is not used at runtime)")
+	set(ARX_HAVE_D3D12 1)
+	list(APPEND ARX_LIBRARIES d3d9 d3d12 dxgi d3dcompiler dxguid)
 	# Compiled outside the custom unity blob: d3d9.h #defines `interface`.
 	set(ARX_D3D9_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d9/D3D9Renderer.cpp")
+	set(ARX_D3D12_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d12/D3D12Renderer.cpp")
+	message(STATUS "D3D12 raster enabled (default). D3D9 kept as fallback source.")
 endif()
 
 # Windowing / input
@@ -1868,6 +1847,9 @@ endif()
 
 if(ARX_HAVE_D3D9)
 	target_sources(arx PRIVATE ${ARX_D3D9_SOURCES})
+endif()
+if(ARX_HAVE_D3D12)
+	target_sources(arx PRIVATE ${ARX_D3D12_SOURCES})
 endif()
 
 if(BUILD_TESTS)
