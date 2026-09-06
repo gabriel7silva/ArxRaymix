@@ -553,7 +553,11 @@ float4 PSMain(VSOut i) : SV_Target {
 	float sh = lerp(0.10, 1.0, bilateral(shadowTex, pix, 3, zCenter));
 	// Bounce light scaled by the surface's own raster color (plus a small floor
 	// for the darkest stone) so it reads as light on the material, not grey haze.
-	c = c + giUpsample(pix, zCenter) * (0.15 + c) * 2.0;
+	// The lit raster colour stands in for albedo, so cap it (a surface already
+	// blown out by a spell light must not bounce even brighter) and add in
+	// screen fashion so the sum never saturates to white.
+	float3 bounce = giUpsample(pix, zCenter) * (0.15 + min(c, 0.45)) * 2.0;
+	c = c + bounce * (1.0 - c);
 	// AO and shadow compound; keep a floor so nothing goes fully black.
 	return float4(saturate(c) * max(ao * sh, 0.08), 1);
 }
