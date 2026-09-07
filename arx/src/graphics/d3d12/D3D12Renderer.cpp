@@ -3453,7 +3453,7 @@ void D3D12Renderer::showFrame() {
 		m_sl->syncFrameGen(config.video.dxrFg > 0 && m_sl->supportsFg());
 		m_sl->onPresent();
 	}
-	m->swapchain->Present(0, 0);
+	m->swapchain->Present(m_vsync == 0 ? 0u : 1u, 0);
 	if(m_sl) {
 		m_sl->afterPresent();
 	}

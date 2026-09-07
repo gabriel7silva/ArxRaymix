@@ -128,6 +128,7 @@ public:
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
 	
 	void showFrame() override;
+	void setPresentVSync(int vsync) override { m_vsync = vsync; }
 	void beginSceneUpscale() override;
 	void applyWorldRayEffects() override;
 	void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) override;
@@ -200,6 +201,7 @@ private:
 	float m_fogStart = 0.f;
 	float m_fogEnd = 1.f;
 	float m_anisotropy = 1.f;
+	int m_vsync = 1;
 	FillMode m_fillMode = FillSolid;
 	int m_width = 0;
 	int m_height = 0;
