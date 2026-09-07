@@ -80,7 +80,7 @@ grep -n "distancePreset\|dxrDistance" arx/src/graphics/dxr/D3D12Rtao.h arx/src/c
 **Read it**
 
 ```
-grep -n "fogDistance\|fZFogStart\|fZFogEnd" arx/src/graphics/GlobalFog.cpp arx/src/graphics/GlobalFog.h
+grep -n "fogDistance\|fZFogStart\|fZFogEnd\|fZFogRamp" arx/src/graphics/GlobalFog.cpp arx/src/graphics/GlobalFog.h
 ```
 
 **Safe range** 0–10. Fog colour comes from the zone; near-black zone colour falls back to a haze so the clip is mist, not a hole.
