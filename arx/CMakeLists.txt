@@ -1857,6 +1857,22 @@ else()
 	shared_build()
 endif()
 
+# Stage runtime DLLs next to arx.exe even when building `--target arx`
+# (a sibling ALL target in the superproject never runs for that command).
+# Must come after unity_build()/shared_build() — that is when TARGET arx exists.
+foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
+	set(libdir "${prefix}/bin/${CMAKE_LIBRARY_ARCHITECTURE}")
+	if(IS_DIRECTORY "${libdir}")
+		file(GLOB runtime_libs RELATIVE "${libdir}" "${libdir}/*")
+		foreach(lib IN LISTS runtime_libs)
+			add_custom_command(
+				TARGET arx POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different "${libdir}/${lib}" "$<TARGET_FILE_DIR:arx>/${lib}"
+			)
+		endforeach()
+	endif()
+endforeach()
+
 if(ARX_HAVE_D3D9)
 	target_sources(arx PRIVATE ${ARX_D3D9_SOURCES})
 endif()
@@ -1869,7 +1885,28 @@ if(ARX_HAVE_D3D12)
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different ${STREAMLINE_DLLS} "$<TARGET_FILE_DIR:arx>"
 				COMMENT "Copy Streamline DLLs next to arx.exe"
 			)
+			install(FILES ${STREAMLINE_DLLS} DESTINATION "${GAMESBINDIR}")
 		endif()
+	endif()
+	set(DXC_BIN_DIR "${CMAKE_SOURCE_DIR}/libs/dxc/bin/${CMAKE_LIBRARY_ARCHITECTURE}")
+	if(NOT CMAKE_LIBRARY_ARCHITECTURE)
+		set(DXC_BIN_DIR "${CMAKE_SOURCE_DIR}/libs/dxc/bin/x64")
+	endif()
+	if(EXISTS "${DXC_BIN_DIR}/dxcompiler.dll" AND EXISTS "${DXC_BIN_DIR}/dxil.dll")
+		add_custom_command(TARGET arx POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${DXC_BIN_DIR}/dxcompiler.dll"
+				"${DXC_BIN_DIR}/dxil.dll"
+				"$<TARGET_FILE_DIR:arx>"
+			COMMENT "Copy dxcompiler.dll / dxil.dll next to arx.exe"
+		)
+		install(FILES
+			"${DXC_BIN_DIR}/dxcompiler.dll"
+			"${DXC_BIN_DIR}/dxil.dll"
+			DESTINATION "${GAMESBINDIR}"
+		)
+	else()
+		message(WARNING "dxcompiler.dll / dxil.dll not found in ${DXC_BIN_DIR} — DXR runtime compiles will fail. Copy the redistributable pair from a Windows SDK bin/x64.")
 	endif()
 endif()
 

@@ -69,3 +69,64 @@ function Get-ArxExecutable {
     $root = Get-ArxRepoRoot
     return Join-Path $root "build\arx\$Config\arx.exe"
 }
+
+function Start-Arx {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('d3d12', 'd3d9')]
+        [string]$Renderer,
+        [string]$Config = 'RelWithDebInfo',
+        [string]$DataDir,
+        [int]$LoadLevel = 0
+    )
+
+    $root = Get-ArxRepoRoot
+    $exe = Get-ArxExecutable -Config $Config
+    $userDir = Join-Path $root 'runtime\user'
+
+    if (-not (Test-Path $exe)) {
+        throw "arx.exe not found at $exe. Configure and build first:`n" +
+              "  cmake -S <repo> -B <repo>\build -A x64`n" +
+              "  cmake --build <repo>\build --config $Config --target arx --parallel"
+    }
+
+    if (-not $DataDir) {
+        $DataDir = Find-ArxFatalis
+    }
+
+    if (-not (Test-ArxDataDir $DataDir)) {
+        throw "Arx Fatalis data not found (no data.pak). Checked the Steam and GOG registry entries.`n" +
+              "Pass the install directory explicitly: -DataDir '<path to Arx Fatalis>'"
+    }
+
+    New-Item -ItemType Directory -Force -Path $userDir | Out-Null
+
+    $arguments = @('--user-dir', $userDir, '--data-dir', $DataDir)
+    if ($LoadLevel -ne 0) {
+        $arguments += @('--loadlevel', "$LoadLevel")
+    }
+
+    Write-Host "exe    : $exe"
+    Write-Host "data   : $DataDir"
+    Write-Host "userdir: $userDir"
+    Write-Host ''
+    if ($Renderer -eq 'd3d12') {
+        Write-Host 'DirectX 12 raster. RTAO: Options -> Ray tracing. Log: runtime\user\arx.log'
+    } else {
+        Write-Host 'DirectX 9 raster. Log: runtime\user\arx.log'
+    }
+
+    $previousRenderer = $env:ARX_RENDERER
+    Push-Location $root
+    try {
+        $env:ARX_RENDERER = $Renderer
+        & $exe @arguments
+    } finally {
+        Pop-Location
+        if ($null -eq $previousRenderer) {
+            Remove-Item Env:\ARX_RENDERER -ErrorAction SilentlyContinue
+        } else {
+            $env:ARX_RENDERER = $previousRenderer
+        }
+    }
+}
