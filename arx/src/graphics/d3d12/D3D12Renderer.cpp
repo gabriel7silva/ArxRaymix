@@ -3608,7 +3608,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 	}
 	
 	const D3D12Rtao::DistancePreset dist = D3D12Rtao::distancePreset(config.video.dxrDistance);
-	const float renderFar = g_camera ? g_camera->cdepth * fZFogEnd : dist.caster;
+	const float renderFar = g_camera ? g_camera->cdepth * fZFogRampEnd : dist.caster;
 	const float casterDist = (std::min)(dist.caster, renderFar);
 	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
 	size_t nlights = 0;

@@ -1805,7 +1805,7 @@ void ArxGame::renderLevel() {
 	
 	GRenderer->SetAntialiasing(true);
 	
-	GRenderer->SetFogParams(fZFogStart * g_camera->cdepth, fZFogEnd * g_camera->cdepth);
+	GRenderer->SetFogParams(fZFogRampStart * g_camera->cdepth, fZFogRampEnd * g_camera->cdepth);
 	GRenderer->SetFogColor(g_fogColor);
 	
 	ARX_SCENE_Render();

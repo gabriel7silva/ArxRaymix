@@ -119,9 +119,9 @@ void ARX_GLOBALMODS_Apply() {
 	const float t = std::clamp(config.video.fogDistance, 0.f, 10.f) / 10.f;
 	float fZclipp = DEFAULT_MINZCLIP + std::pow(t, 1.65f) * (DEFAULT_ZCLIP - DEFAULT_MINZCLIP);
 	fZclipp += (g_camera->focal - 310.f) * 5.f;
-	// Zone PATH_FARCLIP still drives fog colour only. The Render slider is the
-	// far plane; D3D12 fades world pixels into that colour before the clip.
-	g_camera->cdepth = (std::max)(fZclipp, DEFAULT_MINZCLIP);
+	// PATH_FARCLIP (current.zclip) caps the far plane. The Render slider sets
+	// the default reach; D3D12 fades world pixels into zone fog before the clip.
+	g_camera->cdepth = (std::max)((std::min)(current.zclip, fZclipp), DEFAULT_MINZCLIP);
 	
 	if(current.depthcolor.r + current.depthcolor.g + current.depthcolor.b < 0.04f) {
 		g_fogColor = Color(Color3f::rgb(0.11f, 0.09f, 0.08f));
@@ -135,8 +135,8 @@ void ARX_GLOBALMODS_Apply() {
 	   || std::abs(g_camera->cdepth - s_loggedDepth) > 40.f) {
 		LogInfo << "Render distance slider=" << config.video.fogDistance
 		        << " cdepth=" << g_camera->cdepth
-		        << " fog=" << (fZFogStart * g_camera->cdepth)
-		        << "-" << (fZFogEnd * g_camera->cdepth);
+		        << " fog=" << (fZFogRampStart * g_camera->cdepth)
+		        << "-" << (fZFogRampEnd * g_camera->cdepth);
 		s_loggedSlider = config.video.fogDistance;
 		s_loggedDepth = g_camera->cdepth;
 	}
