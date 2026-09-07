@@ -327,7 +327,8 @@ public:
 	
 	void addListener(Listener * listener);
 	void removeListener(Listener * listener);
-	//! Move listeners to another renderer (used when Raymix falls back to OpenGL).
+	//! Move listeners to another renderer (D3D12 -> D3D9 fallback in SDL2Window::initialize()).
+	//! On Windows, config.video.renderer = "OpenGL" is ignored.
 	void adoptListeners(Renderer & from);
 	
 	// Matrices
@@ -401,9 +402,6 @@ public:
 		bool rr = false;
 		bool fg = false;
 	};
-	
-	//! Last world-pass size (render res when scene RTs are live, else display).
-	[[nodiscard]] virtual Vec2i internalRenderSize() const { return Vec2i(0); }
 	
 	//! Predict Streamline's internal size for a cfg mode (0–5) at a display size.
 	[[nodiscard]] virtual Vec2i queryDlssInternalSize(int cfgMode, int displayW, int displayH) const {

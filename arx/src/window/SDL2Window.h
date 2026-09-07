@@ -61,7 +61,6 @@ public:
 	void showFrame() override;
 	
 	void hide() override;
-	void show();
 	
 	void setMinimizeOnFocusLost(bool enabled) override;
 	MinimizeSetting willMinimizeOnFocusLost() override;

@@ -134,7 +134,6 @@ public:
 	[[nodiscard]] bool supportsDlss() const override;
 	[[nodiscard]] bool supportsDlssRr() const override;
 	[[nodiscard]] bool supportsDlssG() const override;
-	[[nodiscard]] Vec2i internalRenderSize() const override;
 	[[nodiscard]] Vec2i queryDlssInternalSize(int cfgMode, int displayW, int displayH) const override;
 	[[nodiscard]] DlssDebugState dlssDebugState() const override;
 	
