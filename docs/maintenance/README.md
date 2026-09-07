@@ -39,7 +39,7 @@ Three documents describe the renderer and they do not overlap. Keeping the bound
 
 | Document | Owns | Does not own |
 |---|---|---|
-| `arx/src/graphics/dxr/README.md` | Why a ray tracing value is what it is, the algorithms, the phase history | Where things live, project-wide concerns |
+| `arx/src/graphics/dxr/README.md` | Why a ray tracing value is what it is, the algorithms, the phase history (1–5 done; 6 archived) | Where things live, project-wide concerns |
 | `docs/maintenance/` (this tree) | Where things live, in what order they run, what breaks when you change them | Any "why this number" — link there instead |
 | `docs/ARCHITECTURE.md` | The public one-window, two-backends story | Anything a maintainer needs in order to make a change |
 

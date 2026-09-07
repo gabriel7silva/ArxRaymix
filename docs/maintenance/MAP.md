@@ -51,7 +51,7 @@ graph TD
   subgraph Gfx["arx/src/graphics — renderer"]
     Iface["Renderer.h"]
     D12["d3d12/"]
-    Dxr["dxr/"]
+    Dxr["dxr/ (DXR + Streamline)"]
     D9["d3d9/"]
     GL["opengl/"]
     Remix["remix/ — dead"]
@@ -59,6 +59,7 @@ graph TD
 
   Win["window/SDL2Window"]
   Api[["Direct3D 12 and DXR"]]
+  Sl[["NVIDIA Streamline / NGX"]]
 
   Core ==> Scene
   Core ==> Iface
@@ -71,8 +72,9 @@ graph TD
   Iface --- GL
   D12 --> Dxr
   Dxr --> Api
+  Dxr --> Sl
   D12 --> Api
-  Cfg -.->|"quality levels"| D12
+  Cfg -.->|"DXR / DLSS / FG / RR"| D12
 
   classDef dead stroke-dasharray:4 3,opacity:0.55
   class Remix dead

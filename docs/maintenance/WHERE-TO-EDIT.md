@@ -177,7 +177,7 @@ The single most error-prone change in the ray tracing code, because every part o
 
 **Then** build and run **with the Direct3D 12 debug layer enabled**. There is no in-game symptom that tells you the slots are wrong.
 
-**Watch out** [INV-02](INVARIANTS.md#inv-02). Also make sure the resource is in the right state before the pass reads it; the existing code transitions each one explicitly.
+**Watch out** [INV-02](INVARIANTS.md#inv-02). Also make sure the resource is in the right state before the pass reads it; the existing code transitions each one explicitly. Do **not** add DXR root constants to pass a new float — the signature is at the 64-DWORD cap ([INV-13](INVARIANTS.md#inv-13)); put it in `ViewParams`.
 
 **Re-derive**
 
