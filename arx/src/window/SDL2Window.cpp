@@ -985,11 +985,6 @@ void SDL2Window::hide() {
 	onShow(false);
 }
 
-void SDL2Window::show() {
-	SDL_ShowWindow(m_window);
-	onShow(true);
-}
-
 void SDL2Window::setMinimizeOnFocusLost(bool enabled) {
 	if(m_minimizeOnFocusLost != AlwaysDisabled && m_minimizeOnFocusLost != AlwaysEnabled) {
 		SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, enabled ? "1" : "0");

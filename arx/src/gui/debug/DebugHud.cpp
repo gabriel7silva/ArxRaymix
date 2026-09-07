@@ -169,6 +169,30 @@ static std::string prettyUs(s64 us) {
 	return s.str();
 }
 
+static std::string dlssStatusLine(bool withSceneRT) {
+	const Renderer::DlssDebugState dlss = GRenderer->dlssDebugState();
+	const char * mode = "Off";
+	switch(dlss.mode) {
+		case 1: mode = "DLAA"; break;
+		case 2: mode = "Quality"; break;
+		case 3: mode = "Balanced"; break;
+		case 4: mode = "Performance"; break;
+		case 5: mode = "UltraPerformance"; break;
+		default: break;
+	}
+	const char * aa = dlss.mode > 0 ? "DLSS" : (config.video.antialiasing ? "MSAA" : "Off");
+	std::ostringstream line;
+	line << "Display " << dlss.displayW << "x" << dlss.displayH
+	     << " Internal " << dlss.renderW << "x" << dlss.renderH
+	     << " Mode " << mode
+	     << " RR=" << (dlss.rr ? "on" : "off")
+	     << " AA=" << aa;
+	if(withSceneRT) {
+		line << " sceneRT=" << (dlss.sceneRT ? "yes" : "no");
+	}
+	return line.str();
+}
+
 void ShowInfoText() {
 	
 	DebugBox frameInfo = DebugBox(Vec2i(10, 10), "FrameInfo");
@@ -179,25 +203,7 @@ void ShowInfoText() {
 	frameInfo.add("Sparks", ParticleSparkCount());
 	frameInfo.add("Polybooms", long(PolyBoomCount()));
 	if(GRenderer) {
-		const Renderer::DlssDebugState dlss = GRenderer->dlssDebugState();
-		const char * mode = "Off";
-		switch(dlss.mode) {
-			case 1: mode = "DLAA"; break;
-			case 2: mode = "Quality"; break;
-			case 3: mode = "Balanced"; break;
-			case 4: mode = "Performance"; break;
-			case 5: mode = "UltraPerformance"; break;
-			default: break;
-		}
-		const char * aa = dlss.mode > 0 ? "DLSS" : (config.video.antialiasing ? "MSAA" : "Off");
-		std::ostringstream line;
-		line << "Display " << dlss.displayW << "x" << dlss.displayH
-		     << " Internal " << dlss.renderW << "x" << dlss.renderH
-		     << " Mode " << mode
-		     << " RR=" << (dlss.rr ? "on" : "off")
-		     << " AA=" << aa
-		     << " sceneRT=" << (dlss.sceneRT ? "yes" : "no");
-		frameInfo.add("DLSS", line.str());
+		frameInfo.add("DLSS", dlssStatusLine(true));
 	}
 	frameInfo.print();
 	
@@ -370,24 +376,8 @@ void ShowFPS() {
 	oss << std::fixed << std::setprecision(2) << g_fpsCounter.FPS << " FPS";
 	hFontDebug->draw(Vec2i(10, 10), oss.str(), Color::white);
 	if(GRenderer && hFontDebug) {
-		const Renderer::DlssDebugState dlss = GRenderer->dlssDebugState();
-		const char * mode = "Off";
-		switch(dlss.mode) {
-			case 1: mode = "DLAA"; break;
-			case 2: mode = "Quality"; break;
-			case 3: mode = "Balanced"; break;
-			case 4: mode = "Performance"; break;
-			case 5: mode = "UltraPerformance"; break;
-			default: break;
-		}
-		const char * aa = dlss.mode > 0 ? "DLSS" : (config.video.antialiasing ? "MSAA" : "Off");
-		std::ostringstream line;
-		line << "Display " << dlss.displayW << "x" << dlss.displayH
-		     << " Internal " << dlss.renderW << "x" << dlss.renderH
-		     << " Mode " << mode
-		     << " RR=" << (dlss.rr ? "on" : "off")
-		     << " AA=" << aa;
-		hFontDebug->draw(Vec2i(10, 10 + hFontDebug->getLineHeight() + 2), line.str(), Color::white);
+		hFontDebug->draw(Vec2i(10, 10 + hFontDebug->getLineHeight() + 2),
+		                 dlssStatusLine(false), Color::white);
 	}
 }
 

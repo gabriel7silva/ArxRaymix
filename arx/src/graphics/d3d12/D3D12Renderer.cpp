@@ -3179,13 +3179,6 @@ bool D3D12Renderer::supportsDlssG() const {
 	return m_sl && m_sl->supportsFg();
 }
 
-Vec2i D3D12Renderer::internalRenderSize() const {
-	if(m && m->sceneUsed && m->sceneW > 0 && m->sceneH > 0) {
-		return Vec2i(m->sceneW, m->sceneH);
-	}
-	return Vec2i(m_width, m_height);
-}
-
 Vec2i D3D12Renderer::queryDlssInternalSize(int cfgMode, int displayW, int displayH) const {
 	if(!m_sl || cfgMode <= 0 || displayW <= 0 || displayH <= 0) {
 		return Vec2i(displayW, displayH);
