@@ -683,7 +683,7 @@ void OpenGLRenderer::SetAntialiasing(bool enable) {
 		return;
 	}
 	
-	if(enable && !config.video.antialiasing) {
+	if(enable && !config.video.effectiveAntialiasing()) {
 		return;
 	}
 	
