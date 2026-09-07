@@ -91,18 +91,19 @@ In the log, look for `RTAO: composite VS failed`, `RTAO: composite PS failed`, o
 
 **Break it by** adding a quality level to the array without widening the clamp in `Config::init`, or widening the clamp without extending the array.
 
-**Symptom** either the top quality level is unreachable no matter what the menu shows, or the setting indexes past the end of the array, which is undefined behaviour that usually reads as an absurd ray count.
+**Symptom** either the top quality level is unreachable no matter what the menu shows, or a too-wide disk clamp is silently collapsed onto the last table entry by the reclamps in `D3D12Rtao::apply` (it does not read off the end of the array).
 
-**Mechanism** the setting is clamped when it is read from disk, then used directly as an index into a per-quality array in the renderer. The clamp's upper bound and the array's last index must be the same number, stated in two files that do not include each other.
+**Mechanism** the setting is clamped when it is read from disk (`Config::init`), then clamped again in `D3D12Rtao::apply` before it indexes a per-quality array. The disk clamp, the apply clamp (`kMaxRtQuality` / `kMaxShadowDenoise` / `kMaxGiDenoise`), and the array's last index must be the same number.
 
-**Detect** *none — silent* in the direction that under-clamps. Compare the two:
+**Detect** *none — silent* in the direction that under-clamps. Compare the three:
 
 ```
 grep -n "glm::clamp(reader.getKey(Section::Video" arx/src/core/Config.cpp
-grep -n "aoRayCount\|shadowRays\|giRayCount\|aoRadius" arx/src/graphics/dxr/D3D12Rtao.cpp
+grep -n "aoRayCount\\|shadowRays\\|giRayCount\\|aoRadius\\|transRays\\|metalRayCount\\|shadowAlpha\\|giAlpha" arx/src/graphics/dxr/D3D12Rtao.cpp
+grep -n "kMaxRtQuality\\|kMaxShadowDenoise\\|kMaxGiDenoise" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
-Every array's first entry must also be zero, because the menu's Off state is the zero index and a non-zero entry would leave the effect running while the menu says it is off.
+Every ray-count / radius array's first entry must also be zero, because the menu's Off state is the zero index and a non-zero entry would leave the effect running while the menu says it is off. `shadowAlpha` and `giAlpha` are denoise weights, not Off switches — their index-0 entries are intentionally non-zero.
 
 ### <a id="inv-13"></a>INV-13 — The DXR root signature is already at the 64-DWORD cap
 

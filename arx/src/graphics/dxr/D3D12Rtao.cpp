@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <string>
 
 #include <d3d12.h>
@@ -38,17 +39,104 @@ constexpr UINT kIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 constexpr UINT kShaderRecord = 64;
 // Heap: [0..14] RT SRVs t0-t14, [15..19] RT UAVs u0-u4,
 // [20..27] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
-constexpr UINT kHeapCount = 28;
 constexpr UINT kRtSrvCount = 15;
 constexpr UINT kRtUavBase = 15;
 constexpr UINT kRtUavCount = 5;
 constexpr UINT kCompositeBase = 20;
+constexpr UINT kCompositeSrvCount = 8;
+constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
 constexpr UINT kRootConstants = 60;
+static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAV range must follow the RT SRVs");
+static_assert(kCompositeBase == kRtUavBase + kRtUavCount, "INV-02: composite SRVs follow the UAVs");
 constexpr UINT kMaskRtvWater = 0;
 constexpr UINT kMaskRtvWaterDepth = 1;
 constexpr UINT kMaskRtvMetal = 2;
-// History blend weight for the current frame. 0.12 → ~90% converged after 18 frames.
-constexpr float kTemporalAlpha = 0.08f;
+// History blend for the current frame. Low 0.15 ≈ 14 frames to 90%; High 0.08 ≈ 28.
+constexpr float kTemporalAlphaLow = 0.15f;
+constexpr float kTemporalAlphaHigh = 0.08f;
+
+constexpr int kMaxRtQuality = 3;
+constexpr int kMaxShadowDenoise = 1;
+constexpr int kMaxGiDenoise = 2;
+static constexpr float aoRadius[] = { 0.f, 24.f, 32.f, 48.f };
+static constexpr UINT aoRayCount[] = { 0u, 8u, 16u, 24u };
+static constexpr UINT shadowRays[] = { 0u, 2u, 8u, 16u };
+static constexpr UINT giRayCount[] = { 0u, 4u, 8u, 16u };
+static constexpr UINT transRays[] = { 0u, 1u, 1u, 2u };
+static constexpr UINT metalRayCount[] = { 0u, 1u, 2u, 2u };
+static constexpr float shadowAlpha[] = { kTemporalAlphaLow, kTemporalAlphaHigh };
+static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
+static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
+static_assert(std::size(aoRayCount) == kMaxRtQuality + 1);
+static_assert(std::size(shadowRays) == kMaxRtQuality + 1);
+static_assert(std::size(giRayCount) == kMaxRtQuality + 1);
+static_assert(std::size(transRays) == kMaxRtQuality + 1);
+static_assert(std::size(metalRayCount) == kMaxRtQuality + 1);
+static_assert(std::size(shadowAlpha) == kMaxShadowDenoise + 1);
+static_assert(std::size(giAlpha) == kMaxGiDenoise + 1);
+static_assert(aoRayCount[0] == 0u && shadowRays[0] == 0u && giRayCount[0] == 0u
+              && transRays[0] == 0u && metalRayCount[0] == 0u && aoRadius[0] == 0.f,
+              "Off (index 0) must launch no rays");
+
+struct DxrConstants {
+	float invViewProj[16];
+	float cameraPos[3];
+	float radius;
+	UINT aoRays;
+	float pixelWorld;
+	UINT width;
+	UINT height;
+	UINT lightCount;
+	UINT shadowsOn;
+	UINT pad0;
+	UINT pad1;
+	float prevViewProj[16];
+	UINT penumbraRays;
+	UINT giOn;
+	UINT giWidth;
+	UINT giHeight;
+	UINT giRays;
+	float temporalAlpha;
+	float projA;
+	float projB;
+	UINT specRays;
+	UINT specHalfRes;
+	UINT contactOn;
+	UINT metalRays;
+	float specAlpha;
+	float contactTMax;
+	float giTemporalAlpha;
+	UINT playerVertBase;
+};
+static_assert(sizeof(DxrConstants) == kRootConstants * 4, "DXR root constants must match HLSL cbuffer");
+static_assert(offsetof(DxrConstants, invViewProj) == 0);
+static_assert(offsetof(DxrConstants, cameraPos) == 64);
+static_assert(offsetof(DxrConstants, prevViewProj) == 112,
+              "prevViewProj must stay on a float4 boundary");
+static_assert(offsetof(DxrConstants, penumbraRays) == 176);
+static_assert(offsetof(DxrConstants, temporalAlpha) == 196);
+static_assert(offsetof(DxrConstants, specRays) == 208);
+static_assert(offsetof(DxrConstants, metalRays) == 220);
+static_assert(offsetof(DxrConstants, playerVertBase) == 236);
+
+struct DxrViewCbuf {
+	float viewProj[16];
+	float specTMax;
+	float giTMax;
+	float rtRange;
+	float pad;
+};
+static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
+static_assert(offsetof(DxrViewCbuf, specTMax) == 64);
+
+glm::mat4x4 jitteredProjection(const glm::mat4x4 & proj, float jitterNdcX, float jitterNdcY) {
+	glm::mat4x4 jp = proj;
+	for(int i = 0; i < 4; ++i) {
+		jp[i][0] += jitterNdcX * jp[i][3];
+		jp[i][1] += jitterNdcY * jp[i][3];
+	}
+	return jp;
+}
 
 constexpr UINT kLightFloat4s = 3;
 static_assert(sizeof(D3D12Rtao::GpuLight) == kLightFloat4s * 16, "DXR light record is three float4s");
@@ -118,11 +206,9 @@ cbuffer ViewParams : register(b1) {
 	float padView;
 };
 
-// Only the cleared depth (1.0) is sky. Camera.cpp writes z = Q * (1 - near / w)
-// with near = 1, far = 6400, so z reaches 0.999 at w ≈ 865 units: an older
-// 0.999 cutoff silently dropped AO / shadows on everything farther than that
-// and made the 865-unit boundary flicker as the camera bobbed across it.
-static const float SKY_Z = 0.99999;
+// Cleared D24_UNORM depth is exactly 1.0 (INV-04). A value just below 1.0 is a
+// finite world distance and used to skip AO / shadows past that plane.
+static const float SKY_Z = 1.0;
 
 struct RayPayload {
 	float t;
@@ -165,6 +251,60 @@ float3 hemisphereFixed(float3 n, uint s, float rot) {
 	float3 t = normalize(abs(n.z) < 0.999 ? cross(n, float3(0, 0, 1)) : cross(n, float3(1, 0, 0)));
 	float3 b = cross(n, t);
 	return normalize(t * l.x + b * l.y + n * l.z);
+}
+
+float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uint mask,
+                          float lightScale, float lightCap) {
+	RayDesc rd;
+	rd.Origin = origin;
+	rd.Direction = dir;
+	rd.TMin = tmin;
+	rd.TMax = tmax;
+	RayPayload rp;
+	rp.t = 1e7;
+	rp.n = float3(0, 0, 0);
+	TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+	         mask, 0, 1, 0, rd, rp);
+	if(rp.t >= tmax) {
+		return float3(0, 0, 0);
+	}
+	float3 hit = rd.Origin + rd.Direction * rp.t;
+	float3 hn = rp.n;
+	if(dot(hn, hn) < 1e-6) {
+		hn = -rd.Direction;
+	}
+	float4 hc = mul(viewProj, float4(hit, 1.0));
+	float3 hitCol = float3(0, 0, 0);
+	if(hc.w > 1.0) {
+		float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
+		if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
+			int2 hp = int2(hu * float2(width, height));
+			float hz = g_depth.Load(int3(hp, 0)).r;
+			if(hz > 0.0 && hz < SKY_Z) {
+				float hw = projB / min(hz - projA, -1e-4);
+				if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
+					hitCol = g_color.Load(int3(hp, 0)).rgb;
+				}
+			}
+		}
+	}
+	if(dot(hitCol, hitCol) < 1e-6) {
+		for(uint i = 0; i < lightCount; ++i) {
+			float4 a = g_lights[i * 3 + 0];
+			float4 b = g_lights[i * 3 + 1];
+			float4 col = g_lights[i * 3 + 2];
+			float3 toL = a.xyz - hit;
+			float d = length(toL);
+			if(d < 1.0) {
+				continue;
+			}
+			float ndotl = saturate(dot(hn, toL / d));
+			float span = max(b.y - b.x, 1e-3);
+			float fall = saturate((b.y - d) / span);
+			hitCol += col.rgb * min(a.w * fall * ndotl * b.w * lightScale, lightCap);
+		}
+	}
+	return hitCol;
 }
 
 
@@ -462,56 +602,7 @@ void RayGen() {
 					if(s > 0u) {
 						R = normalize(R + hemisphereFixed(nW, s, rot) * 0.04);
 					}
-					RayDesc rd;
-					rd.Origin = wpos + nW * 6.0;
-					rd.Direction = R;
-					rd.TMin = 6.0;
-					rd.TMax = specTMax;
-					RayPayload rp;
-					rp.t = 1e7;
-					rp.n = float3(0, 0, 0);
-					TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-					         0x05, 0, 1, 0, rd, rp);
-					if(rp.t >= specTMax) {
-						continue;
-					}
-					float3 hit = rd.Origin + rd.Direction * rp.t;
-					float3 hn = rp.n;
-					if(dot(hn, hn) < 1e-6) {
-						hn = -rd.Direction;
-					}
-					float4 hc = mul(viewProj, float4(hit, 1.0));
-					float3 hitCol = float3(0, 0, 0);
-					if(hc.w > 1.0) {
-						float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
-						if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
-							int2 hp = int2(hu * float2(width, height));
-							float hz = g_depth.Load(int3(hp, 0)).r;
-							if(hz > 0.0 && hz < SKY_Z) {
-								float hw = projB / min(hz - projA, -1e-4);
-								if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
-									hitCol = g_color.Load(int3(hp, 0)).rgb;
-								}
-							}
-						}
-					}
-					if(dot(hitCol, hitCol) < 1e-6) {
-						for(uint i = 0; i < lightCount; ++i) {
-							float4 a = g_lights[i * 3 + 0];
-							float4 b = g_lights[i * 3 + 1];
-							float4 col = g_lights[i * 3 + 2];
-							float3 toL = a.xyz - hit;
-							float d = length(toL);
-							if(d < 1.0) {
-								continue;
-							}
-							float ndotl = saturate(dot(hn, toL / d));
-							float span = max(b.y - b.x, 1e-3);
-							float fall = saturate((b.y - d) / span);
-							hitCol += col.rgb * min(a.w * fall * ndotl * b.w * 0.35, 0.6);
-						}
-					}
-					acc += hitCol;
+					acc += shadeReflectionHit(wpos + nW * 6.0, R, 6.0, specTMax, 0x05, 0.35, 0.6);
 				}
 				specRgb = acc / float(nSpec);
 			}
@@ -527,56 +618,7 @@ void RayGen() {
 			for(uint s = 0; s < nSpec; ++s) {
 				float3 R = reflect(-V, n);
 				R = normalize(R + hemisphereFixed(n, s, rot) * 0.06);
-				RayDesc rd;
-				rd.Origin = pos + n * shBias;
-				rd.Direction = R;
-				rd.TMin = shBias;
-				rd.TMax = specTMax * 0.625;
-				RayPayload rp;
-				rp.t = 1e7;
-				rp.n = float3(0, 0, 0);
-				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-				         0x07, 0, 1, 0, rd, rp);
-				if(rp.t >= specTMax * 0.625) {
-					continue;
-				}
-				float3 hit = rd.Origin + rd.Direction * rp.t;
-				float3 hn = rp.n;
-				if(dot(hn, hn) < 1e-6) {
-					hn = -rd.Direction;
-				}
-				float4 hc = mul(viewProj, float4(hit, 1.0));
-				float3 hitCol = float3(0, 0, 0);
-				if(hc.w > 1.0) {
-					float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
-					if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
-						int2 hp = int2(hu * float2(width, height));
-						float hz = g_depth.Load(int3(hp, 0)).r;
-						if(hz > 0.0 && hz < SKY_Z) {
-							float hw = projB / min(hz - projA, -1e-4);
-							if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
-								hitCol = g_color.Load(int3(hp, 0)).rgb;
-							}
-						}
-					}
-				}
-				if(dot(hitCol, hitCol) < 1e-6) {
-					for(uint i = 0; i < lightCount; ++i) {
-						float4 a = g_lights[i * 3 + 0];
-						float4 b = g_lights[i * 3 + 1];
-						float4 col = g_lights[i * 3 + 2];
-						float3 toL = a.xyz - hit;
-						float d = length(toL);
-						if(d < 1.0) {
-							continue;
-						}
-						float ndotl = saturate(dot(hn, toL / d));
-						float span = max(b.y - b.x, 1e-3);
-						float fall = saturate((b.y - d) / span);
-						hitCol += col.rgb * min(a.w * fall * ndotl * b.w * 0.30, 0.55);
-					}
-				}
-				acc += hitCol;
+				acc += shadeReflectionHit(pos + n * shBias, R, shBias, specTMax * 0.625, 0x07, 0.30, 0.55);
 			}
 			specRgb = acc / float(nSpec);
 		}
@@ -804,24 +846,25 @@ const char * kMask = R"(
 cbuffer MaskParams : register(b0) {
 	float4x4 viewProj;
 	float maskValue;
-	float pad0;
-	float pad1;
+	float jitterX;
+	float jitterY;
 	float pad2;
 };
 struct VSOut { float4 pos : SV_Position; };
 VSOut VSMain(float4 p : POSITION) {
 	VSOut o;
 	o.pos = mul(viewProj, float4(p.xyz, 1));
+	o.pos.xy += float2(jitterX, jitterY) * o.pos.w;
 	return o;
 }
 float PSWater(VSOut i) : SV_Target {
-	return 1;
+	return maskValue;
 }
 float PSWaterZ(VSOut i) : SV_Target {
 	return i.pos.z;
 }
 float PSMetal(VSOut i) : SV_Target {
-	return 1;
+	return maskValue;
 }
 )";
 
@@ -903,13 +946,43 @@ bool resolveIndex(const unsigned short * indices, size_t nindices, size_t nverts
 	return true;
 }
 
+struct DxcCache {
+	HMODULE compiler = nullptr;
+	HMODULE dxil = nullptr;
+};
+
+DxcCache & dxcCache() {
+	static DxcCache cache;
+	return cache;
+}
+
+void retainDxil(HMODULE handle) {
+	if(!handle) {
+		return;
+	}
+	DxcCache & cache = dxcCache();
+	if(!cache.dxil) {
+		cache.dxil = handle;
+	} else if(handle != cache.dxil) {
+		FreeLibrary(handle);
+	}
+}
+
+void releaseDxcompiler() {
+	DxcCache & cache = dxcCache();
+	if(cache.compiler) {
+		FreeLibrary(cache.compiler);
+		cache.compiler = nullptr;
+	}
+}
+
 void loadDxilBeside(const std::wstring & dxcompilerPath) {
 	const size_t slash = dxcompilerPath.find_last_of(L"\\/");
 	if(slash == std::wstring::npos) {
 		return;
 	}
 	const std::wstring dxil = dxcompilerPath.substr(0, slash + 1) + L"dxil.dll";
-	LoadLibraryExW(dxil.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+	retainDxil(LoadLibraryExW(dxil.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
 }
 
 HMODULE tryLoadDxcompilerFile(const std::wstring & path) {
@@ -921,12 +994,17 @@ HMODULE tryLoadDxcompilerFile(const std::wstring & path) {
 }
 
 HMODULE loadDxcompiler() {
+	DxcCache & cache = dxcCache();
+	if(cache.compiler) {
+		return cache.compiler;
+	}
 	wchar_t exe[MAX_PATH] {};
 	if(GetModuleFileNameW(nullptr, exe, MAX_PATH) > 0) {
 		std::wstring dir(exe);
 		const size_t slash = dir.find_last_of(L"\\/");
 		if(slash != std::wstring::npos) {
 			if(HMODULE lib = tryLoadDxcompilerFile(dir.substr(0, slash + 1) + L"dxcompiler.dll")) {
+				cache.compiler = lib;
 				return lib;
 			}
 		}
@@ -939,6 +1017,7 @@ HMODULE loadDxcompiler() {
 			path += L'\\';
 		}
 		if(HMODULE lib = tryLoadDxcompilerFile(path + L"x64\\dxcompiler.dll")) {
+			cache.compiler = lib;
 			return lib;
 		}
 	}
@@ -962,6 +1041,7 @@ HMODULE loadDxcompiler() {
 		} while(FindNextFileW(find, &fd));
 		FindClose(find);
 		if(HMODULE lib = tryLoadDxcompilerFile(newest)) {
+			cache.compiler = lib;
 			return lib;
 		}
 	}
@@ -1034,6 +1114,9 @@ void D3D12Rtao::shutdown() {
 	m_roomsDirty = true;
 	m_colorIsShader = false;
 	m_maskIsSrv = false;
+	m_targetsFailed = false;
+	m_failedW = 0;
+	m_failedH = 0;
 }
 
 bool D3D12Rtao::init(ID3D12Device * device) {
@@ -1114,6 +1197,9 @@ bool D3D12Rtao::compileRayLib() {
 		LogError << "RTAO: dxcompiler.dll not found";
 		return false;
 	}
+	struct CompilerGuard {
+		~CompilerGuard() { releaseDxcompiler(); }
+	} unloadCompiler;
 	using DxcCreateInstanceFn = HRESULT (WINAPI *)(REFCLSID, REFIID, LPVOID *);
 	auto create = reinterpret_cast<DxcCreateInstanceFn>(GetProcAddress(dxc, "DxcCreateInstance"));
 	if(!create) {
@@ -1289,7 +1375,7 @@ bool D3D12Rtao::createPipeline() {
 	
 	D3D12_DESCRIPTOR_RANGE colorSrv {};
 	colorSrv.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-	colorSrv.NumDescriptors = 8;
+	colorSrv.NumDescriptors = kCompositeSrvCount;
 	colorSrv.BaseShaderRegister = 0;
 	D3D12_ROOT_PARAMETER cparams[2] {};
 	cparams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
@@ -1362,7 +1448,7 @@ bool D3D12Rtao::createPipeline() {
 bool D3D12Rtao::createMaskPipeline() {
 	D3D12_ROOT_PARAMETER mp {};
 	mp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-	mp.Constants.Num32BitValues = 20;
+	mp.Constants.Num32BitValues = 20; // float4x4 + maskValue + jitter + pad
 	mp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	D3D12_ROOT_SIGNATURE_DESC mrs {};
 	mrs.NumParameters = 1;
@@ -1464,11 +1550,7 @@ bool D3D12Rtao::createMaskPipeline() {
 	return true;
 }
 
-void D3D12Rtao::resize(int width, int height) {
-	if(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
-	   && m_spec && m_waterMask && m_metalMask) {
-		return;
-	}
+void D3D12Rtao::releaseTargets() {
 	m_ao.reset();
 	m_shadow.reset();
 	m_gi.reset();
@@ -1487,6 +1569,18 @@ void D3D12Rtao::resize(int width, int height) {
 	m_maskIsSrv = false;
 	m_width = 0;
 	m_height = 0;
+}
+
+void D3D12Rtao::resize(int width, int height) {
+	if(m_targetsFailed && width == m_failedW && height == m_failedH) {
+		return;
+	}
+	if(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
+	   && m_spec && m_waterMask && m_metalMask) {
+		return;
+	}
+	m_targetsFailed = false;
+	releaseTargets();
 	if(!m_device || width <= 0 || height <= 0) {
 		return;
 	}
@@ -1502,17 +1596,24 @@ void D3D12Rtao::resize(int width, int height) {
 	ao.Format = DXGI_FORMAT_R8_UNORM;
 	ao.SampleDesc.Count = 1;
 	ao.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+	auto failAlloc = [&]() {
+		releaseTargets();
+		m_targetsFailed = true;
+		m_failedW = width;
+		m_failedH = height;
+	};
 	if(FAILED(m_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &ao,
 	                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
 	                                            IID_PPV_ARGS(m_ao.put())))) {
 		LogError << "RTAO: AO target failed";
+		failAlloc();
 		return;
 	}
 	if(FAILED(m_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &ao,
 	                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
 	                                            IID_PPV_ARGS(m_shadow.put())))) {
 		LogError << "RTAO: shadow target failed";
-		m_ao.reset();
+		failAlloc();
 		return;
 	}
 	D3D12_RESOURCE_DESC gi {};
@@ -1528,8 +1629,7 @@ void D3D12Rtao::resize(int width, int height) {
 	                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
 	                                            IID_PPV_ARGS(m_gi.put())))) {
 		LogError << "RTAO: GI target failed";
-		m_ao.reset();
-		m_shadow.reset();
+		failAlloc();
 		return;
 	}
 	D3D12_RESOURCE_DESC color {};
@@ -1544,9 +1644,7 @@ void D3D12Rtao::resize(int width, int height) {
 	                                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
 	                                            IID_PPV_ARGS(m_colorCopy.put())))) {
 		LogError << "RTAO: color copy failed";
-		m_ao.reset();
-		m_shadow.reset();
-		m_gi.reset();
+		failAlloc();
 		return;
 	}
 	// Temporal history targets. History textures start as copy destinations that
@@ -1570,17 +1668,7 @@ void D3D12Rtao::resize(int width, int height) {
 	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, m_spec)
 	   || !makeTex(color, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_specPrev)) {
 		LogError << "RTAO: history targets failed";
-		m_ao.reset();
-		m_shadow.reset();
-		m_gi.reset();
-		m_colorCopy.reset();
-		m_aoPrev.reset();
-		m_shadowPrev.reset();
-		m_depthCur.reset();
-		m_depthPrev.reset();
-		m_giPrev.reset();
-		m_spec.reset();
-		m_specPrev.reset();
+		failAlloc();
 		return;
 	}
 	D3D12_RESOURCE_DESC mask = ao;
@@ -1604,7 +1692,7 @@ void D3D12Rtao::resize(int width, int height) {
 	                                               D3D12_RESOURCE_STATE_RENDER_TARGET, &maskClear,
 	                                               IID_PPV_ARGS(m_metalMask.put())))) {
 		LogError << "RTAO: reflection mask targets failed";
-		m_ao.reset();
+		failAlloc();
 		return;
 	}
 	if(m_rtvHeap && m_device) {
@@ -1636,6 +1724,9 @@ void D3D12Rtao::resize(int width, int height) {
 }
 
 bool D3D12Rtao::ensureTargets(int width, int height) {
+	if(m_targetsFailed && width == m_failedW && height == m_failedH) {
+		return false;
+	}
 	if(width != m_width || height != m_height || !m_ao) {
 		resize(width, height);
 	}
@@ -1654,6 +1745,16 @@ void D3D12Rtao::updateDescriptors() {
 		h.ptr += SIZE_T(i) * m_descriptorSize;
 		return h;
 	};
+	D3D12_SHADER_RESOURCE_VIEW_DESC nullBuf {};
+	nullBuf.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	nullBuf.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	nullBuf.Format = DXGI_FORMAT_UNKNOWN;
+	nullBuf.Buffer.FirstElement = 0;
+	nullBuf.Buffer.NumElements = 1;
+	nullBuf.Buffer.StructureByteStride = 16;
+	for(UINT i = 0; i < kRtSrvCount; ++i) {
+		m_device->CreateShaderResourceView(nullptr, &nullBuf, slot(i));
+	}
 	if(m_tlas) {
 		D3D12_SHADER_RESOURCE_VIEW_DESC tlas {};
 		tlas.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
@@ -1802,8 +1903,9 @@ void D3D12Rtao::clearRooms() {
 	m_roomsDirty = true;
 }
 
+template <typename Vertex>
 void D3D12Rtao::addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
-                        const SMY_VERTEX * vertices, size_t nvertices,
+                        const Vertex * vertices, size_t nvertices,
                         const unsigned short * indices, size_t nindices) {
 	if(!m_supported || !vertices || nvertices == 0) {
 		return;
@@ -1885,38 +1987,13 @@ void D3D12Rtao::addRoomMetal(Renderer::Primitive primitive, const SMY_VERTEX * v
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
                          const unsigned short * indices, size_t nindices) {
-	if(!m_supported || !vertices || nvertices == 0) {
-		return;
-	}
-	const size_t n = indices ? nindices : nvertices;
-	forEachTriangleIndices(primitive, n, [&](size_t i0, size_t i1, size_t i2) {
-		if(m_positions.size() / 3 >= kMaxDynTriangles) {
-			if(!m_loggedCap) {
-				LogInfo << "DXR: triangle cap " << kMaxDynTriangles;
-				m_loggedCap = true;
-			}
-			return;
-		}
-		size_t a = 0, b = 0, c = 0;
-		if(!resolveIndex(indices, nindices, nvertices, i0, a)
-		   || !resolveIndex(indices, nindices, nvertices, i1, b)
-		   || !resolveIndex(indices, nindices, nvertices, i2, c)) {
-			return;
-		}
-		const Vec3f & pa = vertices[a].p;
-		const Vec3f & pb = vertices[b].p;
-		const Vec3f & pc = vertices[c].p;
-		const Vec3f e0 = pb - pa;
-		const Vec3f e1 = pc - pa;
-		const Vec3f nrm = glm::cross(e0, e1);
-		if(glm::dot(nrm, nrm) < 1e-4f) {
-			return;
-		}
-		m_positions.push_back({ pa.x, pa.y, pa.z, 1.f });
-		m_positions.push_back({ pb.x, pb.y, pb.z, 1.f });
-		m_positions.push_back({ pc.x, pc.y, pc.z, 1.f });
-	});
+	addTris(m_positions, kMaxDynTriangles, primitive, vertices, nvertices, indices, nindices);
 }
+
+template void D3D12Rtao::addTris<SMY_VERTEX>(std::vector<Pos> &, size_t, Renderer::Primitive,
+                                             const SMY_VERTEX *, size_t, const unsigned short *, size_t);
+template void D3D12Rtao::addTris<SMY_VERTEX3>(std::vector<Pos> &, size_t, Renderer::Primitive,
+                                              const SMY_VERTEX3 *, size_t, const unsigned short *, size_t);
 
 bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 	if(!m_device || (m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty())) {
@@ -2251,7 +2328,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 }
 
 void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
-                               ID3D12Resource * depth) {
+                               ID3D12Resource * depth, float jitterNdcX, float jitterNdcY) {
 	if(!list || !m_rtvHeap || !m_waterMask || !m_waterDepth || !m_metalMask) {
 		return;
 	}
@@ -2290,11 +2367,16 @@ void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4
 		struct MaskCb {
 			float viewProj[16];
 			float maskValue;
-			float pad0, pad1, pad2;
+			float jitterX;
+			float jitterY;
+			float pad2;
 		} cb {};
+		static_assert(sizeof(MaskCb) == 20 * 4, "mask root constants");
 		std::memcpy(cb.viewProj, glm::value_ptr(viewProj), sizeof(cb.viewProj));
 		cb.maskValue = 1.f;
-		list->SetGraphicsRoot32BitConstants(0, 20, &cb, 0);
+		cb.jitterX = jitterNdcX;
+		cb.jitterY = jitterNdcY;
+		list->SetGraphicsRoot32BitConstants(0, UINT(sizeof(cb) / 4), &cb, 0);
 		list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE dsv {};
@@ -2358,13 +2440,13 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	if(!m_ready || !list || !backbuffer || !depth) {
 		return false;
 	}
-	const int aoQuality = (std::max)(0, (std::min)(settings.aoQuality, 3));
-	const int shadowQuality = (std::max)(0, (std::min)(settings.shadowQuality, 3));
-	const int giQuality = (std::max)(0, (std::min)(settings.giQuality, 3));
-	const int transRefl = (std::max)(0, (std::min)(settings.transRefl, 3));
-	const int metalRefl = (std::max)(0, (std::min)(settings.metalRefl, 3));
-	const int shadowDenoise = (std::max)(0, (std::min)(settings.shadowDenoise, 1));
-	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, 2));
+	const int aoQuality = (std::max)(0, (std::min)(settings.aoQuality, kMaxRtQuality));
+	const int shadowQuality = (std::max)(0, (std::min)(settings.shadowQuality, kMaxRtQuality));
+	const int giQuality = (std::max)(0, (std::min)(settings.giQuality, kMaxRtQuality));
+	const int transRefl = (std::max)(0, (std::min)(settings.transRefl, kMaxRtQuality));
+	const int metalRefl = (std::max)(0, (std::min)(settings.metalRefl, kMaxRtQuality));
+	const int shadowDenoise = (std::max)(0, (std::min)(settings.shadowDenoise, kMaxShadowDenoise));
+	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, kMaxGiDenoise));
 	const int contact = settings.contact ? 1 : 0;
 	const bool skipTemporal = settings.skipTemporal;
 	if(aoQuality <= 0 && shadowQuality <= 0 && giQuality <= 0 && transRefl <= 0 && metalRefl <= 0
@@ -2388,7 +2470,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		return false;
 	}
 	const glm::mat4x4 viewProjEarly = proj * view;
-	rasterizeMasks(list, viewProjEarly, depth);
+	rasterizeMasks(list, viewProjEarly, depth, settings.jitterNdcX, settings.jitterNdcY);
 	D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv {};
 	depthSrv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 	depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2437,50 +2519,15 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		m_lights->Unmap(0, nullptr);
 	}
 	
-	const glm::mat4x4 viewProj = proj * view;
+	const glm::mat4x4 jitteredProj = jitteredProjection(proj, settings.jitterNdcX, settings.jitterNdcY);
+	const glm::mat4x4 viewProj = jitteredProj * view;
 	const glm::mat4x4 inv = glm::inverse(viewProj);
 	
-	struct Constants {
-		float invViewProj[16];
-		float cameraPos[3];
-		float radius;
-		UINT aoRays;
-		float pixelWorld;
-		UINT width;
-		UINT height;
-		UINT lightCount;
-		UINT shadowsOn;
-		UINT pad0;
-		UINT pad1;
-		float prevViewProj[16];
-		UINT penumbraRays;
-		UINT giOn;
-		UINT giWidth;
-		UINT giHeight;
-		UINT giRays;
-		float temporalAlpha;
-		float projA;
-		float projB;
-		UINT specRays;
-		UINT specHalfRes;
-		UINT contactOn;
-		UINT metalRays;
-		float specAlpha;
-		float contactTMax;
-		float giTemporalAlpha;
-		UINT playerVertBase;
-	} cb {};
-	static_assert(sizeof(cb) == kRootConstants * 4, "DXR root constants must match HLSL cbuffer");
+	DxrConstants cb {};
 	std::memcpy(cb.invViewProj, glm::value_ptr(inv), sizeof(cb.invViewProj));
 	cb.cameraPos[0] = cam.x;
 	cb.cameraPos[1] = cam.y;
 	cb.cameraPos[2] = cam.z;
-	const float aoRadius[] = { 0.f, 24.f, 32.f, 48.f };
-	// Ray counts per quality (Off / Low / Medium / High). The user asked for a
-	// lot: High is ~70 rays per pixel with three lights reaching it.
-	const UINT aoRayCount[] = { 0u, 8u, 16u, 24u };
-	const UINT shadowRays[] = { 0u, 2u, 8u, 16u };
-	const UINT giRayCount[] = { 0u, 4u, 8u, 16u };
 	cb.radius = aoRadius[aoQuality];
 	cb.aoRays = aoRayCount[aoQuality];
 	// One pixel spans 2 / width in NDC; clip.x = proj[0][0] * xView, so at view
@@ -2497,14 +2544,10 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.giWidth = UINT((std::max)(m_width / 2, 1));
 	cb.giHeight = UINT((std::max)(m_height / 2, 1));
 	cb.giRays = giRayCount[giQuality];
-	const float shadowAlpha[] = { 0.15f, kTemporalAlpha };
-	const float giAlpha[] = { 0.20f, 0.12f, 0.08f };
 	cb.temporalAlpha = (m_histValid && !skipTemporal) ? shadowAlpha[shadowDenoise] : 0.f;
 	// Camera.cpp: clip.z = Q * zView - Q * near, clip.w = zView → zView = B / (z - A).
 	cb.projA = proj[2][2];
 	cb.projB = proj[3][2];
-	const UINT transRays[] = { 0u, 1u, 1u, 2u };
-	const UINT metalRayCount[] = { 0u, 1u, 2u, 2u };
 	cb.specRays = transRays[transRefl];
 	cb.specHalfRes = (transRefl == 1) ? 1u : 0u;
 	cb.contactOn = (contact && shadowQuality > 0) ? 1u : 0u;
@@ -2527,13 +2570,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	if(m_viewCbuf) {
 		void * mappedView = nullptr;
 		if(SUCCEEDED(m_viewCbuf->Map(0, nullptr, &mappedView)) && mappedView) {
-			struct ViewCbuf {
-				float viewProj[16];
-				float specTMax;
-				float giTMax;
-				float rtRange;
-				float pad;
-			} viewCb {};
+			DxrViewCbuf viewCb {};
 			std::memcpy(viewCb.viewProj, glm::value_ptr(viewProj), 64);
 			viewCb.specTMax = dist.specTMax;
 			viewCb.giTMax = dist.giTMax;

@@ -23,6 +23,8 @@
 
 #include <glm/glm.hpp>
 
+#include <d3d12.h>
+
 struct ID3D12Device;
 struct ID3D12Resource;
 
@@ -172,6 +174,8 @@ private:
 	void releaseSceneTargets();
 	void bindPassTargets();
 	void blitSceneDepthToDisplay();
+	[[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE currentRtv() const;
+	[[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE currentDsv() const;
 	[[nodiscard]] bool usingSceneTargets() const;
 	[[nodiscard]] int passWidth() const;
 	[[nodiscard]] int passHeight() const;

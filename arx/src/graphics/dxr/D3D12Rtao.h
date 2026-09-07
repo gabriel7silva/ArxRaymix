@@ -112,6 +112,9 @@ public:
 		int distance = 2;
 		float range = 0.f;
 		bool skipTemporal = false;
+		//! NDC Halton offset matching the world-pass VS (pixel * 2 / size).
+		float jitterNdcX = 0.f;
+		float jitterNdcY = 0.f;
 	};
 	
 	struct GpuLight {
@@ -168,10 +171,12 @@ private:
 	bool ensureGeometryBuffers(ID3D12GraphicsCommandList * list);
 	bool buildAcceleration(ID3D12GraphicsCommandList * list);
 	void updateDescriptors();
+	void releaseTargets();
 	void rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
-	                    ID3D12Resource * depth);
+	                    ID3D12Resource * depth, float jitterNdcX, float jitterNdcY);
+	template <typename Vertex>
 	void addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
-	             const SMY_VERTEX * vertices, size_t nvertices,
+	             const Vertex * vertices, size_t nvertices,
 	             const unsigned short * indices, size_t nindices);
 	void addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	
@@ -246,6 +251,9 @@ private:
 	bool m_roomsDirty = true;
 	bool m_maskIsSrv = false;
 	bool m_masksRasterized = false;
+	bool m_targetsFailed = false;
+	int m_failedW = 0;
+	int m_failedH = 0;
 	size_t m_reflectOnlyStart = SIZE_MAX;
 	
 };
