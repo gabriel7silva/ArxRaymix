@@ -39,7 +39,6 @@ enum MENUSTATE {
 	Page_OptionsVideo,
 	Page_OptionsRender,
 	Page_OptionsRayTracing,
-	Page_OptionsRemix,
 	Page_OptionsInterface,
 	Page_OptionsAudio,
 	Page_OptionsInput,

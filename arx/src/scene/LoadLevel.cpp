@@ -64,9 +64,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/Core.h"
 
 #include "Configure.h"
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixScene.h"
-#endif
 
 #include "game/EntityManager.h"
 #include "game/Levels.h"
@@ -99,7 +96,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "util/Range.h"
 #include "util/String.h"
-
 
 extern bool bGCroucheToggle;
 
@@ -519,9 +515,6 @@ bool DanaeLoadLevel(AreaId area, bool loadEntities) {
 
 void DanaeClearLevel() {
 	
-#if ARX_HAVE_RTX_REMIX
-	remix::releaseLevelResources();
-#endif
 	
 	g_playerBook.forcePage(BOOKMODE_STATS);
 	g_miniMap.reset();

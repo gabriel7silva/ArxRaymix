@@ -66,9 +66,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "window/RenderWindow.h"
 
 #include "Configure.h"
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixScene.h"
-#endif
 
 static TextureContainer * FISHTANK_img = nullptr;
 static TextureContainer * ARKANE_img = nullptr;
@@ -111,15 +108,6 @@ static void ARX_INTERFACE_ShowLogo(TextureContainer * logo) {
 	
 	Vec2f size = Vec2f(logo->size());
 	Vec2f pos = Vec2f(g_size.center()) - size / 2.f;
-#if ARX_HAVE_RTX_REMIX
-	// Original logos are 640x480. On a 1080p Remix window that is a postage
-	// stamp; scale uniformly to the window so Fishtank/Arkane fill the view.
-	if(remix::isRemixPreviewActive() && size.x > 0.f && size.y > 0.f) {
-		const float fit = std::min(float(g_size.width()) / size.x, float(g_size.height()) / size.y);
-		size *= fit;
-		pos = Vec2f(g_size.center()) - size * 0.5f;
-	}
-#endif
 	
 	EERIEDrawBitmap(Rectf(pos, size.x, size.y), 0.001f, logo, Color::white);
 	

@@ -30,10 +30,6 @@
 #if ARX_HAVE_D3D9
 #include "graphics/d3d9/D3D9Renderer.h"
 #endif
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixRenderer.h"
-#include "graphics/remix/RemixScene.h"
-#endif
 
 #ifdef ARX_DEBUG
 #include <signal.h>
@@ -124,8 +120,6 @@ SDL2Window::SDL2Window()
 	m_renderer = new D3D12Renderer;
 #elif ARX_HAVE_D3D9
 	m_renderer = new D3D9Renderer;
-#elif ARX_HAVE_RTX_REMIX
-	m_renderer = new remix::RemixRenderer;
 #else
 	m_renderer = new OpenGLRenderer;
 #endif
@@ -133,11 +127,6 @@ SDL2Window::SDL2Window()
 
 SDL2Window::~SDL2Window() {
 	
-#if ARX_HAVE_RTX_REMIX
-	if(remix::isRemixDllHooked() || remix::isRemixPreviewActive()) {
-		remix::exitWithoutDestroyingHwnd(EXIT_SUCCESS);
-	}
-#endif
 	
 	delete m_input;
 	

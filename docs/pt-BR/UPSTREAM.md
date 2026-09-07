@@ -9,4 +9,4 @@ A lista de ficheiros e o commit-base estão no documento em inglês: [`../UPSTRE
 | Versão-base | Arx Libertatis **1.3-dev** |
 | Commit-base | `5b95e4c5ca9d583f1b11c085326979772645e0f3` |
 
-Ficheiros novos do remaster: `arx/src/graphics/d3d12/`, `arx/src/graphics/dxr/` e `arx/src/graphics/d3d9/`. Streamline vive em `arx/third_party/streamline/` (`scripts/fetch-streamline.ps1`). Fontes Remix em `arx/src/graphics/remix/` são leftover e não entram no caminho de produto. Path tracing (Phase 6) está arquivado.
+Ficheiros novos do remaster: `arx/src/graphics/d3d12/`, `arx/src/graphics/dxr/` e `arx/src/graphics/d3d9/`. Streamline vive em `arx/third_party/streamline/` (`scripts/fetch-streamline.ps1`). A camada RTX Remix foi apagada. Path tracing (Phase 6) está arquivado.

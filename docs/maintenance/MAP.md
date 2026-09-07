@@ -54,7 +54,6 @@ graph TD
     Dxr["dxr/ (DXR + Streamline)"]
     D9["d3d9/"]
     GL["opengl/"]
-    Remix["remix/ — dead"]
   end
 
   Win["window/SDL2Window"]
@@ -76,15 +75,13 @@ graph TD
   D12 --> Api
   Cfg -.->|"DXR / DLSS / FG / RR"| D12
 
-  classDef dead stroke-dasharray:4 3,opacity:0.55
-  class Remix dead
 ```
 
 What this asserts, and you could disprove:
 
 - One backend is created per process, by the window layer. There is no path that runs two.
 - `dxr/` depends on `d3d12/`, never the reverse. Ray tracing is an addition to the raster, so removing it leaves a working renderer.
-- `remix/` has no inbound edges at all.
+- The Remix directories were deleted. There is no remix backend and no inbound edge to revive.
 - The menu writes settings; it never talks to the renderer.
 
 Re-derive it by reading the backend construction in `arx/src/window/SDL2Window.cpp`.

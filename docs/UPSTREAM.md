@@ -25,12 +25,7 @@ arx/src/graphics/dxr/
 arx/src/graphics/d3d9/
 ```
 
-Leftover experiment (not compiled into the product path):
-
-```
-arx/src/graphics/remix/
-arx/third_party/rtx-remix/
-```
+The RTX Remix experiment (`arx/src/graphics/remix/`, `arx/third_party/rtx-remix/`) was deleted and is not part of the tree.
 
 NVIDIA Streamline is fetched into `arx/third_party/streamline/` by `scripts/fetch-streamline.ps1` and is not an Arx Libertatis file.
 
