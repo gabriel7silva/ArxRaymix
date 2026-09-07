@@ -3170,19 +3170,9 @@ void D3D12Renderer::beginSceneUpscale() {
 	}
 	static int s_mode = -1, s_rw = 0, s_rh = 0;
 	if(slMode != s_mode || rw != s_rw || rh != s_rh) {
-		const char * name = "Off";
-		switch(slMode) {
-			case 1: name = "Performance"; break;
-			case 2: name = "Balanced"; break;
-			case 3: name = "Quality"; break;
-			case 4: name = "UltraPerformance"; break;
-			case 5: name = "UltraQuality"; break;
-			case 6: name = "DLAA"; break;
-			default: break;
-		}
-		if(config.video.dxrDlss == 5 && slMode == 1) {
-			name = "UltraPerformance→Performance";
-		}
+		const char * name = D3D12Streamline::wasDowngraded(config.video.dxrDlss, m_height)
+			? "UltraPerformance→Performance"
+			: D3D12Streamline::dlssModeName(slMode);
 		m->dlssReset = true;
 		LogInfo << "Streamline: DLSS " << name << " render=" << rw << "x" << rh
 		        << " output=" << m_width << "x" << m_height
@@ -3210,7 +3200,7 @@ void D3D12Renderer::applyStreamlineRr() {
 		m->worldPass = false;
 		return;
 	}
-	const int slMode = m->dlssMode > 0 ? m->dlssMode : 6;
+	const int slMode = m->dlssMode > 0 ? m->dlssMode : D3D12Streamline::dlaaMode();
 	const bool haveScene = m->sceneReady && m->sceneColor && m->sceneDepth;
 	D3D12Streamline::Frame frame;
 	frame.list = m->list.Get();
@@ -3223,7 +3213,7 @@ void D3D12Renderer::applyStreamlineRr() {
 	frame.height = haveScene ? m->sceneH : passHeight();
 	frame.outputWidth = m_width;
 	frame.outputHeight = m_height;
-	frame.dlssMode = slMode > 0 ? slMode : 6;
+	frame.dlssMode = slMode;
 	frame.jitterX = m->jitterX;
 	frame.jitterY = m->jitterY;
 	frame.reset = m->dlssReset;
@@ -3232,8 +3222,12 @@ void D3D12Renderer::applyStreamlineRr() {
 	frame.wantFg = wantFg;
 	if(m_rtao) {
 		frame.albedoSrc = m_rtao->colorCopyResource();
-		frame.waterMask = m_rtao->waterMaskResource();
-		frame.metalMask = m_rtao->metalMaskResource();
+		if(m_rtao->masksReadable() && m_rtao->masksRasterized()) {
+			frame.waterMask = m_rtao->waterMaskResource();
+			frame.metalMask = m_rtao->metalMaskResource();
+			frame.waterDepth = m_rtao->waterDepthResource();
+			frame.masksReady = true;
+		}
 	}
 	if(g_camera) {
 		frame.cameraPos = glm::vec3(g_camera->m_pos.x, g_camera->m_pos.y, g_camera->m_pos.z);
@@ -3244,8 +3238,12 @@ void D3D12Renderer::applyStreamlineRr() {
 		frame.cameraPos = glm::vec3(invView[3]);
 	}
 	frame.cameraNear = kNearW;
+	bool upscaled = false;
 	if(wantDlss || wantRr) {
-		m_sl->evaluate(frame);
+		upscaled = m_sl->evaluate(frame);
+	}
+	if(haveScene && !upscaled) {
+		m_sl->blitSceneToOutput(frame);
 	}
 	m_sl->prepareFrameGen(frame);
 	m->dlssReset = false;

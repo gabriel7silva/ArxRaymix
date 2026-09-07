@@ -49,6 +49,13 @@ public:
 	[[nodiscard]] ID3D12Resource * colorCopyResource() const { return m_colorCopy.Get(); }
 	[[nodiscard]] ID3D12Resource * waterMaskResource() const { return m_waterMask.Get(); }
 	[[nodiscard]] ID3D12Resource * metalMaskResource() const { return m_metalMask.Get(); }
+	[[nodiscard]] ID3D12Resource * waterDepthResource() const { return m_waterDepth.Get(); }
+	//! Masks exist and are in PIXEL/NON_PIXEL shader-resource state.
+	[[nodiscard]] bool masksReadable() const {
+		return m_maskIsSrv && m_waterMask && m_metalMask && m_waterDepth;
+	}
+	//! rasterizeMasks ran this world frame (cleared in beginWorldFrame).
+	[[nodiscard]] bool masksRasterized() const { return m_masksRasterized; }
 	
 	void beginWorldFrame();
 	void markReflectOnlyStart();
@@ -237,6 +244,7 @@ private:
 	bool m_waterVertsAreSrv = false;
 	bool m_roomsDirty = true;
 	bool m_maskIsSrv = false;
+	bool m_masksRasterized = false;
 	size_t m_reflectOnlyStart = SIZE_MAX;
 	
 };
