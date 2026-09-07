@@ -409,8 +409,11 @@ bool initLocalisation() {
 	
 	// English first so a partial translation keeps English instead of raw keys.
 	if(config.interface.language != "english") {
-		loadUtextLanguage("english", false);
-		if(!loadUtextLanguage(config.interface.language, true)) {
+		const bool haveEnglish = loadUtextLanguage("english", false);
+		if(!haveEnglish) {
+			LogWarning << "English localisation (utext_english.ini) not found; speech variants may collapse";
+		}
+		if(!loadUtextLanguage(config.interface.language, haveEnglish)) {
 			return false;
 		}
 	} else if(!loadUtextLanguage("english", false)) {
