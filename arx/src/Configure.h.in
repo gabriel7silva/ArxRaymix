@@ -56,6 +56,7 @@
 #cmakedefine01 ARX_HAVE_RTX_REMIX
 #cmakedefine01 ARX_HAVE_D3D9
 #cmakedefine01 ARX_HAVE_D3D12
+#cmakedefine01 ARX_HAVE_STREAMLINE
 
 // Audio backend
 #cmakedefine01 ARX_HAVE_OPENAL

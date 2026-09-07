@@ -111,7 +111,7 @@ public:
 	[[nodiscard]] const char * getGraphicsApiName() const override { return "DirectX 12"; }
 	
 	[[nodiscard]] float getMaxSupportedAnisotropy() const override { return 16.f; }
-	void setMaxAnisotropy(float value) override { m_anisotropy = value; }
+	void setMaxAnisotropy(float value) override;
 	
 	[[nodiscard]] AlphaCutoutAntialising getMaxSupportedAlphaCutoutAntialiasing() const override {
 		return NoAlphaCutoutAA;
@@ -128,8 +128,16 @@ public:
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
 	
 	void showFrame() override;
+	void beginSceneUpscale() override;
 	void applyWorldRayEffects() override;
+	void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) override;
 	[[nodiscard]] bool supportsRayTracing() const override;
+	[[nodiscard]] bool supportsDlss() const override;
+	[[nodiscard]] bool supportsDlssRr() const override;
+	[[nodiscard]] bool supportsDlssG() const override;
+	[[nodiscard]] Vec2i internalRenderSize() const override;
+	[[nodiscard]] Vec2i queryDlssInternalSize(int cfgMode, int displayW, int displayH) const override;
+	[[nodiscard]] DlssDebugState dlssDebugState() const override;
 	
 	void drawTextured(Primitive primitive, const TexturedVertex * vertices, size_t count);
 	void drawWorldVertices(Primitive primitive, const SMY_VERTEX * vertices, size_t count);
@@ -148,6 +156,7 @@ public:
 	
 private:
 	void releaseDevice();
+	void createSamplers();
 	bool createPipeline();
 	bool createFrameResources();
 	void resizeSwapchain(int width, int height);
@@ -157,6 +166,14 @@ private:
 	void bindDrawState(Primitive primitive);
 	void drawGpuVerts(Primitive primitive, const void * verts, size_t stride, size_t count);
 	void restoreRasterBind();
+	void applyStreamlineRr();
+	bool ensureSceneTargets(int rw, int rh);
+	void releaseSceneTargets();
+	void bindPassTargets();
+	void blitSceneDepthToDisplay();
+	[[nodiscard]] bool usingSceneTargets() const;
+	[[nodiscard]] int passWidth() const;
+	[[nodiscard]] int passHeight() const;
 	void collectWorld(Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
 	                  const unsigned short * indices, size_t nindices);
 	void collectWorld(Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
@@ -165,12 +182,15 @@ private:
 	struct Impl;
 	Impl * m = nullptr;
 	class D3D12Rtao * m_rtao = nullptr;
+	class D3D12Streamline * m_sl = nullptr;
 	bool m_loggedRtaoOff = false;
 	bool m_loggedRtaoOn = false;
 	bool m_loggedShadowsOff = false;
 	bool m_loggedShadowsOn = false;
 	bool m_loggedGiOff = false;
 	bool m_loggedGiOn = false;
+	bool m_loggedReflOff = false;
+	bool m_loggedReflOn = false;
 	
 	Rect m_viewport;
 	Rect m_scissor;

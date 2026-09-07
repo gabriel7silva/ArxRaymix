@@ -138,6 +138,7 @@ public:
 		bool screenShake;
 		
 		int levelOfDetail;
+		//! Far-plane / view distance slider (0–10). Kept as `fog=` in cfg.ini.
 		float fogDistance;
 		bool antialiasing;
 		int maxAnisotropicFiltering;
@@ -154,6 +155,30 @@ public:
 		int dxrShadows;
 		//! One-bounce diffuse GI. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
 		int dxrGi;
+		//! 0 = Off, 1 = Low, 2 = Medium, 3 = High, 4 = Custom.
+		int dxrPreset;
+		//! Opaque / metal reflections. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
+		int dxrReflections;
+		//! Water / transparent reflections. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
+		int dxrTransReflections;
+		//! Direct-shadow denoise. 0 = Low, 1 = High.
+		int dxrShadowDenoise;
+		//! Indirect denoise. 0 = Low, 1 = Medium, 2 = High.
+		int dxrGiDenoise;
+		//! Short silhouette contact rays. 0 = Off, 1 = On.
+		int dxrContact;
+		//! Include small props in the TLAS. 0 = Off, 1 = On.
+		int dxrDebris;
+		//! Cutout / any-hit. 0 = Off, 1 = Low, 2 = High.
+		int dxrTransparency;
+		//! DLSS Super Resolution. 0=Off 1=DLAA 2=Quality 3=Balanced 4=Performance 5=Ultra Performance.
+		int dxrDlss;
+		//! DLSS Ray Reconstruction via Streamline. 0 = Off, 1 = On.
+		int dxrRr;
+		//! DLSS Frame Generation. 0 = Off, 1 = On (2x).
+		int dxrFg;
+		//! How far DXR collects / traces. 0 = Low, 1 = Medium, 2 = High, 3 = Ultra.
+		int dxrDistance;
 		
 	} video;
 	
@@ -253,6 +278,11 @@ public:
 	
 	bool setActionKey(ControlAction actionId, size_t index, InputKeyId key);
 	void setDefaultActionKeys();
+	
+	//! Writes every DXR slider from a named preset. Custom (4) is a no-op.
+	void applyDxrPreset(int preset);
+	//! True when any hybrid DXR effect is on (used to skip the pass).
+	[[nodiscard]] bool dxrEffectsEnabled() const;
 	
 	/*!
 	 * Saves all config entries to a file.
