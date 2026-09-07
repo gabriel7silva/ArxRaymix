@@ -23,6 +23,8 @@ Each entry has the same fields:
 | Parameter | Kind | Controls |
 |---|---|---|
 | [`rtao`, `dxrShadows`, `dxrGi`](#quality-settings) | setting | Which effects run and at what level |
+| [`dxrDistance`](#ray-tracing-distance) | setting | How far DXR collects and traces |
+| [`fogDistance`](#render-distance) | setting | Far plane (`fog=` in cfg.ini) |
 | [`aoRayCount`, `shadowRays`, `giRayCount`](#ray-counts-per-quality) | array[quality] | Rays per pixel per effect |
 | [`aoRadius`](#occlusion-radius) | array[quality] | How far occlusion looks |
 | [`kMaxShadowLights`](#shadow-light-budget) | budget | How many lights can cast at once |
@@ -53,7 +55,39 @@ grep -n "rtao\|dxrShadows\|dxrGi" arx/src/core/Config.cpp
 **Lower it** more visible dither and more temporal lag; at the lowest level the effect is a hint rather than a result.
 **Breaks** [INV-11](INVARIANTS.md#inv-11).
 
-These are the only ray tracing knobs a player can reach. Everything else on this page is a source edit.
+Players also reach reflections, denoise, contact, debris, transparency, `dxr_distance`, DLSS, Frame Generation and experimental Ray Reconstruction. Those keys are listed in `docs/CONFIGURATION.md`. Everything else on this page is a source edit.
+
+### <a id="ray-tracing-distance"></a>`dxrDistance`
+
+**Symbol** `config.video.dxrDistance` / `dxr_distance`.
+**Lives in** `arx/src/core/Config.h`; applied through `D3D12Rtao::distancePreset`.
+**Kind** `setting`, 0–3 (Low / Medium / High / Ultra). Independent of the RT preset.
+**Read it**
+
+```
+grep -n "distancePreset\|dxrDistance" arx/src/graphics/dxr/D3D12Rtao.h arx/src/core/Config.cpp
+```
+
+**Safe range** the clamp in `Config::init` (0–3). Each step writes caster range, room hops, light hops, reflection `TMax` and GI `TMax` into `ViewParams` — not into extra root constants ([INV-13](INVARIANTS.md#inv-13)). The live range is also clamped to the render-distance fog end.
+**Raise it** more distant rooms cast and more of the bounce / reflection rays travel; bigger TLAS rebuilds.
+**Lower it** far rooms drop out of the acceleration structure and far pixels skip DXR (`rtRange`).
+**Breaks** [INV-13](INVARIANTS.md#inv-13).
+
+### <a id="render-distance"></a>`fogDistance`
+
+**Symbol** `config.video.fogDistance`, persisted as `fog=`.
+**Lives in** `arx/src/core/Config.h`; converted to `cdepth` in `arx/src/graphics/GlobalFog.cpp`.
+**Kind** `setting`, slider 0–10. This fork treats it as the far plane, not fog density.
+**Read it**
+
+```
+grep -n "fogDistance\|fZFogStart\|fZFogEnd" arx/src/graphics/GlobalFog.cpp arx/src/graphics/GlobalFog.h
+```
+
+**Safe range** 0–10. Fog colour comes from the zone; near-black zone colour falls back to a haze so the clip is mist, not a hole.
+**Raise it** more of the map stays in the far plane.
+**Lower it** the world fades into fog sooner.
+**Breaks** [INV-14](INVARIANTS.md#inv-14) if D3D12 fog enable is wired to the DLSS `worldPass` flag instead of `getFog()`.
 
 ### <a id="ray-counts-per-quality"></a>`aoRayCount`, `shadowRays`, `giRayCount`
 
@@ -115,19 +149,19 @@ grep -n "kMaxShadowLights" arx/src/graphics/dxr/D3D12Rtao.h
 
 ### <a id="caster-distance"></a>`kCasterDistance`
 
-**Symbol** `kCasterDistance`.
+**Symbol** `kCasterDistance` (High-era fallback constant). Live collect range is `distancePreset(dxr_distance).caster`.
 **Lives in** `arx/src/graphics/dxr/D3D12Rtao.h`, on `D3D12Rtao`.
 **Kind** `budget`, in Arx units.
 **Read it**
 
 ```
-grep -n "kCasterDistance" arx/src/graphics/dxr/D3D12Rtao.h
+grep -n "kCasterDistance\|distancePreset" arx/src/graphics/dxr/D3D12Rtao.h
 ```
 
-**Safe range** should exceed the reach of the lights you expect to cast, or geometry that should block a light will not be in the structure. Above that it just adds triangles.
-**Raise it** distant geometry starts casting; more triangles per build.
+**Safe range** should exceed the reach of the lights you expect to cast, or geometry that should block a light will not be in the structure. Above that it just adds triangles. Do not raise this by adding root constants.
+**Raise it** distant geometry starts casting; more triangles per build. Prefer the menu slider.
 **Lower it** shadows lose their casters at distance, and the failure looks like light leaking through walls.
-**Breaks** —
+**Breaks** [INV-13](INVARIANTS.md#inv-13).
 
 ### <a id="triangle-budgets"></a>`kMaxRoomTriangles`, `kMaxDynTriangles`
 
@@ -147,13 +181,13 @@ grep -n "kMaxRoomTriangles\|kMaxDynTriangles" arx/src/graphics/dxr/D3D12Rtao.cpp
 
 ### <a id="room-cache-bounds"></a>Room cache bounds
 
-**Symbol** `kMaxRooms`, `kHops`, and the camera-movement threshold that forces a rebuild.
-**Lives in** `arx/src/graphics/d3d12/D3D12Renderer.cpp`, in `collectRoomCasters` and `D3D12Renderer::applyWorldRayEffects`.
+**Symbol** `DistancePreset::maxRooms`, `roomHops`, and the camera-movement threshold that forces a rebuild.
+**Lives in** `D3D12Rtao::distancePreset`; applied from `collectRoomCasters` and `D3D12Renderer::applyWorldRayEffects`.
 **Kind** `budget`.
 **Read it**
 
 ```
-grep -n "kMaxRooms\|kHops" arx/src/graphics/d3d12/D3D12Renderer.cpp
+grep -n "distancePreset\|maxRooms\|roomHops" arx/src/graphics/dxr/D3D12Rtao.h
 grep -n "s_roomCam" arx/src/graphics/d3d12/D3D12Renderer.cpp
 ```
 
@@ -243,7 +277,7 @@ These are constants in the same file, next to the ones above. They are derived o
 
 | Looks like a knob | Actually | See |
 |---|---|---|
-| `kRootConstants` | The size of the constant buffer in words. It must equal the size of the matching struct, and the hardware caps it. A `static_assert` catches a size mismatch but not a field reordered inside the same size | [INV-01](INVARIANTS.md#inv-01) |
+| `kRootConstants` | The size of the constant buffer in words. It must equal the size of the matching struct, and the hardware root-signature cap is 64 DWORDs (already full). A `static_assert` catches a size mismatch but not a field reordered inside the same size | [INV-01](INVARIANTS.md#inv-01), [INV-13](INVARIANTS.md#inv-13) |
 | `kRtSrvCount`, `kRtUavBase`, `kRtUavCount`, `kCompositeBase`, `kHeapCount` | Five projections of one descriptor layout, tied by an equation, and each also stated as a register in the shaders | [INV-02](INVARIANTS.md#inv-02) |
 | `SKY_Z` | The depth value that means "nothing was drawn here". It must equal the clear value exactly | [INV-04](INVARIANTS.md#inv-04) |
 | `kLightFloat4s` | How many four-float groups one light occupies. It must match both the packed structure and the shader's indexing of the light buffer, and a `static_assert` ties the first two | [INV-08](INVARIANTS.md#inv-08) |

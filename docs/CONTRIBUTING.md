@@ -7,16 +7,19 @@ English is the default for file names, folders, comments, and documentation. Por
 | Path | What it is |
 |---|---|
 | `arx/src/graphics/d3d12/` | Direct3D 12 raster backend (default on Windows) |
+| `arx/src/graphics/dxr/` | Hybrid DXR (AO, shadows, GI, reflections) and Streamline (DLSS, FG, RR) |
 | `arx/src/graphics/d3d9/` | Direct3D 9 raster backend (fallback) |
+| `arx/src/graphics/GlobalFog.{h,cpp}` | Far plane from the Render distance slider (`fog=`) |
 | `arx/src/window/SDL2Window.cpp` | Chooses the backend, creates the HWND and the device |
-| `arx/src/gui/MainMenu.cpp` | Video Options: current API, slider, restart notice |
-| `arx/src/core/Config.{h,cpp}` | `config.video.renderer` persistence |
-| `arx/src/graphics/Renderer.h` | `getGraphicsApiName()`, `needsHalfPixelOffset()` |
+| `arx/src/gui/MainMenu.cpp` | Video, Render, and Ray tracing option pages |
+| `arx/src/core/Config.{h,cpp}` | `config.video.renderer` and the `dxr_*` keys |
+| `arx/src/graphics/Renderer.h` | `getGraphicsApiName()`, `needsHalfPixelOffset()`, `applyWorldRayEffects()` |
 | `scripts/run-d3d12.ps1` | Launch DirectX 12 |
 | `scripts/run-d3d9.ps1` | Launch DirectX 9 |
+| `scripts/fetch-streamline.ps1` | Fetch the NVIDIA Streamline SDK once |
 | `scripts/Find-ArxFatalis.ps1` | Steam / GOG lookup, no hard-coded paths |
 
-`arx/src/graphics/remix/` is leftover and is not compiled in. Do not revive it in the product docs or the default launch path.
+`arx/src/graphics/remix/` is leftover and is not compiled in. Do not revive it in the product docs or the default launch path. Do not start path-traced multi-bounce (Phase 6 is archived).
 
 Everything else under `arx/` is Arx Libertatis; [UPSTREAM.md](UPSTREAM.md) lists what diverged.
 
@@ -42,6 +45,7 @@ Pass `-DataDir '<path to Arx Fatalis>'` if Steam / GOG detection cannot see the 
 - **One symptom at a time.** Prove it in `runtime/user/arx.log` before stacking hypotheses.
 - **`arx.exe --list-dirs`** settles which data directory is in use.
 - Do not dual-boot OpenGL on Windows unless that is the question.
+- Do not add DXR root constants (`kRootConstants` is already at the 64-DWORD cap). Distance `TMax` lives in the `ViewParams` CBV.
 
 ## Privacy
 

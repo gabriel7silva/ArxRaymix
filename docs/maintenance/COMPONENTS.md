@@ -39,7 +39,7 @@ Two directories are absent from this table on purpose: `build/` and `runtime/` a
 | `arx/tests/` | Unit tests, not built by default here | upstream |
 | `arx/tools/` | Side tools: `arxunpak`, `arxsavetool`, crash reporter, profiler | upstream |
 | `arx/.github/workflows/` | Upstream CI. Does not run for this fork — see the note at the end | upstream |
-| `arx/third_party/`, `arx/thirdparty/` | Vendored: an RTX Remix SDK header, a float parser | vendored |
+| `arx/third_party/`, `arx/thirdparty/` | Vendored: Streamline SDK (fetched), an RTX Remix SDK header leftover, a float parser | vendored |
 
 ### Engine subsystems, `arx/src/`
 
@@ -63,7 +63,7 @@ Two directories are absent from this table on purpose: `build/` and `runtime/` a
 |---|---|---|
 | `Renderer.h`, `Renderer.cpp` | The interface every backend implements, and the render-state types | upstream, fork-extended |
 | `d3d12/` | The Direct3D 12 raster backend. The fork's default on Windows | fork |
-| `dxr/` | Ray traced ambient occlusion, shadows and bounce light, layered on the D3D12 raster | fork |
+| `dxr/` | Hybrid DXR (AO, shadows, one bounce, water / metal reflections) and Streamline (DLSS, FG, experimental RR), layered on the D3D12 raster. Phase 6 path tracing is archived — do not start it here | fork |
 | `d3d9/` | The Direct3D 9 raster backend, kept as a fallback and as a reference for comparing correctness | fork |
 | `opengl/` | The upstream renderer. The non-Windows path | upstream |
 | `remix/` | Dead. See below | dead |
@@ -85,8 +85,8 @@ Three signals, in order of reliability.
 
 These are not style preferences. Each one has a reason that will bite.
 
-- **Raster stays in `graphics/d3d12/`; ray work stays in `graphics/dxr/`.** The split is what lets the ray tracing be switched off entirely and leave a working renderer.
-- **`graphics/dxr/` must not include Direct3D 9 or Remix headers.** It is a Direct3D 12 consumer only.
+- **Raster stays in `graphics/d3d12/`; ray work stays in `graphics/dxr/`.** The split is what lets the ray tracing be switched off entirely and leave a working renderer. Fog constants for the far plane live in `graphics/GlobalFog.{h,cpp}` (upstream file, fork-tuned).
+- **`graphics/dxr/` must not include Direct3D 9 or Remix headers.** It is a Direct3D 12 consumer only. Streamline lives in `D3D12Streamline.{h,cpp}` in this directory.
 - **The Direct3D 12 sources compile outside the unity blob.** `d3d9.h` defines `interface` as a macro, which breaks unrelated translation units when they are concatenated together. The exclusion is in `arx/CMakeLists.txt`; adding a new D3D12 source means adding it to the same list, not to the general source list.
 
   ```

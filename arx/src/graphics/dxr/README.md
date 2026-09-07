@@ -1,6 +1,6 @@
 # DirectX Raytracing
 
-This directory is **Option A** (RTAO), **Phase 2–3 DXR shadows + GI**, and **Phase 4 reflections** (water / metal) plus the AAA-style Ray tracing menu. The D3D12 raster stays in [`../d3d12/`](../d3d12/). Do not put raster, D3D9, or Remix sources here.
+This directory is the hybrid DXR layer: **Phases 1–4 done** (RTAO, shadows, penumbra + one bounce, water / metal reflections), **Phase 5** Streamline (DLSS + Frame Generation done; Ray Reconstruction experimental), and the Ray tracing menu. **Phase 6 (path-traced multi-bounce) is archived.** The D3D12 raster stays in [`../d3d12/`](../d3d12/). Do not put raster, D3D9, or Remix sources here.
 
 ## Phases
 
@@ -16,9 +16,9 @@ Ray-traced ambient occlusion on top of the existing D3D12 raster. Dark corners a
 
 ### Phase 2 — DXR shadows
 
-Trace shadows for map lights (lit `g_staticLights` plus non-ignition dynamic lights, Arx space, no `toRemix`). The world stays raster. Toggled from **Options → Ray tracing** (`cfg.ini` `[video] dxr_shadows=`). Receivers come from raster depth. Casters are nearby rooms (rebuilt when the player room changes or the camera moves 1800 units) plus in-scene entities; draw-call geometry is not copied into the TLAS.
+Trace shadows for map lights (lit `g_staticLights` plus non-ignition dynamic lights, Arx space, no `toRemix`). The world stays raster. Toggled from **Options → Ray tracing** (`cfg.ini` `[video] dxr_shadows=`). Receivers come from raster depth. Casters are nearby rooms (rebuilt when the player room changes, `dxr_distance` changes, or the camera moves past the current caster range) plus in-scene entities; draw-call geometry is not copied into the TLAS.
 
-Light selection (`fillShadowLights`): up to 16 lights ranked by `intensity * fallend / (outside + 200)²`, where `outside` is how far the camera sits beyond the light's shadow reach (`fallend * 1.35`). A light already in the set gets a 1.35 bonus and a wider distance slack (1600 vs 900). Lights whose room is not portal-reachable from the camera are dropped — a torch behind a solid wall is close in metres but would shine through missing BLAS walls. Room casters are rebuilt when that set changes. **Options → Ray tracing → Ray tracing distance** (`cfg.ini` `dxr_distance=` 0–3) scales collect range, portal hops, reflection `TMax` and GI bounce `TMax`. High is the old 8000 / 40 rooms / 4 hops / GI 450. `skipTemporal` is set only while RR is evaluating (RR wants the raw dither). Off, history stays — killing it made GI/shadows flicker.
+Light selection (`fillShadowLights`): up to 16 lights ranked by `intensity * fallend / (outside + 200)²`, where `outside` is how far the camera sits beyond the light's shadow reach (`fallend * 1.35`). A light already in the set gets a 1.35 bonus and a wider distance slack (1600 vs 900). Lights whose room is not portal-reachable from the camera are dropped — a torch behind a solid wall is close in metres but would shine through missing BLAS walls. Room casters are rebuilt when that set changes. **Options → Ray tracing → Ray tracing distance** (`cfg.ini` `dxr_distance=` 0–3) scales collect range, portal hops, reflection `TMax` and GI bounce `TMax` via `D3D12Rtao::distancePreset` (Low 1800 / 10 rooms / 2 hops; Ultra 10000 / 48 / 5). Range is also clamped to the render-distance fog end. `skipTemporal` is set only while RR is actually evaluating (`rrLive()`); otherwise history stays — killing it made GI/shadows flicker.
 
 Shadow weight per pixel is `(Σ vis·attn + 0.04) / (Σ attn + 0.04)`: the ambient floor means only the direct share of a light is shadowed, so a blocked weak far light does not drag an already dark room to the full umbra (0.3 here washed a torch umbra to half strength). The composite applies `lerp(0.10, 1, sh)`. AO mixes at 1.0 with a 0.45 floor (up to 55 % dark). GI carries the light's hue (`GpuLight` is three float4s: position/intensity, falloff/radius/presence, colour), is clamped to luma 0.35 in RayGen, rejected above 0.6 in the upsample, and added as `bounce = gi * (0.15 + min(color, 0.45)) * 2.0; color += bounce * (1 - color)`: the lit raster colour stands in for albedo, so it is capped and the add is screen-like, otherwise a table already blown out by a spell light bounced itself to pure white; grey bounce with a 0.25 floor read as a white haze on the ceiling above the torch; the original flat `* 0.15` on a 0.12 clamp was at most +1.8 % and invisible. These strengths are the user's call ("triplica os efeitos"); quality levels only change ray counts.
 
@@ -59,7 +59,7 @@ Opaque metal (`POLY_METAL` / `[metal]`) is rasterized to a second R8 mask. Spec 
 
 **Direct lighting** in the menu is the existing DXR shadow + penumbra pass, not a second path tracer. **Indirect lighting** is still one bounce. **Contact shadows** add a short `TMax ≈ 60` ray on silhouette pixels. **Debris** includes `IO_NOSHADOW` props near lights. **Transparency High** includes alpha-cutout casters (no any-hit yet).
 
-### Phase 5 — DLSS Ray Reconstruction (Streamline)
+### Phase 5 — Streamline (DLSS + Frame Generation; RR experimental)
 
 NVIDIA [Streamline](https://github.com/NVIDIA-RTX/Streamline) 2.12, **manual hook** (`eUseManualHooking`). Fetch the SDK once with `.\scripts\fetch-streamline.ps1`, reconfigure CMake, rebuild. DLLs are copied next to `arx.exe`.
 
@@ -75,14 +75,14 @@ Log: `Streamline: slInit ok`, `Ray tracing: DXR=… DLSS=… DLSS-RR=… DLSS-G=
 
 The DXR root signature is already at the 64-DWORD cap (60 root constants + 2 descriptor tables + 1 CBV). Reflection / GI `TMax` from `dxr_distance` lives in the `ViewParams` CBV. Adding root constants there fails `CreateRootSignature` (`RTAO: DXR pipeline failed — raster only`).
 
-### Phase 6 — Path-traced indirect (not this directory yet)
+### Phase 6 — Path-traced indirect (**archived**)
 
-True multi-bounce. The same **Indirect lighting** slider will raise bounce count when that exists.
+Not doing this. Indirect lighting stays one analytic bounce. A path tracer with tracing off is a black screen; the hybrid stack (raster + DXR) is the product. Do not start multi-bounce / irradiance volumes unless the user explicitly un-archives this.
 
 ## Out of scope
 
 - RTX Remix, `SetupCamera`, `CreateLight`, `DrawInstance`
-- Path tracing / multi-bounce / irradiance volumes
+- Path tracing / multi-bounce / irradiance volumes (Phase 6 archived)
 - Porting HUD, menus, or 2D cinematics to DXR
 - OpenGL dual-boot
 
@@ -98,9 +98,11 @@ Cbuffer: `pad0` / `pad1` keep `prevViewProj` on a float4 boundary. Extra spec / 
 
 **Options → Video**: **Upscaling** — Upscaler Off / DLSS, **DLSS Mode** DLAA / Quality / Balanced / Performance / Ultra Performance, read-only **Internal** size, **Frame Generation** Off / On (independent of RT and DLSS). Gray plus a reason when Streamline says the GPU lacks DLSS-G / Reflex. Antialiasing on the Render page is locked off while DLSS is on.
 
-**Options → Ray tracing**: one page. **Preset** Off / Low / Medium / High / Custom writes the DXR sliders. Changing a DXR child slider sets Custom. Off grays the DXR children. Denoise sliders follow their parent (direct / indirect) and go gray when RR is on. **DLSS Ray Reconstruction** needs RR hardware, DXR, and a non-Off preset. Missing DXR or NVIDIA support shows a gray slider plus a reason. Widgets are disabled on D3D9 or when the matching hardware check fails.
+**Options → Ray tracing**: one page. **Preset** Off / Low / Medium / High / Custom writes the DXR sliders. Changing a DXR child slider sets Custom. Off grays the DXR children. **Ray tracing distance** (Low / Medium / High / Ultra) is independent of the preset. Denoise sliders follow their parent (direct / indirect) and go gray when RR is live. **DLSS Ray Reconstruction (Experimental)** needs RR hardware, DXR, and a non-Off preset. If NGX create fails (`0xBAD00005` seen on RTX 4050 Laptop) the card stays On and homemade denoise keeps running. Missing DXR or NVIDIA support shows a gray slider plus a reason. Widgets are disabled on D3D9 or when the matching hardware check fails.
 
-`cfg.ini` keys: `dxr_preset`, `rtao`, `dxr_shadows`, `dxr_shadow_denoise`, `dxr_contact`, `dxr_gi`, `dxr_gi_denoise`, `dxr_reflections`, `dxr_trans_reflections`, `dxr_transparency`, `dxr_debris`, `dxr_dlss`, `dxr_rr`, `dxr_fg`.
+**Options → Render → Render distance** is the far plane (`fog=`). See Phase 5 notes above.
+
+`cfg.ini` keys: `dxr_preset`, `rtao`, `dxr_shadows`, `dxr_shadow_denoise`, `dxr_contact`, `dxr_gi`, `dxr_gi_denoise`, `dxr_reflections`, `dxr_trans_reflections`, `dxr_transparency`, `dxr_debris`, `dxr_distance`, `dxr_dlss`, `dxr_rr`, `dxr_fg`. Render distance stays `fog=`.
 
 Preset writes:
 
@@ -122,7 +124,8 @@ One symptom at a time. Prove it in `runtime/user/arx.log`:
 8. 1920×1080 + Ultra Performance: `Streamline: DLSS UltraPerformance render=` well below 1920×1080 and `sceneRT=yes`, then `Streamline: DLSS evaluate ok … -> 1920x1080`
 9. DLAA: `render=` equals `output=`
 10. Quality → Performance recreates targets (new `render=`). HUD stays sharp at display res.
-11. With `dxr_rr=1`, DXR on, and RR supported: `Streamline: DLSS-RR evaluate ok … (LDR, preset D, albedo=pre-DXR)`. RR without DXR stays gray. A failed evaluate logs `DLSS-RR evaluate failed` and falls back to DLSS if Upscaling is on.
+11. With `dxr_rr=1`, DXR on, and RR supported: `Streamline: DLSS-RR evaluate ok … (LDR, preset D, albedo=pre-DXR)`. RR without DXR stays gray. NGX create / evaluate failure logs once (`DLSS-RR evaluate failed` / `nvngx_dlssd` create `0xbad00005`); homemade denoise stays. Do not retry create every frame.
+12. Render distance: `Render distance slider=… cdepth=… fog=…-…`. Room cache: `DXR room cache tris=… lights=… dist=… caster=…` on room / distance changes, never every frame.
 
 Preset Medium should turn on shadow / AO / GI and water reflections without opening every slider. Changing only Transparent reflections must set the preset to Custom. Water must reflect the ceiling / torch **on the water plane**. Off on that slider is the old `enviro` water. HUD / particles stay untouched. DLSS / RR stay Off on presets and stay gray when Streamline says the GPU lacks that feature.
 

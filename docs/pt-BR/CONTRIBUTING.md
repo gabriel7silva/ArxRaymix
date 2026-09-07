@@ -9,15 +9,18 @@ Inglês: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 | Caminho | Função |
 |---|---|
 | `arx/src/graphics/d3d12/` | Backend raster Direct3D 12 (padrão no Windows) |
+| `arx/src/graphics/dxr/` | DXR híbrido (AO, sombras, GI, reflexos) e Streamline (DLSS, FG, RR) |
 | `arx/src/graphics/d3d9/` | Backend raster Direct3D 9 (fallback) |
+| `arx/src/graphics/GlobalFog.{h,cpp}` | Plano longe do seletor Distância do render (`fog=`) |
 | `arx/src/window/SDL2Window.cpp` | Escolhe o backend e cria o dispositivo |
-| `arx/src/gui/MainMenu.cpp` | Opções de vídeo: API atual, seletor, aviso de reinício |
-| `arx/src/core/Config.{h,cpp}` | Persistência de `config.video.renderer` |
+| `arx/src/gui/MainMenu.cpp` | Páginas Vídeo, Render e Ray tracing |
+| `arx/src/core/Config.{h,cpp}` | `config.video.renderer` e as chaves `dxr_*` |
 | `scripts/run-d3d12.ps1` | Lança DirectX 12 |
 | `scripts/run-d3d9.ps1` | Lança DirectX 9 |
+| `scripts/fetch-streamline.ps1` | Obtém o SDK NVIDIA Streamline uma vez |
 | `scripts/Find-ArxFatalis.ps1` | Procura Steam / GOG, sem caminhos fixos |
 
-`arx/src/graphics/remix/` é leftover e não entra no binário de produto.
+`arx/src/graphics/remix/` é leftover e não entra no binário de produto. Não começar path tracing de vários saltos (Phase 6 arquivada).
 
 ## Compilar e correr
 

@@ -13,6 +13,9 @@ For the picture, see [MAP.md](MAP.md). For turning things up or down, [TUNING.md
 | The Direct3D 12 implementation of the hook | `arx/src/graphics/d3d12/D3D12Renderer.cpp` | `D3D12Renderer::applyWorldRayEffects` |
 | Capability reporting to the menu | `arx/src/graphics/d3d12/D3D12Renderer.cpp` | `D3D12Renderer::supportsRayTracing` |
 | The ray tracer itself | `arx/src/graphics/dxr/D3D12Rtao.cpp`, `.h` | `D3D12Rtao` |
+| Streamline (DLSS, FG, RR) | `arx/src/graphics/dxr/D3D12Streamline.cpp`, `.h` | `D3D12Streamline` |
+| Far plane / fog wall | `arx/src/graphics/GlobalFog.cpp`, `.h` | `ARX_GLOBALMODS_Apply` |
+| DXR collect / trace range | `arx/src/graphics/dxr/D3D12Rtao.h` | `D3D12Rtao::distancePreset` |
 | Choosing which lights cast shadows | `arx/src/graphics/d3d12/D3D12Renderer.cpp` | `fillShadowLights`, `emitShadowLight` |
 | Logging which lights joined or left | `arx/src/graphics/d3d12/D3D12Renderer.cpp` | `describeShadowLight` |
 | Gathering level geometry as casters | `arx/src/graphics/d3d12/D3D12Renderer.cpp` | `collectRoomCasters` |
@@ -75,12 +78,14 @@ Stage 8 is at the end, so every history read in stage 6 is last frame's data. Hi
 
 ### Instances
 
-| Instance | Geometry | Rebuilt |
-|---|---|---|
-| 0 | Cached level geometry from nearby rooms | On room change, or a long camera move |
-| 1 | Entities and other moving geometry | Every frame |
+| Instance | Geometry | Mask | Rebuilt |
+|---|---|---|---|
+| 0 | Cached level geometry from nearby rooms | `0x1` | On room change, `dxr_distance` change, or a long camera move |
+| 1 | Entities and other moving geometry | `0x1` | Every frame |
+| 2 | Water planes | `0x2` | When water triangles are submitted |
+| 3 | Player mesh and held torch / weapon | `0x4` | Every frame. First-person body must not be in mask `0x1` |
 
-The hit shader reads the instance id to know which vertex buffer the triangle came from. Adding a third category is three coordinated edits — [INV-08](INVARIANTS.md#inv-08).
+AO / shadow / GI rays use mask `0x1`. Water specular uses `0x5` (opaque + player). Metal uses `0x7`. The hit shader reads the instance id to know which vertex buffer the triangle came from. Adding another category is three coordinated edits — [INV-08](INVARIANTS.md#inv-08).
 
 ## The two shader dialects
 
@@ -101,7 +106,7 @@ Three inputs, gathered on the renderer side and handed over through `D3D12Rtao`'
 
 **Lights** — `fillShadowLights` picks a bounded set from the level's lit static lights and the non-ignition dynamic ones, ranked by how much of the visible scene each can actually affect. Membership is deliberately sticky: a light already chosen is harder to displace than a newcomer is to admit, and every join or leave is faded rather than switched. See [INV-10](INVARIANTS.md#inv-10). `emitShadowLight` converts one engine light into the packed form the shader reads.
 
-**Level geometry** — `collectRoomCasters` walks out from the camera's room through portals, bounded in both room count and portal hops, and adds the polygons of each room it reaches. The result is **cached**. It is rebuilt when the camera changes room, or when the camera has moved far enough that the old set no longer describes its surroundings. Cutout polygons are excluded — [INV-07](INVARIANTS.md#inv-07).
+**Level geometry** — `collectRoomCasters` walks out from the camera's room through portals, bounded in both room count and portal hops by `D3D12Rtao::distancePreset(dxr_distance)`, and adds the polygons of each room it reaches. The result is **cached**. It is rebuilt when the camera changes room, when `dxr_distance` changes, or when the camera has moved far enough that the old set no longer describes its surroundings. Cutout polygons are excluded unless Transparency is High — [INV-07](INVARIANTS.md#inv-07).
 
 **Entities** — `collectEntityCasters` runs every frame, because entities animate. It skips entities marked as casting no shadow, and the player. It reads world-space vertex positions from the entity's mesh when the animation system has produced them, and otherwise transforms the model-space vertices by the entity's own rotation, position and scale. It returns a hash of everything it emitted, which is what the `DXR entity movers` diagnostic reports; that is how you tell whether something is genuinely moving or whether the geometry is being rebuilt for no reason.
 
@@ -115,6 +120,6 @@ Both caster gatherers are bounded by a triangle budget. Hitting it drops triangl
 - why the sample directions are rotated per pixel instead of per frame
 - why the bounce light is modulated by the surface colour
 - why the light ranking formula weighs reach the way it does
-- the phase-by-phase history of how this arrived
+- the phase-by-phase history of how this arrived (Phases 1–5; Phase 6 archived)
 
 If you find yourself wanting to write a sentence here that contains "because" followed by a number, it belongs there instead.
