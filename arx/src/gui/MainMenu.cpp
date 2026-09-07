@@ -649,16 +649,6 @@ Vec2i menuDisplaySize() {
 	return r;
 }
 
-void applyDlssAaLock() {
-	if(config.video.dxrDlss <= 0) {
-		return;
-	}
-	config.video.antialiasing = false;
-	if(mainApp && mainApp->getWindow()) {
-		mainApp->getWindow()->setMaxMSAALevel(1);
-	}
-}
-
 class VideoOptionsMenuPage final : public MenuPage {
 	
 	CheckboxWidget * m_fullscreenCheckbox;
@@ -728,6 +718,25 @@ public:
 				restart->setEnabled(false);
 				addCenter(std::move(restart), false);
 			}
+		}
+#elif !(ARX_HAVE_D3D12 || ARX_HAVE_D3D9)
+		{
+			std::string_view label = getLocalised("system_menus_options_video_renderer");
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
+				switch(pos) {
+					case 0: config.video.renderer = "auto"; break;
+					case 1: config.video.renderer = "OpenGL"; break;
+					default: arx_unreachable();
+				}
+			};
+			slider->addEntry("Auto-Select");
+			slider->selectLast();
+			slider->addEntry("OpenGL");
+			if(config.video.renderer == "OpenGL") {
+				slider->selectLast();
+			}
+			addCenter(std::move(slider));
 		}
 #endif
 		
@@ -903,7 +912,6 @@ public:
 				} else if(config.video.dxrDlss <= 0) {
 					config.video.dxrDlss = 2; // Quality
 				}
-				applyDlssAaLock();
 				updateDlssWidgets();
 				config.save();
 			};
@@ -928,7 +936,6 @@ public:
 				if(config.video.dxrDlss > 0) {
 					config.video.dxrDlss = pos + 1; // 0=DLAA … 4=Ultra
 				}
-				applyDlssAaLock();
 				updateInternalResLabel();
 				config.save();
 			};
@@ -1169,9 +1176,8 @@ public:
 			cb->setChecked(config.video.antialiasing);
 			cb->stateChanged = [this](bool checked) {
 				if(config.video.dxrDlss > 0) {
-					config.video.antialiasing = false;
 					if(m_antialiasingCheckbox) {
-						m_antialiasingCheckbox->setChecked(false);
+						m_antialiasingCheckbox->setChecked(config.video.antialiasing);
 					}
 					return;
 				}
@@ -1274,9 +1280,6 @@ public:
 private:
 	
 	void applyAaLock() {
-		if(config.video.dxrDlss > 0) {
-			applyDlssAaLock();
-		}
 		if(m_antialiasingCheckbox) {
 			m_antialiasingCheckbox->setChecked(config.video.antialiasing);
 			m_antialiasingCheckbox->setEnabled(config.video.dxrDlss <= 0);
@@ -1292,7 +1295,7 @@ private:
 		}
 		
 		int maxAA = int(GRenderer->getMaxSupportedAlphaCutoutAntialiasing());
-		if(config.video.antialiasing || maxAA == int(Renderer::NoAlphaCutoutAA)) {
+		if(config.video.effectiveAntialiasing() || maxAA == int(Renderer::NoAlphaCutoutAA)) {
 			int value = config.video.alphaCutoutAntialiasing;
 			if(value > maxAA) {
 				value = int(Renderer::NoAlphaCutoutAA);
