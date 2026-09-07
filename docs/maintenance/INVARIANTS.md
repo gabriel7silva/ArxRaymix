@@ -154,7 +154,7 @@ grep -n "footprint\|aoBias\|shBias" arx/src/graphics/dxr/D3D12Rtao.cpp
 
 **Symptom** foliage, cobwebs and grates cast solid rectangular shadows and shade themselves black.
 
-**Mechanism** a ray cannot see a texture. To the acceleration structure a cutout quad is a solid quad, so the holes that make it read as foliage do not exist. The fix is to exclude those polygons from the caster set entirely, which trades their shadow for the absence of a wrong one.
+**Mechanism** a ray cannot see a texture. To the acceleration structure a cutout quad is a solid quad, so the holes that make it read as foliage do not exist. Off excludes those polygons from the caster set, which trades their shadow for the absence of a wrong one. **Transparency Low or High** includes them as opaque quads anyway (still no any-hit shader); High also includes `POLY_TRANS`. See [RAYTRACING.md](RAYTRACING.md).
 
 **Detect** the log reports how many were excluded per room rebuild:
 

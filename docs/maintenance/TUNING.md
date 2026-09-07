@@ -28,7 +28,6 @@ Each entry has the same fields:
 | [`aoRayCount`, `shadowRays`, `giRayCount`](#ray-counts-per-quality) | array[quality] | Rays per pixel per effect |
 | [`aoRadius`](#occlusion-radius) | array[quality] | How far occlusion looks |
 | [`kMaxShadowLights`](#shadow-light-budget) | budget | How many lights can cast at once |
-| [`kCasterDistance`](#caster-distance) | budget | How far caster gathering reaches |
 | [`kMaxRoomTriangles`, `kMaxDynTriangles`](#triangle-budgets) | budget | Acceleration structure size limits |
 | [room cache bounds](#room-cache-bounds) | budget | How much level geometry is gathered |
 | [ray offsets](#ray-offsets-and-minimum-distance) | derived | Self-shadowing versus detachment |
@@ -146,22 +145,6 @@ grep -n "kMaxShadowLights" arx/src/graphics/dxr/D3D12Rtao.h
 **Raise it** more lights cast at once, so fewer visible membership changes in busy areas.
 **Lower it** the selection has to drop lights sooner, which makes membership changes more frequent and more noticeable even with the fade.
 **Breaks** [INV-10](INVARIANTS.md#inv-10).
-
-### <a id="caster-distance"></a>`kCasterDistance`
-
-**Symbol** `kCasterDistance` (High-era fallback constant). Live collect range is `distancePreset(dxr_distance).caster`.
-**Lives in** `arx/src/graphics/dxr/D3D12Rtao.h`, on `D3D12Rtao`.
-**Kind** `budget`, in Arx units.
-**Read it**
-
-```
-grep -n "kCasterDistance\|distancePreset" arx/src/graphics/dxr/D3D12Rtao.h
-```
-
-**Safe range** should exceed the reach of the lights you expect to cast, or geometry that should block a light will not be in the structure. Above that it just adds triangles. Do not raise this by adding root constants.
-**Raise it** distant geometry starts casting; more triangles per build. Prefer the menu slider.
-**Lower it** shadows lose their casters at distance, and the failure looks like light leaking through walls.
-**Breaks** [INV-13](INVARIANTS.md#inv-13).
 
 ### <a id="triangle-budgets"></a>`kMaxRoomTriangles`, `kMaxDynTriangles`
 

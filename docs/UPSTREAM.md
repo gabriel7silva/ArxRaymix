@@ -19,10 +19,18 @@ Upstream licensing, authorship and history files are kept intact: [`arx/LICENSE`
 
 ## New files (not upstream)
 
+Produced mechanically with `git ls-files -- arx/src/graphics/d3d12 arx/src/graphics/dxr arx/src/graphics/d3d9`:
+
 ```
-arx/src/graphics/d3d12/
-arx/src/graphics/dxr/
-arx/src/graphics/d3d9/
+arx/src/graphics/d3d12/D3D12Renderer.cpp
+arx/src/graphics/d3d12/D3D12Renderer.h
+arx/src/graphics/d3d9/D3D9Renderer.cpp
+arx/src/graphics/d3d9/D3D9Renderer.h
+arx/src/graphics/dxr/D3D12Rtao.cpp
+arx/src/graphics/dxr/D3D12Rtao.h
+arx/src/graphics/dxr/D3D12Streamline.cpp
+arx/src/graphics/dxr/D3D12Streamline.h
+arx/src/graphics/dxr/README.md
 ```
 
 The RTX Remix experiment (`arx/src/graphics/remix/`, `arx/third_party/rtx-remix/`) was deleted and is not part of the tree.

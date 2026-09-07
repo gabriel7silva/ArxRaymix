@@ -139,6 +139,7 @@ flowchart LR
   Apply("D3D12Rtao::apply")
   Geo("ensureGeometryBuffers")
   Accel("buildAcceleration")
+  Masks("rasterizeMasks")
   Copy("copy backbuffer")
   Rays("DispatchRays — RayGen")
   Comp("composite draw")
@@ -149,15 +150,19 @@ flowchart LR
   Tlas[("TLAS")]
   Colour[("colour copy")]
   Depth[("scene depth")]
+  Water[("water / metal R8")]
   Out[("ao, shadow, gi, depth")]
   Hist[("previous ao, shadow, gi, depth")]
   Back[("backbuffer")]
 
   Feed -.->|"lights"| Lights
   Feed -.->|"triangles"| Apply
-  Apply ==> Geo ==> Accel ==> Copy ==> Rays ==> Comp ==> Save
+  Apply ==> Geo ==> Accel ==> Masks ==> Copy ==> Rays ==> Comp ==> Save
   Accel -.-> Blas -.-> Tlas
   Copy -.-> Colour
+  Depth -.->|"Z-test LESS_EQUAL"| Masks
+  Masks -.->|"water / metal R8"| Water
+  Water -.-> Rays
   Depth -.->|"receivers"| Rays
   Tlas -.->|"casters"| Rays
   Lights -.-> Rays
@@ -174,6 +179,7 @@ What this asserts:
 
 - History is copied at the **end** of the pass, so every history read inside a frame is last frame's data. There is no read-after-write hazard, and none of the history is valid on the first frame after a resize.
 - Receivers come from the depth buffer, one per screen pixel. Casters come from the acceleration structure. They are different inputs and a bug in one does not look like a bug in the other.
+- Water and metal masks are rasterised after the TLAS is built and before the colour copy, using the same scene depth (`LESS_EQUAL`). Specular rays read those R8 masks; they are not casters.
 - The backbuffer is copied before tracing, because the composite needs the unshaded image while it is also the render target.
 
 Re-derive it by reading `D3D12Rtao::apply` in `arx/src/graphics/dxr/D3D12Rtao.cpp` top to bottom.

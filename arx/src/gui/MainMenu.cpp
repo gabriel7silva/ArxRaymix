@@ -698,6 +698,14 @@ public:
 		
 #if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
 		{
+			std::string current = std::string(getLocalised("system_menus_options_video_graphics_api"));
+			current += ": ";
+			current += activeGraphicsApiName();
+			auto currentApi = std::make_unique<TextWidget>(hFontMenu, current);
+			currentApi->setEnabled(false);
+			addCenter(std::move(currentApi), false);
+		}
+		{
 			std::string_view label = getLocalised("system_menus_options_video_graphics_api");
 			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
 			slider->valueChanged = [](int pos, std::string_view /* string */) {
