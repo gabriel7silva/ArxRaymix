@@ -1642,6 +1642,7 @@ void D3D12Rtao::resize(int width, int height) {
 		m_device->CreateRenderTargetView(m_metalMask.Get(), &r8, rtv2);
 	}
 	m_maskIsSrv = false;
+	m_masksRasterized = false;
 	m_width = width;
 	m_height = height;
 	m_aoIsUav = true;
@@ -1806,6 +1807,7 @@ void D3D12Rtao::beginWorldFrame() {
 	m_waterPositions.clear();
 	m_metalPositions.clear();
 	m_reflectOnlyStart = SIZE_MAX;
+	m_masksRasterized = false;
 }
 
 void D3D12Rtao::markReflectOnlyStart() {
@@ -2327,6 +2329,7 @@ void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4
 	transition(list, m_metalMask.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
 	           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	m_maskIsSrv = true;
+	m_masksRasterized = true;
 }
 
 bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuffer,
