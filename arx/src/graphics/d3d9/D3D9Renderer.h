@@ -40,6 +40,8 @@ public:
 	
 	[[nodiscard]] IDirect3DTexture9 * handle() const { return m_texture; }
 	[[nodiscard]] bool isNPOT() const { return m_npot; }
+	[[nodiscard]] bool hasGpuMips() const { return m_hasMips; }
+	void detachRenderer() { m_renderer = nullptr; }
 	
 protected:
 	bool create() override;
@@ -51,11 +53,12 @@ private:
 	IDirect3DTexture9 * m_texture = nullptr;
 	Vec2i m_gpuSize;
 	bool m_npot = false;
+	bool m_hasMips = false;
 };
 
 class D3D9TextureStage final : public TextureStage {
 public:
-	explicit D3D9TextureStage(unsigned stage);
+	explicit D3D9TextureStage(D3D9Renderer * renderer, unsigned stage);
 	~D3D9TextureStage() override = default;
 	
 	Texture * getTexture() const override { return m_texture; }
@@ -67,15 +70,29 @@ public:
 	void setMipMapLODBias(float bias) override { m_lodBias = bias; }
 	
 	[[nodiscard]] TextureOp getColorOp() const { return m_colorOp; }
-	[[nodiscard]] TextureOp getAlphaOp() const { return m_alphaOp; }
 	
-	void apply(IDirect3DDevice9 * device) const;
+	void apply(IDirect3DDevice9 * device);
+	void invalidateApplied();
 	
 private:
+	D3D9Renderer * m_renderer = nullptr;
 	Texture * m_texture = nullptr;
 	TextureOp m_colorOp = OpModulate;
 	TextureOp m_alphaOp = OpSelectArg1;
 	float m_lodBias = 0.f;
+	
+	struct Applied {
+		IDirect3DTexture9 * handle = nullptr;
+		TextureOp colorOp = OpDisable;
+		TextureOp alphaOp = OpDisable;
+		WrapMode wrap = WrapRepeat;
+		FilterMode minFilter = FilterLinear;
+		FilterMode magFilter = FilterLinear;
+		float lodBias = 0.f;
+		float anisotropy = 0.f;
+		bool valid = false;
+	};
+	Applied m_applied;
 };
 
 class D3D9Renderer final : public Renderer {
@@ -111,8 +128,11 @@ public:
 	void SetAntialiasing(bool enable) override;
 	void SetFillMode(FillMode mode) override;
 	
-	[[nodiscard]] float getMaxSupportedAnisotropy() const override { return 16.f; }
-	void setMaxAnisotropy(float value) override { m_anisotropy = value; }
+	[[nodiscard]] float getMaxSupportedAnisotropy() const override { return m_maxAnisotropyCap; }
+	void setMaxAnisotropy(float value) override;
+	[[nodiscard]] float anisotropy() const { return m_anisotropy; }
+	
+	void setPresentVSync(int vsync) override;
 	
 	[[nodiscard]] AlphaCutoutAntialising getMaxSupportedAlphaCutoutAntialiasing() const override {
 		return NoAlphaCutoutAA;
@@ -145,6 +165,13 @@ public:
 	
 private:
 	void releaseDevice();
+	void registerTexture(D3D9Texture * texture);
+	void unregisterTexture(D3D9Texture * texture);
+	void invalidateTextureStages();
+	bool resetDevice(int width, int height);
+	bool recoverDeviceIfNeeded();
+	
+	friend class D3D9Texture;
 	[[nodiscard]] bool beginSceneIfNeeded();
 	void applyDefaultStates();
 	void applyTransforms();
@@ -182,12 +209,15 @@ private:
 	float m_fogStart = 0.f;
 	float m_fogEnd = 1.f;
 	float m_anisotropy = 1.f;
+	float m_maxAnisotropyCap = 16.f;
+	int m_vsync = 1;
 	bool m_antialiasing = true;
 	FillMode m_fillMode = FillSolid;
 	bool m_inScene = false;
+	bool m_deviceLost = false;
 	bool m_requirePow2Textures = false;
-	bool m_clipsTLVertices = true;
 	unsigned m_maxTextureSize = 4096;
+	std::vector<D3D9Texture *> m_liveTextures;
 	//! D3DCAPS9::MaxActiveLights, clamped. Every map light past this one is
 	//! simply absent from the traced scene. See applyRemixLights().
 	unsigned m_maxLights = 8;
