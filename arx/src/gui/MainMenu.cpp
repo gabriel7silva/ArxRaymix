@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <memory>
 #include <numeric>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -458,18 +459,14 @@ public:
 	
 	OptionsMenuPage()
 		: MenuPage(Page_Options)
-	{ }
+	{
+		m_rowSpacing = 8;
+	}
 	
 	void init() override {
 		
 		reserveTop();
 		reserveBottom();
-		
-		{
-			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_options_localization"));
-			txt->setTargetPage(Page_Localization);
-			addCenter(std::move(txt));
-		}
 		
 		{
 			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_options_video"));
@@ -497,6 +494,8 @@ public:
 		}
 #endif
 		
+		addCenter(std::make_unique<Spacer>(std::max(2, hFontControls->getLineHeight() / 2)));
+		
 		{
 			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_options_interface"));
 			txt->setTargetPage(Page_OptionsInterface);
@@ -512,6 +511,14 @@ public:
 		{
 			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_options_input"));
 			txt->setTargetPage(Page_OptionsInput);
+			addCenter(std::move(txt));
+		}
+		
+		addCenter(std::make_unique<Spacer>(std::max(2, hFontControls->getLineHeight() / 2)));
+		
+		{
+			auto txt = std::make_unique<TextWidget>(hFontMenu, getLocalised("system_menus_options_localization"));
+			txt->setTargetPage(Page_Localization);
 			addCenter(std::move(txt));
 		}
 		
@@ -539,7 +546,7 @@ public:
 		
 		reserveBottom();
 		
-		addCenter(std::make_unique<Spacer>(hFontMainMenu->getLineHeight()));
+		addCenter(std::make_unique<Spacer>(hFontControls->getLineHeight()));
 		
 		{
 			std::unique_ptr<TextWidget> txt;
@@ -554,7 +561,7 @@ public:
 		
 		{
 			m_textLanguages.clear();
-			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMainMenu, "");
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, "");
 			slider->valueChanged = [this](int pos, std::string_view /* string */) {
 				if(size_t(pos) >= m_textLanguages.size() || config.interface.language == m_textLanguages[size_t(pos)]) {
 					return;
@@ -579,7 +586,7 @@ public:
 			addCenter(std::move(slider));
 		}
 		
-		addCenter(std::make_unique<Spacer>(hFontMainMenu->getLineHeight()));
+		addCenter(std::make_unique<Spacer>(hFontControls->getLineHeight() / 2));
 		
 		{
 			std::unique_ptr<TextWidget> txt;
@@ -594,7 +601,7 @@ public:
 		
 		{
 			m_audioLanguages.clear();
-			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMainMenu, "");
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, "");
 			slider->valueChanged = [this](int pos, std::string_view /* string */) {
 				if(size_t(pos) >= m_audioLanguages.size() || config.audio.language == m_audioLanguages[size_t(pos)]) {
 					return;
@@ -615,7 +622,7 @@ public:
 			addCenter(std::move(slider));
 		}
 		
-		addCenter(std::make_unique<Spacer>(hFontMainMenu->getLineHeight()));
+		addCenter(std::make_unique<Spacer>(hFontControls->getLineHeight() / 2));
 		
 		addBackButton(Page_Options);
 		
@@ -643,11 +650,25 @@ static void persistGraphicsApiChoice(bool useD3D9) {
 	config.save();
 }
 
-static std::string currentGraphicsApiLabel() {
-	return std::string(getLocalised("system_menus_options_video_graphics_api"))
-	       + ": " + activeGraphicsApiName();
-}
 #endif
+
+Vec2i menuDisplaySize() {
+	Vec2i r = config.video.mode.resolution;
+	if((r.x <= 0 || r.y <= 0) && mainApp && mainApp->getWindow()) {
+		r = mainApp->getWindow()->getSize();
+	}
+	return r;
+}
+
+void applyDlssAaLock() {
+	if(config.video.dxrDlss <= 0) {
+		return;
+	}
+	config.video.antialiasing = false;
+	if(mainApp && mainApp->getWindow()) {
+		mainApp->getWindow()->setMaxMSAALevel(1);
+	}
+}
 
 class VideoOptionsMenuPage final : public MenuPage {
 	
@@ -656,10 +677,10 @@ class VideoOptionsMenuPage final : public MenuPage {
 	SliderWidget * m_gammaSlider;
 	CheckboxWidget * m_minimizeOnFocusLostCheckbox;
 	TextWidget * m_applyButton;
-#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
-	TextWidget * m_graphicsApiCurrent;
-	TextWidget * m_graphicsApiRestart;
-#endif
+	CycleTextWidget * m_upscaler = nullptr;
+	CycleTextWidget * m_dlssMode = nullptr;
+	CycleTextWidget * m_frameGen = nullptr;
+	TextWidget * m_internalRes = nullptr;
 	bool m_fullscreen;
 	DisplayMode m_mode;
 	
@@ -672,12 +693,10 @@ public:
 		, m_gammaSlider(nullptr)
 		, m_minimizeOnFocusLostCheckbox(nullptr)
 		, m_applyButton(nullptr)
-#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
-		, m_graphicsApiCurrent(nullptr)
-		, m_graphicsApiRestart(nullptr)
-#endif
 		, m_fullscreen(false)
-	{ }
+	{
+		m_rowSpacing = 4;
+	}
 	
 	void init() override {
 		
@@ -686,20 +705,18 @@ public:
 		m_fullscreen = config.video.fullscreen;
 		m_mode = config.video.mode;
 		
+		addSection(getLocalised("system_menus_options_video_section_display"), false);
+		
 #if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
 		{
-			auto current = std::make_unique<TextWidget>(hFontMenu, currentGraphicsApiLabel());
-			current->setEnabled(false);
-			m_graphicsApiCurrent = current.get();
-			addCenter(std::move(current));
-		}
-		{
 			std::string_view label = getLocalised("system_menus_options_video_graphics_api");
-			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
-			slider->valueChanged = [this](int pos, std::string_view /* string */) {
+			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
+			slider->valueChanged = [](int pos, std::string_view /* string */) {
 				// Saved for the next launch only. The device is created at startup.
 				persistGraphicsApiChoice(pos == 1);
-				updateGraphicsApiRestartNotice();
+				if(g_mainMenu) {
+					g_mainMenu->bReInitAll = true;
+				}
 			};
 			slider->addEntry(getLocalised("system_menus_options_video_api_directx12"));
 			slider->addEntry(getLocalised("system_menus_options_video_api_directx9"));
@@ -707,11 +724,13 @@ public:
 			addCenter(std::move(slider));
 		}
 		{
-			auto restart = std::make_unique<TextWidget>(hFontMenu, "");
-			restart->setEnabled(false);
-			m_graphicsApiRestart = restart.get();
-			addCenter(std::move(restart));
-			updateGraphicsApiRestartNotice();
+			const bool pendingD3D9 = rendererChoiceIsD3D9(config.video.renderer);
+			if(pendingD3D9 != activeGraphicsApiIsD3D9()) {
+				auto restart = std::make_unique<TextWidget>(hFontControls,
+					getLocalised("system_menus_options_video_api_restart"));
+				restart->setEnabled(false);
+				addCenter(std::move(restart), false);
+			}
 		}
 #endif
 		
@@ -802,7 +821,7 @@ public:
 			updateMinimizeOnFocusLostStateCheckbox();
 		}
 		
-		addCenter(std::make_unique<Spacer>(hFontMenu->getLineHeight() / 2));
+		addCenter(std::make_unique<Spacer>(std::max(2, hFontControls->getLineHeight() / 3)));
 		
 		{
 			std::string_view label = getLocalised("system_menus_options_video_vsync");
@@ -875,7 +894,94 @@ public:
 			addCenter(std::move(cb));
 		}
 		
-		addCenter(std::make_unique<Spacer>(hFontMenu->getLineHeight() / 2));
+		addSection(getLocalised("system_menus_options_video_upscaling"));
+		
+		{
+			const bool dlssOk = GRenderer && GRenderer->supportsDlss();
+			std::string_view label = getLocalised("system_menus_options_video_upscaler");
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
+			cb->valueChanged = [this](int pos, std::string_view /* string */) {
+				if(pos <= 0) {
+					config.video.dxrDlss = 0;
+				} else if(config.video.dxrDlss <= 0) {
+					config.video.dxrDlss = 2; // Quality
+				}
+				applyDlssAaLock();
+				updateDlssWidgets();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_video_upscaler_off"));
+			cb->addEntry(getLocalised("system_menus_options_video_upscaler_dlss"));
+			cb->setValue(config.video.dxrDlss > 0 ? 1 : 0);
+			cb->setEnabled(dlssOk);
+			m_upscaler = cb.get();
+			addCenter(std::move(cb));
+			if(!dlssOk) {
+				auto txt = std::make_unique<TextWidget>(hFontControls,
+					getLocalised("system_menus_options_video_dlss_unavailable"));
+				txt->setEnabled(false);
+				addCenter(std::move(txt), false);
+			}
+		}
+		
+		{
+			std::string_view label = getLocalised("system_menus_options_video_dlss_mode");
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
+			cb->valueChanged = [this](int pos, std::string_view /* string */) {
+				if(config.video.dxrDlss > 0) {
+					config.video.dxrDlss = pos + 1; // 0=DLAA … 4=Ultra
+				}
+				applyDlssAaLock();
+				updateInternalResLabel();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_video_dlss_dlaa"));
+			cb->addEntry(getLocalised("system_menus_options_video_dlss_quality"));
+			cb->addEntry(getLocalised("system_menus_options_video_dlss_balanced"));
+			cb->addEntry(getLocalised("system_menus_options_video_dlss_performance"));
+			cb->addEntry(getLocalised("system_menus_options_video_dlss_ultra_performance"));
+			m_dlssMode = cb.get();
+			addCenter(std::move(cb));
+		}
+		
+		{
+			std::string placeholder = std::string(getLocalised("system_menus_options_video_dlss_internal"));
+			placeholder += ": 0000x0000";
+			auto txt = std::make_unique<TextWidget>(hFontControls, placeholder);
+			txt->setEnabled(false);
+			m_internalRes = txt.get();
+			addCenter(std::move(txt), false);
+		}
+		
+		{
+			const bool fgOk = GRenderer && GRenderer->supportsDlssG();
+			std::string_view label = getLocalised("system_menus_options_video_frame_generation");
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
+			cb->valueChanged = [this](int pos, std::string_view /* string */) {
+				config.video.dxrFg = (pos > 0) ? 1 : 0;
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_video_frame_generation_off"));
+			cb->addEntry(getLocalised("system_menus_options_video_frame_generation_on"));
+			cb->setValue(config.video.dxrFg > 0 ? 1 : 0);
+			cb->setEnabled(fgOk);
+			if(!fgOk) {
+				config.video.dxrFg = 0;
+				cb->setValue(0);
+			}
+			m_frameGen = cb.get();
+			addCenter(std::move(cb));
+			if(!fgOk) {
+				auto txt = std::make_unique<TextWidget>(hFontControls,
+					getLocalised("system_menus_options_video_frame_generation_unavailable"));
+				txt->setEnabled(false);
+				addCenter(std::move(txt), false);
+			}
+		}
+		
+		updateDlssWidgets();
+		
+		addSection(getLocalised("system_menus_options_video_section_camera"));
 		
 		{
 			std::string_view label = getLocalised("system_menus_options_video_fov");
@@ -894,7 +1000,6 @@ public:
 			cb->stateChanged = [](bool checked) noexcept {
 				config.video.viewBobbing = checked;
 			};
-			m_fullscreenCheckbox = cb.get();
 			addCenter(std::move(cb));
 		}
 		
@@ -905,7 +1010,6 @@ public:
 			cb->stateChanged = [](bool checked) noexcept {
 				config.video.screenShake = checked;
 			};
-			m_fullscreenCheckbox = cb.get();
 			addCenter(std::move(cb));
 		}
 		
@@ -982,19 +1086,38 @@ private:
 		
 	}
 	
-#if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
-	void updateGraphicsApiRestartNotice() {
-		if(!m_graphicsApiRestart) {
+	void updateInternalResLabel() {
+		if(!m_internalRes) {
 			return;
 		}
-		const bool pendingD3D9 = rendererChoiceIsD3D9(config.video.renderer);
-		if(pendingD3D9 == activeGraphicsApiIsD3D9()) {
-			m_graphicsApiRestart->setText("");
-		} else {
-			m_graphicsApiRestart->setText(getLocalised("system_menus_options_video_api_restart"));
+		const Vec2i display = menuDisplaySize();
+		Vec2i intern = display;
+		if(config.video.dxrDlss > 0 && GRenderer) {
+			intern = GRenderer->queryDlssInternalSize(config.video.dxrDlss, display.x, display.y);
+		}
+		std::ostringstream oss;
+		oss << getLocalised("system_menus_options_video_dlss_internal")
+		    << ": " << intern.x << "x" << intern.y;
+		m_internalRes->setText(oss.str());
+	}
+	
+	void updateDlssWidgets() {
+		const bool on = config.video.dxrDlss > 0;
+		if(m_upscaler) {
+			m_upscaler->setValue(on ? 1 : 0);
+		}
+		if(m_dlssMode) {
+			const int pos = on ? (std::max)(config.video.dxrDlss - 1, 0) : 1;
+			m_dlssMode->setValue(pos);
+			m_dlssMode->setEnabled(on && GRenderer && GRenderer->supportsDlss());
+		}
+		updateInternalResLabel();
+		if(m_frameGen) {
+			const bool fgOk = GRenderer && GRenderer->supportsDlssG();
+			m_frameGen->setEnabled(fgOk);
+			m_frameGen->setValue((fgOk && config.video.dxrFg > 0) ? 1 : 0);
 		}
 	}
-#endif
 	
 };
 
@@ -1005,9 +1128,16 @@ public:
 	RenderOptionsMenuPage()
 		: MenuPage(Page_OptionsRender)
 		, m_alphaCutoutAntialiasingCycleText(nullptr)
+		, m_antialiasingCheckbox(nullptr)
 	{ }
 	
 	CycleTextWidget * m_alphaCutoutAntialiasingCycleText;
+	CheckboxWidget * m_antialiasingCheckbox;
+	
+	void focus() override {
+		MenuPage::focus();
+		applyAaLock();
+	}
 	
 	void init() override {
 		
@@ -1027,7 +1157,7 @@ public:
 		}
 		
 		{
-			std::string_view label = getLocalised("system_menus_options_video_brouillard");
+			std::string_view label = getLocalised("system_menus_options_video_render_distance");
 			auto sld = std::make_unique<SliderWidget>(sliderSize(), hFontMenu, label);
 			sld->valueChanged = [](int value) {
 				ARXMenu_Options_Video_SetFogDistance(value);
@@ -1041,10 +1171,19 @@ public:
 			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
 			cb->setChecked(config.video.antialiasing);
 			cb->stateChanged = [this](bool checked) {
+				if(config.video.dxrDlss > 0) {
+					config.video.antialiasing = false;
+					if(m_antialiasingCheckbox) {
+						m_antialiasingCheckbox->setChecked(false);
+					}
+					return;
+				}
 				config.video.antialiasing = checked;
 				setAlphaCutoutAntialisingState();
 			};
+			m_antialiasingCheckbox = cb.get();
 			addCenter(std::move(cb));
+			applyAaLock();
 		}
 		
 		{
@@ -1137,9 +1276,23 @@ public:
 	
 private:
 	
+	void applyAaLock() {
+		if(config.video.dxrDlss > 0) {
+			applyDlssAaLock();
+		}
+		if(m_antialiasingCheckbox) {
+			m_antialiasingCheckbox->setChecked(config.video.antialiasing);
+			m_antialiasingCheckbox->setEnabled(config.video.dxrDlss <= 0);
+		}
+		setAlphaCutoutAntialisingState();
+	}
+	
 	void setAlphaCutoutAntialisingState() {
 		
 		CycleTextWidget * cb = m_alphaCutoutAntialiasingCycleText;
+		if(!cb) {
+			return;
+		}
 		
 		int maxAA = int(GRenderer->getMaxSupportedAlphaCutoutAntialiasing());
 		if(config.video.antialiasing || maxAA == int(Renderer::NoAlphaCutoutAA)) {
@@ -1164,19 +1317,116 @@ public:
 	
 	RayTracingOptionsMenuPage()
 		: MenuPage(Page_OptionsRayTracing)
-	{ }
+	{
+		m_rowSpacing = 4;
+	}
 	
 	void init() override {
 		
 		reserveBottom();
 		
 		const bool available = GRenderer && GRenderer->supportsRayTracing();
+		const bool rrOk = GRenderer && GRenderer->supportsDlssRr()
+		                  && GRenderer->supportsRayTracing();
 		
-		auto addQuality = [&](std::string_view label, int & setting) {
+		struct Widgets {
+			CycleTextWidget * preset = nullptr;
+			CycleTextWidget * ao = nullptr;
+			CycleTextWidget * shadow = nullptr;
+			CycleTextWidget * shadowDenoise = nullptr;
+			CycleTextWidget * contact = nullptr;
+			CycleTextWidget * gi = nullptr;
+			CycleTextWidget * giDenoise = nullptr;
+			CycleTextWidget * refl = nullptr;
+			CycleTextWidget * transRefl = nullptr;
+			CycleTextWidget * trans = nullptr;
+			CycleTextWidget * debris = nullptr;
+			CycleTextWidget * distance = nullptr;
+			CycleTextWidget * rr = nullptr;
+		};
+		auto w = std::make_shared<Widgets>();
+		
+		auto syncEnabled = [w, available, rrOk]() {
+			const bool dxr = available;
+			const bool presetOff = !dxr || config.video.dxrPreset == 0;
+			const auto enable = [](CycleTextWidget * widget, bool on) {
+				if(widget) {
+					widget->setEnabled(on);
+				}
+			};
+			enable(w->ao, dxr && !presetOff);
+			enable(w->shadow, dxr && !presetOff);
+			const bool rrOn = rrOk && !presetOff && config.video.dxrRr > 0;
+			enable(w->shadowDenoise, dxr && !presetOff && config.video.dxrShadows > 0 && !rrOn);
+			enable(w->contact, dxr && !presetOff);
+			enable(w->gi, dxr && !presetOff);
+			enable(w->giDenoise, dxr && !presetOff && config.video.dxrGi > 0 && !rrOn);
+			enable(w->refl, dxr && !presetOff);
+			enable(w->transRefl, dxr && !presetOff);
+			enable(w->trans, dxr && !presetOff);
+			enable(w->debris, dxr && !presetOff);
+			enable(w->distance, dxr && !presetOff);
+			enable(w->rr, rrOk && !presetOff);
+		};
+		
+		auto syncValues = [w]() {
+			if(w->preset) {
+				w->preset->setValue(config.video.dxrPreset);
+			}
+			if(w->ao) {
+				w->ao->setValue(config.video.rtao);
+			}
+			if(w->shadow) {
+				w->shadow->setValue(config.video.dxrShadows);
+			}
+			if(w->shadowDenoise) {
+				w->shadowDenoise->setValue(config.video.dxrShadowDenoise);
+			}
+			if(w->contact) {
+				w->contact->setValue(config.video.dxrContact);
+			}
+			if(w->gi) {
+				w->gi->setValue(config.video.dxrGi);
+			}
+			if(w->giDenoise) {
+				w->giDenoise->setValue(config.video.dxrGiDenoise);
+			}
+			if(w->refl) {
+				w->refl->setValue(config.video.dxrReflections);
+			}
+			if(w->transRefl) {
+				w->transRefl->setValue(config.video.dxrTransReflections);
+			}
+			if(w->trans) {
+				w->trans->setValue(config.video.dxrTransparency);
+			}
+			if(w->debris) {
+				w->debris->setValue(config.video.dxrDebris);
+			}
+			if(w->distance) {
+				w->distance->setValue(config.video.dxrDistance);
+			}
+			if(w->rr) {
+				w->rr->setValue(config.video.dxrRr);
+			}
+		};
+		
+		auto markCustom = [w]() {
+			if(config.video.dxrPreset != 4) {
+				config.video.dxrPreset = 4;
+				if(w->preset) {
+					w->preset->setValue(4);
+				}
+			}
+		};
+		
+		auto addOffLowMedHigh = [&](std::string_view label, int & setting, CycleTextWidget * & slot) {
 			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
 			int * value = &setting;
-			cb->valueChanged = [value](int pos, std::string_view /* string */) {
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
 				*value = pos;
+				markCustom();
+				syncEnabled();
 				config.save();
 			};
 			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
@@ -1184,19 +1434,153 @@ public:
 			cb->addEntry(getLocalised("system_menus_options_raytracing_medium"));
 			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
 			cb->setValue(available ? setting : 0);
-			cb->setEnabled(available);
+			slot = cb.get();
 			addCenter(std::move(cb));
 		};
-		addQuality(getLocalised("system_menus_options_raytracing_rtao"), config.video.rtao);
-		addQuality(getLocalised("system_menus_options_raytracing_shadows"), config.video.dxrShadows);
-		addQuality(getLocalised("system_menus_options_raytracing_gi"), config.video.dxrGi);
 		
-		if(!available) {
-			auto txt = std::make_unique<TextWidget>(hFontMenu,
-				getLocalised("system_menus_options_raytracing_unavailable"));
-			addCenter(std::move(txt));
+		auto addOffOn = [&](std::string_view label, int & setting, CycleTextWidget * & slot) {
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
+			int * value = &setting;
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				*value = pos;
+				markCustom();
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_on"));
+			cb->setValue(available ? setting : 0);
+			slot = cb.get();
+			addCenter(std::move(cb));
+		};
+		
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_preset"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.applyDxrPreset(pos);
+				syncValues();
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_medium"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_custom"));
+			cb->setValue(available ? config.video.dxrPreset : 0);
+			cb->setEnabled(available);
+			w->preset = cb.get();
+			addCenter(std::move(cb));
 		}
 		
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_distance"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.video.dxrDistance = pos;
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_medium"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_ultra"));
+			cb->setValue(available ? config.video.dxrDistance : 0);
+			w->distance = cb.get();
+			addCenter(std::move(cb));
+		}
+		
+		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_rtao"), config.video.rtao, w->ao);
+		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_shadows"),
+		                 config.video.dxrShadows, w->shadow);
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_shadow_denoise"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.video.dxrShadowDenoise = pos;
+				markCustom();
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->setValue(available ? config.video.dxrShadowDenoise : 0);
+			w->shadowDenoise = cb.get();
+			addCenter(std::move(cb));
+		}
+		addOffOn(getLocalised("system_menus_options_raytracing_contact"), config.video.dxrContact, w->contact);
+		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_gi"), config.video.dxrGi, w->gi);
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_gi_denoise"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.video.dxrGiDenoise = pos;
+				markCustom();
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_medium"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->setValue(available ? config.video.dxrGiDenoise : 0);
+			w->giDenoise = cb.get();
+			addCenter(std::move(cb));
+		}
+		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_reflections"),
+		                 config.video.dxrReflections, w->refl);
+		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_trans_reflections"),
+		                 config.video.dxrTransReflections, w->transRefl);
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_transparency"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.video.dxrTransparency = pos;
+				markCustom();
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->setValue(available ? config.video.dxrTransparency : 0);
+			w->trans = cb.get();
+			addCenter(std::move(cb));
+		}
+		addOffOn(getLocalised("system_menus_options_raytracing_debris"), config.video.dxrDebris, w->debris);
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_rr"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.video.dxrRr = pos;
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_on"));
+			cb->setValue(config.video.dxrRr);
+			w->rr = cb.get();
+			addCenter(std::move(cb));
+			auto exp = std::make_unique<TextWidget>(hFontControls,
+				getLocalised("system_menus_options_raytracing_rr_experimental"));
+			exp->setEnabled(false);
+			addCenter(std::move(exp), false);
+		}
+		
+		if(!available) {
+			auto txt = std::make_unique<TextWidget>(hFontControls,
+				getLocalised("system_menus_options_raytracing_unavailable"));
+			txt->setEnabled(false);
+			addCenter(std::move(txt), false);
+		}
+		if(!rrOk) {
+			auto txt = std::make_unique<TextWidget>(hFontControls,
+				getLocalised("system_menus_options_raytracing_rr_unavailable"));
+			txt->setEnabled(false);
+			addCenter(std::move(txt), false);
+		}
+		
+		syncEnabled();
 		addBackButton(Page_Options);
 		
 	}
@@ -2054,8 +2438,8 @@ void MainMenu::init() {
 	
 	m_background = TextureContainer::LoadUI("graph/interface/menus/menu_main_background", TextureContainer::NoColorKey);
 	
-	Vec2f pos = RATIO_2(Vec2f(370, 100));
-	float yOffset = RATIO_Y(50);
+	Vec2f pos = RATIO_2(Vec2f(370, 108));
+	float yOffset = RATIO_Y(42);
 	
 	{
 		auto txt = std::make_unique<TextWidget>(hFontMainMenu, getLocalised("system_menus_main_resumegame"));

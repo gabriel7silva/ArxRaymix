@@ -41,6 +41,13 @@ Screenshots/
 # Personal GPU / upscaler launchers (absolute user paths)
 /scripts/run-dlss5*
 
+# NVIDIA Streamline SDK (fetched; only README is committed)
+/arx/third_party/streamline/include/
+/arx/third_party/streamline/bin/
+/arx/third_party/streamline/lib/
+/arx/third_party/streamline/*.zip
+/arx/third_party/streamline/_unpack/
+
 # Local PT-BR speech binaries (imported; too large for git)
 /arx/data/core/speech/portugues/*.wav
 

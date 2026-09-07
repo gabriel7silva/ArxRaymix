@@ -53,10 +53,12 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "gui/Text.h"
 #include "gui/menu/MenuCursor.h"
 #include "gui/widget/ButtonWidget.h"
+#include "gui/widget/Spacer.h"
+#include "gui/widget/TextWidget.h"
 #include "input/Input.h"
 
 MenuPage::MenuPage(MENUSTATE id)
-	: m_rowSpacing(10)
+	: m_rowSpacing(6)
 	, m_id(id)
 	, m_initialized(false)
 	, m_selected(nullptr)
@@ -147,6 +149,23 @@ void MenuPage::addCenter(std::unique_ptr<Widget> widget, bool centerX) {
 	widget->setPosition(Vec2f(x, y));
 	
 	m_children.add(std::move(widget));
+	
+}
+
+void MenuPage::addSection(std::string_view title, bool padded) {
+	
+	if(title.empty()) {
+		return;
+	}
+	
+	if(padded) {
+		const int gap = std::max(2, hFontControls->getLineHeight() / 3);
+		addCenter(std::make_unique<Spacer>(gap));
+	}
+	
+	auto txt = std::make_unique<TextWidget>(hFontControls, title);
+	txt->setEnabled(false);
+	addCenter(std::move(txt), false);
 	
 }
 
@@ -259,11 +278,11 @@ void MenuPage::drawDebug() {
 
 
 void MenuPage::reserveTop() {
-	m_content.top = m_rect.top + float(hFontMenu->getLineHeight()) + 5.f * minSizeRatio();
+	m_content.top = m_rect.top + float(hFontMenu->getLineHeight()) + 4.f * minSizeRatio();
 }
 
 void MenuPage::reserveBottom() {
-	m_content.bottom = m_rect.bottom - float(hFontMenu->getLineHeight()) - 5.f * minSizeRatio();
+	m_content.bottom = m_rect.bottom - float(hFontMenu->getLineHeight()) - 4.f * minSizeRatio();
 }
 
 Vec2f MenuPage::buttonSize(float x, float y) const {
@@ -271,11 +290,11 @@ Vec2f MenuPage::buttonSize(float x, float y) const {
 }
 
 Vec2f MenuPage::checkboxSize() const {
-	return Vec2f(m_rect.width(), 20.f * minSizeRatio());
+	return Vec2f(m_rect.width(), float(hFontMenu->getLineHeight()));
 }
 
 Vec2f MenuPage::sliderSize() const {
-	return Vec2f(m_rect.width(), 16.f * minSizeRatio());
+	return Vec2f(m_rect.width(), float(hFontMenu->getLineHeight()) * 0.78f);
 }
 
 void MenuPage::focus() {

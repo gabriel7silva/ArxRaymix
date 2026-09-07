@@ -45,6 +45,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #define ARX_GUI_MENU_MENUPAGE_H
 
 #include <memory>
+#include <string_view>
 
 #include "gui/widget/Widget.h"
 #include "gui/widget/WidgetContainer.h"
@@ -90,6 +91,8 @@ protected:
 	void addCorner(std::unique_ptr<Widget> widget, Anchor anchor);
 	
 	void addCenter(std::unique_ptr<Widget> widget, bool centerX = true);
+	
+	void addSection(std::string_view title, bool padded = true);
 	
 	void addBackButton(MENUSTATE page);
 	

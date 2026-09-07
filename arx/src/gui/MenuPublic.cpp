@@ -90,6 +90,7 @@ extern bool bQuickGenFirstClick;
 
 void ARXMenu_Options_Video_SetFogDistance(float distance) {
 	config.video.fogDistance = glm::clamp(distance, 0.f, 10.f);
+	config.save();
 }
 
 void ARXMenu_Options_Video_SetDetailsQuality(int lod) {

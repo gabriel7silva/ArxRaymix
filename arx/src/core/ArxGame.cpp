@@ -798,7 +798,7 @@ bool ArxGame::initGame()
 	g_playerCamera.angle = player.angle;
 	g_playerCamera.m_pos = Vec3f(900.f, player.baseHeight(), 4340.f);
 	g_playerCamera.setFov(glm::radians(config.video.fov));
-	g_playerCamera.cdepth = 2100.f;
+	g_playerCamera.cdepth = 28000.f;
 	SetActiveCamera(&g_playerCamera);
 	
 	LoadSysTextures();
@@ -1843,6 +1843,10 @@ void ArxGame::renderLevel() {
 			        << " border=" << (cinematicBorder.isActive() ? 1 : 0)
 			        << " external=" << (EXTERNALVIEW ? 1 : 0);
 		}
+	}
+	
+	if(!isInCinematic()) {
+		GRenderer->beginSceneUpscale();
 	}
 	
 	// Clear screen & Z buffers

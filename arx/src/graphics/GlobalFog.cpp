@@ -43,6 +43,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "graphics/GlobalFog.h"
 
+#include <cmath>
 #include <cstring>
 #include <algorithm>
 
@@ -52,14 +53,16 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/BaseGraphicsTypes.h"
 #include "graphics/Renderer.h"
 #include "graphics/data/Mesh.h"
+#include "io/log/Logger.h"
 #include "platform/profiler/Profiler.h"
 
 GLOBAL_MODS g_currentFogParameters;
 GLOBAL_MODS g_desiredFogParameters;
 
-// change the clipping Z max & min
-static const float DEFAULT_ZCLIP = 6400.f;
-static const float DEFAULT_MINZCLIP = 1200.f;
+// Slider 0 = one cell + fog wall. Slider 10 = old max. The previous linear
+// map kept Low at ~6000 (plus a 4000 floor), so the next room stayed in view.
+static const float DEFAULT_ZCLIP = 28000.f;
+static const float DEFAULT_MINZCLIP = 1600.f;
 
 Color g_fogColor;
 
@@ -113,9 +116,28 @@ void ARX_GLOBALMODS_Apply() {
 		current.depthcolor.b = Approach(current.depthcolor.b, 0, incdiv1000);
 	}
 	
-	float fZclipp = config.video.fogDistance * 1.2f * (DEFAULT_ZCLIP - DEFAULT_MINZCLIP) / 10.f + DEFAULT_MINZCLIP;
+	const float t = std::clamp(config.video.fogDistance, 0.f, 10.f) / 10.f;
+	float fZclipp = DEFAULT_MINZCLIP + std::pow(t, 1.65f) * (DEFAULT_ZCLIP - DEFAULT_MINZCLIP);
 	fZclipp += (g_camera->focal - 310.f) * 5.f;
-	g_camera->cdepth = std::min(current.zclip, fZclipp);
+	// Zone PATH_FARCLIP still drives fog colour only. The Render slider is the
+	// far plane; D3D12 fades world pixels into that colour before the clip.
+	g_camera->cdepth = (std::max)(fZclipp, DEFAULT_MINZCLIP);
 	
-	g_fogColor = Color(current.depthcolor);
+	if(current.depthcolor.r + current.depthcolor.g + current.depthcolor.b < 0.04f) {
+		g_fogColor = Color(Color3f::rgb(0.11f, 0.09f, 0.08f));
+	} else {
+		g_fogColor = Color(current.depthcolor);
+	}
+	
+	static float s_loggedSlider = -1.f;
+	static float s_loggedDepth = -1.f;
+	if(std::abs(config.video.fogDistance - s_loggedSlider) > 0.01f
+	   || std::abs(g_camera->cdepth - s_loggedDepth) > 40.f) {
+		LogInfo << "Render distance slider=" << config.video.fogDistance
+		        << " cdepth=" << g_camera->cdepth
+		        << " fog=" << (fZFogStart * g_camera->cdepth)
+		        << "-" << (fZFogEnd * g_camera->cdepth);
+		s_loggedSlider = config.video.fogDistance;
+		s_loggedDepth = g_camera->cdepth;
+	}
 }
