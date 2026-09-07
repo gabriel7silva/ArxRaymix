@@ -69,6 +69,8 @@ public:
 	void addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	void addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
 	              const unsigned short * indices, size_t nindices);
+	void addRoomMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
+	                  const unsigned short * indices, size_t nindices);
 	
 	[[nodiscard]] size_t triangleCount() const {
 		return (m_positions.size() + m_roomPositions.size() + m_waterPositions.size()) / 3;
@@ -76,8 +78,6 @@ public:
 	[[nodiscard]] size_t dynTriangleCount() const { return m_positions.size() / 3; }
 	
 	static constexpr size_t kMaxShadowLights = 16;
-	//! High (dxr_distance=2). Use distancePreset() for the menu slider.
-	static constexpr float kCasterDistance = 8000.f;
 	
 	//! 0 = Low, 1 = Medium, 2 = High, 3 = Ultra.
 	struct DistancePreset {
@@ -196,6 +196,7 @@ private:
 	ComPtr<ID3D12Resource> m_waterUpload;
 	ComPtr<ID3D12Resource> m_waterDefault;
 	ComPtr<ID3D12Resource> m_metalUpload;
+	ComPtr<ID3D12Resource> m_roomMetalUpload;
 	ComPtr<ID3D12Resource> m_viewCbuf;
 	ComPtr<ID3D12Resource> m_blas;
 	ComPtr<ID3D12Resource> m_playerBlas;
@@ -227,12 +228,12 @@ private:
 	std::vector<Pos> m_roomPositions;
 	std::vector<Pos> m_waterPositions;
 	std::vector<Pos> m_metalPositions;
+	std::vector<Pos> m_roomMetalPositions;
 	glm::mat4x4 m_prevViewProj = glm::mat4x4(1.f);
 	unsigned m_descriptorSize = 0;
 	unsigned m_rtvSize = 0;
 	int m_width = 0;
 	int m_height = 0;
-	unsigned m_frameIndex = 0;
 	bool m_supported = false;
 	bool m_ready = false;
 	bool m_loggedCap = false;
