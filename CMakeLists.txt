@@ -17,6 +17,7 @@ set(CMAKE_PREFIX_PATH
 	"${libs}/openal"
 	"${libs}/sdl"
 	"${libs}/zlib"
+	"${libs}/dxc"
 )
 
 if(DEFINED CMAKE_FIND_ROOT_PATH)
@@ -37,17 +38,5 @@ if(NOT DEFINED BUILD_TESTS)
 endif()
 
 add_subdirectory("arx")
-
-add_custom_target(copy-libs ALL)
-foreach(prefix IN LISTS CMAKE_PREFIX_PATH)
-	set(libdir "${prefix}/bin/${CMAKE_LIBRARY_ARCHITECTURE}")
-	if(IS_DIRECTORY "${libdir}")
-		file(GLOB libs RELATIVE "${libdir}" "${libdir}/*")
-		foreach(lib IN LISTS libs)
-			add_custom_command(
-				TARGET copy-libs POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different "${libdir}/${lib}" "$<TARGET_FILE_DIR:arx>/${lib}"
-			)
-		endforeach()
-	endif()
-endforeach()
+# Runtime DLL POST_BUILD lives next to add_executable_shared(arx) in arx/CMakeLists.txt
+# (CMake only allows TARGET POST_BUILD in the directory that created the target).
