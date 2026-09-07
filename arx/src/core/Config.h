@@ -173,6 +173,10 @@ public:
 		int dxrTransparency;
 		//! DLSS Super Resolution. 0=Off 1=DLAA 2=Quality 3=Balanced 4=Performance 5=Ultra Performance.
 		int dxrDlss;
+		//! MSAA preference is stored independently of DLSS. Use this at the point of use.
+		bool effectiveAntialiasing() const {
+			return antialiasing && dxrDlss <= 0;
+		}
 		//! DLSS Ray Reconstruction via Streamline. 0 = Off, 1 = On.
 		int dxrRr;
 		//! DLSS Frame Generation. 0 = Off, 1 = On (2x).
