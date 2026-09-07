@@ -76,11 +76,6 @@ TexturedVertex AllTLVertex[40000];
 
 extern float DreamTable[];
 
-// The cinematic opens on a fade-in, so a one-shot log only ever sees a black frame.
-// Sample a few frames spread over the first seconds instead.
-static int g_cineLogFrame = 0;
-static bool g_cineLogNow = false;
-
 static bool FlashBlancEnCours;
 static float OldSpeedFlashBlanc;
 static Color OldColorFlashBlanc;
@@ -208,45 +203,11 @@ void DrawGrille(CinematicBitmap * bitmap, Color col, int fx, CinematicLight * li
 		fo.bottom *= fade_witdh;
 	}
 	
-	if(g_cineLogNow) {
-		u8 rmin = 255, rmax = 0, amin = 255, amax = 0;
-		for(size_t i = 0; i < grille->m_nbvertexs; ++i) {
-			Color c = Color::fromRGBA(AllTLVertex[i].color);
-			rmin = std::min(rmin, c.r);
-			rmax = std::max(rmax, c.r);
-			amin = std::min(amin, c.a);
-			amax = std::max(amax, c.a);
-		}
-		LogInfo << "DrawGrille vertex colours f" << g_cineLogFrame
-		        << ": r=" << int(rmin) << ".." << int(rmax)
-		        << " a=" << int(amin) << ".." << int(amax);
-	}
-	
-	static bool loggedGrid = false;
-	const bool logGrid = !loggedGrid;
-	if(logGrid) {
-		loggedGrid = true;
-		LogInfo << "DrawGrille: nbvertexs=" << grille->m_nbvertexs
-		        << " mats=" << grille->m_mats.size()
-		        << " inds=" << grille->m_inds.size()
-		        << " uvs=" << grille->m_uvs.size()
-		        << " scale=" << grille->m_scale
-		        << " count=(" << grille->m_count.x << ", " << grille->m_count.y << ")"
-		        << " bitmap=(" << bitmap->m_size.x << ", " << bitmap->m_size.y << ")"
-		        << " v0=(" << AllTLVertex[0].p.x << ", " << AllTLVertex[0].p.y
-		        << ", " << AllTLVertex[0].p.z << ") w=" << AllTLVertex[0].w;
-	}
-	
 	C_UV * uvs = grille->m_uvs.data();
 	for(const C_INDEXED & mat : grille->m_mats) {
 		
 		arx_assert(mat.tex);
 		GRenderer->SetTexture(0, mat.tex);
-		
-		if(logGrid) {
-			LogInfo << "DrawGrille mat: startind=" << mat.startind << " nbind=" << mat.nbind
-			        << " nbvertexs=" << mat.nbvertexs << " tex=" << (mat.tex ? 1 : 0);
-		}
 		
 		int nb2 = mat.nbvertexs;
 		while(nb2--) {
@@ -305,6 +266,17 @@ void Cinematic::Render(PlatformDuration frameDuration) {
 	
 	GereTrack(this, frameDuration, resized, true);
 	
+	if(numbitmap < 0 || size_t(numbitmap) >= m_bitmaps.size()) {
+		static bool logged = false;
+		if(!logged) {
+			logged = true;
+			LogWarning << "Cinematic frame has no bitmap: numbitmap=" << numbitmap
+			           << " of " << m_bitmaps.size();
+		}
+		changekey = false;
+		return;
+	}
+	
 	if(changekey && idsound >= 0) {
 		PlaySoundKeyFramer(size_t(idsound));
 	}
@@ -317,29 +289,6 @@ void Cinematic::Render(PlatformDuration frameDuration) {
 	UseRenderState state(render2D());
 	UseTextureState textureState(TextureStage::FilterLinear, TextureStage::WrapClamp);
 	GRenderer->GetTextureStage(0)->setAlphaOp(TextureStage::OpModulate);
-	
-	g_cineLogFrame++;
-	g_cineLogNow = (g_cineLogFrame <= 3 || g_cineLogFrame % 15 == 0) && g_cineLogFrame <= 300;
-	
-	if(g_cineLogNow) {
-		LogInfo << "Cinematic::Render f" << g_cineLogFrame << ": numbitmap=" << numbitmap
-		        << " nextnumbitmap=" << m_nextNumbitmap
-		        << " bitmaps=" << m_bitmaps.size()
-		        << " fx=" << fx << " force=" << force
-		        << " pos=(" << m_pos.x << ", " << m_pos.y << ", " << m_pos.z << ")"
-		        << " posgrille=(" << posgrille.x << ", " << posgrille.y << ", "
-		        << posgrille.z << ") angz=" << angz;
-	}
-	
-	if(numbitmap < 0 || size_t(numbitmap) >= m_bitmaps.size()) {
-		static bool logged = false;
-		if(!logged) {
-			logged = true;
-			LogWarning << "Cinematic frame has no bitmap: numbitmap=" << numbitmap
-			           << " of " << m_bitmaps.size();
-		}
-		return;
-	}
 	
 	CinematicBitmap * tb = m_bitmaps[numbitmap].get();
 	
@@ -409,18 +358,6 @@ void Cinematic::Render(PlatformDuration frameDuration) {
 			LightRND =  std::min(lightt.intensity + lightt.intensiternd * flicker.get(), 1.f);
 			
 			l = &lightt;
-		}
-		
-		if(g_cineLogNow) {
-			LogInfo << "Cinematic light f" << g_cineLogFrame << ": enabled=" << (l ? 1 : 0)
-			        << " intensity=" << m_light.intensity
-			        << " intensiternd=" << m_light.intensiternd
-			        << " LightRND=" << LightRND
-			        << " pos=(" << lightt.pos.x << ", " << lightt.pos.y << ")"
-			        << " fallin=" << lightt.fallin << " fallout=" << lightt.fallout
-			        << " col=argb(" << int(col.a) << "," << int(col.r) << ","
-			        << int(col.g) << "," << int(col.b) << ")"
-			        << " a=" << a << " alpha=" << alpha;
 		}
 		
 		if(tb->grid.m_nbvertexs) {

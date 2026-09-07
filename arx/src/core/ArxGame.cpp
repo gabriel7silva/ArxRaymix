@@ -1794,26 +1794,6 @@ void ArxGame::renderLevel() {
 	
 	ARX_PROFILE_FUNC();
 	
-	
-	// A black frame during dialogue looks the same as a broken raster, so record
-	// where the camera actually is while the level is being drawn.
-	{
-		static int levelFrame = 0;
-		static int samples = 0;
-		levelFrame++;
-		if(g_camera && samples < 24 && (levelFrame <= 2 || levelFrame % 120 == 0)) {
-			samples++;
-			LogInfo << "Level camera f" << levelFrame
-			        << ": pos=(" << g_camera->m_pos.x << ", " << g_camera->m_pos.y
-			        << ", " << g_camera->m_pos.z << ")"
-			        << " angle=(" << g_camera->angle.getPitch() << ", " << g_camera->angle.getYaw()
-			        << ", " << g_camera->angle.getRoll() << ")"
-			        << " focal=" << g_camera->focal << " cdepth=" << g_camera->cdepth
-			        << " border=" << (cinematicBorder.isActive() ? 1 : 0)
-			        << " external=" << (EXTERNALVIEW ? 1 : 0);
-		}
-	}
-	
 	if(!isInCinematic()) {
 		GRenderer->beginSceneUpscale();
 	}
