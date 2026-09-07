@@ -742,6 +742,9 @@ bool SDL2Window::setVSync(int vsync) {
 		return false;
 	}
 	m_vsync = vsync;
+	if(m_renderer) {
+		m_renderer->setPresentVSync(vsync);
+	}
 	return true;
 }
 

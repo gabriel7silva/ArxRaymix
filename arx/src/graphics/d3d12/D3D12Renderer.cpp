@@ -229,6 +229,13 @@ size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t
 	size_t n = 0;
 	static const EERIE_LIGHT * kept[D3D12Rtao::kMaxShadowLights] { };
 	static size_t keptN = 0;
+	static const EERIE_LIGHT * s_staticBase = nullptr;
+	static size_t s_staticCount = 0;
+	if(g_staticLights.data() != s_staticBase || g_staticLights.size() != s_staticCount) {
+		keptN = 0;
+		s_staticBase = g_staticLights.data();
+		s_staticCount = g_staticLights.size();
+	}
 	const RoomHandle camRoom = (g_rooms && g_camera)
 		? ARX_PORTALS_GetRoomNumForPosition(Vec3f(cam.x, cam.y, cam.z), RoomPositionForCamera)
 		: RoomHandle();
@@ -340,12 +347,16 @@ size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t
 	keptN = take;
 	u32 hash = 0;
 	u32 setHash = 2166136261u;
+	auto mixRoom = [&](RoomHandle h) {
+		const u32 v = u32(size_t(h));
+		setHash = (setHash ^ v) * 16777619u;
+	};
+	mixRoom(camRoom);
 	for(size_t i = 0; i < take; ++i) {
 		D3D12Rtao::GpuLight tmp {};
 		emitShadowLight(tmp, cands[i].light, cands[i].pos);
 		kept[i] = cands[i].light;
-		const uintptr_t p = reinterpret_cast<uintptr_t>(kept[i]);
-		setHash = (setHash ^ u32(p) ^ u32(p >> 32)) * 16777619u;
+		mixRoom(ARX_PORTALS_GetRoomNumForPosition(cands[i].pos));
 		u32 h = 2166136261u;
 		const unsigned char * bytes = reinterpret_cast<const unsigned char *>(&tmp);
 		for(size_t b = 0; b < sizeof(tmp); ++b) {
@@ -386,11 +397,19 @@ size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t
 	// dropped. Either way a set change is a short fade, never a one-frame pop.
 	struct Slot {
 		const EERIE_LIGHT * light;
+		D3D12Rtao::GpuLight snap;
 		float presence;
 		bool selected;
 	};
 	static Slot slots[D3D12Rtao::kMaxShadowLights] { };
 	static size_t slotN = 0;
+	static const EERIE_LIGHT * s_slotStaticBase = nullptr;
+	static size_t s_slotStaticCount = 0;
+	if(g_staticLights.data() != s_slotStaticBase || g_staticLights.size() != s_slotStaticCount) {
+		slotN = 0;
+		s_slotStaticBase = g_staticLights.data();
+		s_slotStaticCount = g_staticLights.size();
+	}
 	constexpr float kPresenceStep = 1.f / 10.f;
 	for(size_t i = 0; i < slotN; ++i) {
 		slots[i].selected = false;
@@ -435,8 +454,13 @@ size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t
 	slotN = live;
 	const size_t emit = (std::min)(slotN, maxLights);
 	for(size_t i = 0; i < emit; ++i) {
-		const bool held = (slots[i].light == lightHandleGet(torchLightHandle));
-		emitShadowLight(out[i], slots[i].light, held ? heldTorchPos(cam) : slots[i].light->pos);
+		if(slots[i].selected && slots[i].light) {
+			const bool held = (slots[i].light == lightHandleGet(torchLightHandle));
+			emitShadowLight(out[i], slots[i].light, held ? heldTorchPos(cam) : slots[i].light->pos);
+			slots[i].snap = out[i];
+		} else {
+			out[i] = slots[i].snap;
+		}
 		out[i].presence = slots[i].presence;
 	}
 	return emit;
@@ -528,7 +552,7 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 			verts[2].p = ep.v[2].p;
 			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
 			if(collectMetal && (ep.type & POLY_METAL)) {
-				rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+				rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 			}
 			if(ep.type & POLY_QUAD) {
 				verts[0].p = ep.v[3].p;
@@ -536,7 +560,7 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 				verts[2].p = ep.v[1].p;
 				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
 				if(collectMetal && (ep.type & POLY_METAL)) {
-					rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+					rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 				}
 			}
 		}
@@ -548,19 +572,23 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 // geometry actually moved between frames.
 void addObjectFaces(D3D12Rtao * rtao, const EERIE_3DOBJ * obj, bool includeAlpha, bool includeTrans,
                     bool collectMetal, bool haveWorld, const Vec3f & origin, const glm::quat & rot,
-                    float scale) {
+                    float scale, bool ignoreHide = false) {
+	ARX_UNUSED(origin);
+	ARX_UNUSED(rot);
+	ARX_UNUSED(scale);
 	if(!rtao || !obj) {
 		return;
 	}
 	SMY_VERTEX verts[3] {};
 	for(const EERIE_FACE & face : obj->facelist) {
-		if(face.facetype & (POLY_HIDE | POLY_NODRAW | POLY_IGNORE)) {
+		if((face.facetype & (POLY_NODRAW | POLY_IGNORE))
+		   || (!ignoreHide && (face.facetype & POLY_HIDE))) {
 			continue;
 		}
 		if((face.facetype & POLY_TRANS) && !includeTrans) {
 			continue;
 		}
-		if(!includeAlpha && size_t(face.material) < obj->materials.size()) {
+		if(!includeAlpha && face.material && size_t(face.material) < obj->materials.size()) {
 			const TextureContainer * tc = obj->materials[face.material];
 			if(tc && tc->m_pTexture && tc->m_pTexture->hasAlpha()) {
 				continue;
@@ -574,11 +602,11 @@ void addObjectFaces(D3D12Rtao * rtao, const EERIE_3DOBJ * obj, bool includeAlpha
 				ok = false;
 				break;
 			}
-			if(haveWorld) {
-				p[i] = obj->vertexWorldPositions[id].v;
-			} else {
-				p[i] = origin + (rot * obj->vertexlist[id].v) * scale;
+			if(!haveWorld) {
+				ok = false;
+				break;
 			}
+			p[i] = obj->vertexWorldPositions[id].v;
 		}
 		if(!ok) {
 			continue;
@@ -587,8 +615,12 @@ void addObjectFaces(D3D12Rtao * rtao, const EERIE_3DOBJ * obj, bool includeAlpha
 		verts[1].p = p[1];
 		verts[2].p = p[2];
 		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
-		if(collectMetal && (face.facetype & POLY_METAL)) {
-			rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+		if(collectMetal) {
+			const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
+				? obj->materials[face.material] : nullptr;
+			if((tc && (tc->userflags & POLY_METAL)) || (face.facetype & POLY_METAL)) {
+				rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+			}
 		}
 	}
 }
@@ -627,7 +659,7 @@ void addLinkedCasters(D3D12Rtao * rtao, const Entity & entity, bool includeAlpha
 			if((face.facetype & POLY_TRANS) && !includeTrans) {
 				continue;
 			}
-			if(!includeAlpha && size_t(face.material) < link.obj->materials.size()) {
+			if(!includeAlpha && face.material && size_t(face.material) < link.obj->materials.size()) {
 				const TextureContainer * tc = link.obj->materials[face.material];
 				if(tc && tc->m_pTexture && tc->m_pTexture->hasAlpha()) {
 					continue;
@@ -664,17 +696,16 @@ void collectPlayerReflectCasters(D3D12Rtao * rtao, bool includeAlpha, bool inclu
 	                       && obj->vertexWorldPositions.size() == obj->vertexlist.size();
 	const glm::quat rot = toQuaternion(entity.angle);
 	const float scale = (entity.scale > 0.f) ? entity.scale : 1.f;
-	addObjectFaces(rtao, obj, includeAlpha, includeTrans, false, haveWorld, entity.pos, rot, scale);
+	addObjectFaces(rtao, obj, includeAlpha, includeTrans, false, haveWorld, entity.pos, rot, scale, true);
 	addLinkedCasters(rtao, entity, includeAlpha, includeTrans);
 }
 
-u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
+void collectEntityCasters(D3D12Rtao * rtao, float casterDist,
                          const D3D12Rtao::GpuLight * lights, size_t lightCount,
                          bool includeDebris, bool includeAlpha, bool includeTrans,
                          bool collectMetal) {
-	u32 hash = 2166136261u;
 	if(!rtao || !g_camera) {
-		return hash;
+		return;
 	}
 	// Per-entity hashes name what actually moved between frames (diagnostic).
 	struct EntityHash {
@@ -690,7 +721,6 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 	auto mix = [&](float f) {
 		u32 bits;
 		std::memcpy(&bits, &f, sizeof(bits));
-		hash = (hash ^ bits) * 16777619u;
 		eh = (eh ^ bits) * 16777619u;
 	};
 	SMY_VERTEX verts[3] {};
@@ -733,7 +763,7 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 			if((face.facetype & POLY_TRANS) && !includeTrans) {
 				continue;
 			}
-			if(!includeAlpha && size_t(face.material) < obj->materials.size()) {
+			if(!includeAlpha && face.material && size_t(face.material) < obj->materials.size()) {
 				const TextureContainer * tc = obj->materials[face.material];
 				if(tc && tc->m_pTexture && tc->m_pTexture->hasAlpha()) {
 					continue; // cutout: see collectRoomCasters
@@ -765,8 +795,12 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 				mix(v.z);
 			}
 			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
-			if(collectMetal && (face.facetype & POLY_METAL)) {
-				rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+			if(collectMetal) {
+				const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
+					? obj->materials[face.material] : nullptr;
+				if((tc && (tc->userflags & POLY_METAL)) || (face.facetype & POLY_METAL)) {
+					rtao->addMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
+				}
 			}
 		}
 		if(curN < std::size(cur)) {
@@ -801,7 +835,6 @@ u32 collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 		std::copy(cur, cur + curN, s_prev);
 		s_prevN = curN;
 	}
-	return hash;
 }
 
 u32 fogFactorSpecular(float depth, bool enable, float start, float end) {
@@ -1381,6 +1414,10 @@ cbuffer Root : register(b0) {
 	float texMask;
 	float alphaMul;
 	float2 pad;
+	float stage1Op;
+	float stage2Op;
+	float stage1AlphaMul;
+	float stage2AlphaMul;
 };
 Texture2D T0 : register(t0);
 Texture2D T1 : register(t1);
@@ -1411,10 +1448,9 @@ VSOut VSMain(VSIn i) {
 	VSOut o;
 	float rhw = (i.rhw > 0.0) ? i.rhw : 1.0;
 	float clipW = 1.0 / rhw;
-	// D3D10+ pixel centers sit at +0.5. Draw.cpp skips its D3D9 −0.5 when
-	// needsHalfPixelOffset() is false, so fonts and bitmaps share this shift.
-	float ndcX = ((i.pos.x - 0.5) / rtW) * 2.0 - 1.0 + pad.x;
-	float ndcY = 1.0 - ((i.pos.y - 0.5) / rtH) * 2.0 + pad.y;
+	// Draw.cpp applies the D3D9 −0.5; add it back so D3D12 matches OpenGL.
+	float ndcX = ((i.pos.x + 0.5) / rtW) * 2.0 - 1.0 + pad.x;
+	float ndcY = 1.0 - ((i.pos.y + 0.5) / rtH) * 2.0 + pad.y;
 	o.pos = float4(ndcX * clipW, ndcY * clipW, i.pos.z * clipW, clipW);
 	o.color = i.color;
 	o.fog = i.specular.a;
@@ -1451,10 +1487,36 @@ float4 PSMain(VSOut i) : SV_Target {
 		}
 	}
 	if(texMask > 1.5) {
-		c *= T1.Sample(S1, i.uv1);
+		float4 t1 = T1.Sample(S1, i.uv1);
+		if(stage1Op < 0.5) {
+			c.rgb *= t1.rgb;
+		} else if(stage1Op < 1.5) {
+			c.rgb = t1.rgb;
+		} else if(stage1Op < 2.5) {
+		} else if(stage1Op < 3.5) {
+			c.rgb *= t1.rgb * 2.0;
+		} else {
+			c.rgb *= t1.rgb * 4.0;
+		}
+		if(stage1AlphaMul > 0.5) {
+			c.a *= t1.a;
+		}
 	}
 	if(texMask > 2.5) {
-		c *= T2.Sample(S2, i.uv2);
+		float4 t2 = T2.Sample(S2, i.uv2);
+		if(stage2Op < 0.5) {
+			c.rgb *= t2.rgb;
+		} else if(stage2Op < 1.5) {
+			c.rgb = t2.rgb;
+		} else if(stage2Op < 2.5) {
+		} else if(stage2Op < 3.5) {
+			c.rgb *= t2.rgb * 2.0;
+		} else {
+			c.rgb *= t2.rgb * 4.0;
+		}
+		if(stage2AlphaMul > 0.5) {
+			c.a *= t2.a;
+		}
 	}
 	// D3D9 ALPHAFUNC GREATER: discard when alpha is not greater than the ref.
 	// Blended cutout uses ref 0 — the old `alphaRef > 0` guard never discarded.
@@ -1510,6 +1572,7 @@ struct D3D12Renderer::Impl {
 	DxPtr<ID3D12Resource> upload;
 	DxPtr<ID3D12Resource> white;
 	std::vector<DxPtr<ID3D12Resource>> inflight;
+	std::vector<std::pair<ID3D12Resource *, UINT64>> retire;
 	HANDLE fenceEvent = nullptr;
 	UINT64 fenceValue = 0;
 	UINT64 frameFence[kFrameCount] {};
@@ -1518,9 +1581,12 @@ struct D3D12Renderer::Impl {
 	UINT srvSize = 0;
 	UINT sampSize = 0;
 	UINT nextSrv = 1;
+	std::vector<unsigned> freeSrv;
 	UINT uploadOffset = 0;
+	UINT uploadLimit = 0;
 	void * uploadMapped = nullptr;
 	bool recording = false;
+	bool unusable = false;
 	bool inPresentState = true;
 	bool worldPass = false;
 	bool sceneReady = false;
@@ -1531,6 +1597,7 @@ struct D3D12Renderer::Impl {
 	int sceneAllocW = 0;
 	int sceneAllocH = 0;
 	int dlssMode = 0;
+	int prevDlssActive = 0;
 	int jitterFrame = 0;
 	float jitterX = 0.f;
 	float jitterY = 0.f;
@@ -1567,6 +1634,9 @@ D3D12Texture::D3D12Texture(D3D12Renderer * renderer)
 { }
 
 D3D12Texture::~D3D12Texture() {
+	if(m_renderer) {
+		m_renderer->unregisterTexture(this);
+	}
 	destroy();
 }
 
@@ -1625,12 +1695,11 @@ bool D3D12Texture::createGpuTexture() {
 }
 
 void D3D12Texture::upload() {
-	if(!m_image.isValid() || !m_renderer || !m_resource) {
-		if(m_image.isValid() && !m_resource) {
-			if(!createGpuTexture()) {
-				return;
-			}
-		} else {
+	if(!m_image.isValid() || !m_renderer) {
+		return;
+	}
+	if(!m_resource || m_gpuSize != m_storedSize) {
+		if(!createGpuTexture()) {
 			return;
 		}
 	}
@@ -1652,7 +1721,12 @@ void D3D12Texture::upload() {
 			const unsigned char * p = row + x * channels;
 			u8 r = 255, g = 255, b = 255, a = 255;
 			switch(src->getFormat()) {
-				case Image::Format_L8: r = g = b = p[0]; break;
+				case Image::Format_L8:
+					r = g = b = p[0];
+					if(isIntensity()) {
+						a = p[0];
+					}
+					break;
 				case Image::Format_A8: a = p[0]; break;
 				case Image::Format_L8A8: r = g = b = p[0]; a = p[1]; break;
 				case Image::Format_R8G8B8: r = p[0]; g = p[1]; b = p[2]; break;
@@ -1679,6 +1753,10 @@ void D3D12Texture::destroy() {
 		if(m_resource) {
 			m_renderer->freeTexture(m_resource);
 			m_resource = nullptr;
+		}
+		if(m_srvIndex != 0) {
+			m_renderer->freeSrv(m_srvIndex);
+			m_srvIndex = 0;
 		}
 	}
 	m_gpuSize = Vec2i(0);
@@ -1797,11 +1875,23 @@ D3D12Renderer::~D3D12Renderer() {
 }
 
 unsigned D3D12Renderer::allocateSrv() {
+	if(!m->freeSrv.empty()) {
+		const unsigned index = m->freeSrv.back();
+		m->freeSrv.pop_back();
+		return index;
+	}
 	if(m->nextSrv >= kSrvHeapSize) {
 		LogError << "D3D12: SRV heap exhausted";
 		return 0;
 	}
 	return m->nextSrv++;
+}
+
+void D3D12Renderer::freeSrv(unsigned index) {
+	if(!m || index == 0) {
+		return;
+	}
+	m->freeSrv.push_back(index);
 }
 
 void D3D12Renderer::createTextureSrv(ID3D12Resource * resource, unsigned index) {
@@ -1819,24 +1909,76 @@ void D3D12Renderer::createTextureSrv(ID3D12Resource * resource, unsigned index) 
 }
 
 void D3D12Renderer::freeTexture(ID3D12Resource * resource) {
-	if(resource) {
-		waitGpu();
+	if(!resource) {
+		return;
+	}
+	if(!m || !m->fence) {
 		resource->Release();
+		return;
+	}
+	m->retire.push_back({ resource, m->fenceValue + 1 });
+}
+
+void D3D12Renderer::registerTexture(D3D12Texture * texture) {
+	if(texture) {
+		m_liveTextures.push_back(texture);
 	}
 }
 
-void D3D12Renderer::waitGpu() {
-	if(!m->queue || !m->fence) {
+void D3D12Renderer::unregisterTexture(D3D12Texture * texture) {
+	m_liveTextures.erase(std::remove(m_liveTextures.begin(), m_liveTextures.end(), texture),
+	                     m_liveTextures.end());
+}
+
+void D3D12Renderer::markUnusable() {
+	if(!m) {
 		return;
 	}
-	const UINT64 value = ++m->fenceValue;
-	if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
+	m->unusable = true;
+	m->recording = false;
+	m->inflight.clear();
+	LogError << "D3D12: renderer marked unusable";
+}
+
+void D3D12Renderer::retireCompleted() {
+	if(!m || !m->fence) {
+		return;
+	}
+	const UINT64 done = m->fence->GetCompletedValue();
+	size_t live = 0;
+	for(size_t i = 0; i < m->retire.size(); ++i) {
+		if(m->retire[i].second <= done) {
+			if(m->retire[i].first) {
+				m->retire[i].first->Release();
+			}
+		} else {
+			m->retire[live++] = m->retire[i];
+		}
+	}
+	m->retire.resize(live);
+}
+
+void D3D12Renderer::waitFence(std::uint64_t value) {
+	if(!m || !m->fence || value == 0) {
 		return;
 	}
 	if(m->fence->GetCompletedValue() < value) {
 		m->fence->SetEventOnCompletion(value, m->fenceEvent);
 		WaitForSingleObject(m->fenceEvent, INFINITE);
 	}
+	retireCompleted();
+}
+
+void D3D12Renderer::waitGpu() {
+	if(!m || !m->queue || !m->fence) {
+		return;
+	}
+	const UINT64 value = ++m->fenceValue;
+	if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
+		m->inflight.clear();
+		return;
+	}
+	waitFence(value);
 	m->inflight.clear();
 }
 
@@ -1975,7 +2117,7 @@ bool D3D12Renderer::createPipeline() {
 	D3D12_DESCRIPTOR_RANGE sampRanges[3] {};
 	D3D12_ROOT_PARAMETER params[7] {};
 	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-	params[0].Constants.Num32BitValues = 12;
+	params[0].Constants.Num32BitValues = 16;
 	params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	for(UINT i = 0; i < 3; ++i) {
 		srvRanges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -2113,7 +2255,11 @@ bool D3D12Renderer::createFrameResources() {
 	                                             IID_PPV_ARGS(m->upload.put())))) {
 		return false;
 	}
-	m->upload->Map(0, nullptr, &m->uploadMapped);
+	if(FAILED(m->upload->Map(0, nullptr, &m->uploadMapped)) || !m->uploadMapped) {
+		LogError << "D3D12: upload buffer Map failed";
+		m->uploadMapped = nullptr;
+		return false;
+	}
 	
 	D3D12_RESOURCE_DESC whiteDesc {};
 	whiteDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -2150,13 +2296,19 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 	if(FAILED(m->swapchain->ResizeBuffers(kFrameCount, UINT(width), UINT(height),
 	                                      DXGI_FORMAT_R8G8B8A8_UNORM, 0))) {
 		LogError << "D3D12: ResizeBuffers failed";
+		markUnusable();
 		return;
 	}
 	m_width = width;
 	m_height = height;
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
 	for(UINT i = 0; i < kFrameCount; ++i) {
-		m->swapchain->GetBuffer(i, IID_PPV_ARGS(m->backbuffers[i].put()));
+		if(FAILED(m->swapchain->GetBuffer(i, IID_PPV_ARGS(m->backbuffers[i].put())))
+		   || !m->backbuffers[i]) {
+			LogError << "D3D12: GetBuffer failed";
+			markUnusable();
+			return;
+		}
 		m->device->CreateRenderTargetView(m->backbuffers[i].Get(), nullptr, rtv);
 		rtv.ptr += m->rtvSize;
 	}
@@ -2178,6 +2330,7 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 	                                             D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
 	                                             IID_PPV_ARGS(m->depth.put())))) {
 		LogError << "D3D12: depth buffer failed";
+		markUnusable();
 		return;
 	}
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsv {};
@@ -2202,6 +2355,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 		return false;
 	}
 	releaseDevice();
+	m->unusable = false;
 	m->hwnd = hwnd;
 	
 	if(!m_sl) {
@@ -2309,6 +2463,12 @@ void D3D12Renderer::releaseDevice() {
 		return;
 	}
 	waitGpu();
+	for(auto & item : m->retire) {
+		if(item.first) {
+			item.first->Release();
+		}
+	}
+	m->retire.clear();
 	releaseSceneTargets();
 	for(UINT i = 0; i < kFrameCount; ++i) {
 		m->backbuffers[i].reset();
@@ -2415,12 +2575,32 @@ void D3D12Renderer::SetProjectionMatrix(const glm::mat4x4 & matProj) {
 	m_proj = matProj;
 }
 
-void D3D12Renderer::ReleaseAllTextures() { }
-void D3D12Renderer::RestoreAllTextures() { }
-void D3D12Renderer::reloadColorKeyTextures() { }
+void D3D12Renderer::ReleaseAllTextures() {
+	for(D3D12Texture * texture : m_liveTextures) {
+		if(texture) {
+			texture->destroy();
+		}
+	}
+}
+void D3D12Renderer::RestoreAllTextures() {
+	for(D3D12Texture * texture : m_liveTextures) {
+		if(texture) {
+			texture->restore();
+		}
+	}
+}
+void D3D12Renderer::reloadColorKeyTextures() {
+	for(D3D12Texture * texture : m_liveTextures) {
+		if(texture && texture->hasColorKey()) {
+			texture->restore();
+		}
+	}
+}
 
 Texture * D3D12Renderer::createTexture() {
-	return new D3D12Texture(this);
+	auto * texture = new D3D12Texture(this);
+	registerTexture(texture);
+	return texture;
 }
 
 void D3D12Renderer::SetViewport(const Rect & viewport) {
@@ -2449,12 +2629,13 @@ void D3D12Renderer::SetFillMode(FillMode mode) {
 }
 
 bool D3D12Renderer::ensureCommandList() {
-	if(!m->device || !m->list) {
+	if(!m || m->unusable || !m->device || !m->list) {
 		return false;
 	}
 	if(m->recording) {
 		return true;
 	}
+	waitFence(m->frameFence[m->frame]);
 	if(FAILED(m->allocators[m->frame]->Reset())) {
 		return false;
 	}
@@ -2462,7 +2643,9 @@ bool D3D12Renderer::ensureCommandList() {
 		return false;
 	}
 	m->recording = true;
-	m->uploadOffset = 0;
+	const UINT region = kUploadBytes / kFrameCount;
+	m->uploadOffset = m->frame * region;
+	m->uploadLimit = m->uploadOffset + region;
 	return true;
 }
 
@@ -2505,13 +2688,21 @@ void D3D12Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clear
 	}
 	D3D12_RECT rects[8];
 	UINT n = 0;
-	if(!m->worldPass && nrects > 0 && rect) {
+	if(nrects > 0 && rect) {
 		n = UINT((std::min)(nrects, size_t(8)));
+		const int pw = passWidth();
+		const int ph = passHeight();
+		const float sx = usingSceneTargets() ? float(pw) / float((std::max)(m_width, 1)) : 1.f;
+		const float sy = usingSceneTargets() ? float(ph) / float((std::max)(m_height, 1)) : 1.f;
 		for(UINT i = 0; i < n; ++i) {
-			rects[i].left = LONG(rect[i].left);
-			rects[i].top = LONG(rect[i].top);
-			rects[i].right = LONG(rect[i].right);
-			rects[i].bottom = LONG(rect[i].bottom);
+			const LONG l = LONG(float(rect[i].left) * sx);
+			const LONG t = LONG(float(rect[i].top) * sy);
+			const LONG r = LONG(float(rect[i].right) * sx);
+			const LONG b = LONG(float(rect[i].bottom) * sy);
+			rects[i].left = (std::max)(0L, (std::min)(l, LONG(pw)));
+			rects[i].top = (std::max)(0L, (std::min)(t, LONG(ph)));
+			rects[i].right = (std::max)(rects[i].left, (std::min)(r, LONG(pw)));
+			rects[i].bottom = (std::max)(rects[i].top, (std::min)(b, LONG(ph)));
 		}
 	}
 	if(bufferFlags & ColorBuffer) {
@@ -2526,7 +2717,7 @@ void D3D12Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clear
 	}
 }
 
-void D3D12Renderer::bindDrawState(Primitive primitive) {
+bool D3D12Renderer::bindDrawState(Primitive primitive) {
 	BlendingFactor blendSrc = m_state.getBlendSrc();
 	BlendingFactor blendDst = m_state.getBlendDst();
 	// D3D9 always alphatests when AlphaCutout. Opaque uses ref 128; blended uses
@@ -2597,13 +2788,27 @@ void D3D12Renderer::bindDrawState(Primitive primitive) {
 		pd.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 		pd.SampleDesc.Count = 1;
 		if(FAILED(m->device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(pso.put())))) {
-			LogError << "D3D12: CreateGraphicsPipelineState failed";
-			return;
+			static int s_psoFails = 0;
+			if(s_psoFails < 8) {
+				++s_psoFails;
+				LogError << "D3D12: CreateGraphicsPipelineState failed";
+			}
+			m->psos.erase(key);
+			return false;
 		}
 	}
 	m->list->SetPipelineState(pso.Get());
 	
-	float constants[12] = {
+	auto encodeColorOp = [](TextureStage::TextureOp op) {
+		switch(op) {
+			case TextureStage::OpSelectArg1: return 1.f;
+			case TextureStage::OpDisable: return 2.f;
+			case TextureStage::OpModulate2X: return 3.f;
+			case TextureStage::OpModulate4X: return 4.f;
+			default: return 0.f;
+		}
+	};
+	float constants[16] = {
 		float((std::max)(m_width, 1)),
 		float((std::max)(m_height, 1)),
 		// World pass only: CPU already wrote the view-depth factor in specular.a.
@@ -2617,7 +2822,8 @@ void D3D12Renderer::bindDrawState(Primitive primitive) {
 		float(m_fogColor.b) / 255.f,
 		0.f,
 		1.f,
-		0.f, 0.f, 0.f
+		0.f, 0.f, 0.f,
+		0.f, 0.f, 0.f, 0.f
 	};
 	if(m->worldPass && m->sceneW > 0 && m->sceneH > 0) {
 		constants[10] = m->jitterX * 2.f / float(m->sceneW);
@@ -2660,7 +2866,15 @@ void D3D12Renderer::bindDrawState(Primitive primitive) {
 	if(tex2) {
 		constants[8] = 3.f;
 	}
-	m->list->SetGraphicsRoot32BitConstants(0, 12, constants, 0);
+	if(stage1) {
+		constants[12] = encodeColorOp(stage1->getColorOp());
+		constants[14] = (stage1->getAlphaOp() == TextureStage::OpDisable) ? 0.f : 1.f;
+	}
+	if(stage2) {
+		constants[13] = encodeColorOp(stage2->getColorOp());
+		constants[15] = (stage2->getAlphaOp() == TextureStage::OpDisable) ? 0.f : 1.f;
+	}
+	m->list->SetGraphicsRoot32BitConstants(0, 16, constants, 0);
 	
 	const unsigned indices[3] = {
 		tex0 ? tex0->srvIndex() : 0,
@@ -2708,24 +2922,27 @@ void D3D12Renderer::bindDrawState(Primitive primitive) {
 		        << " size=" << (tex0 ? tex0->getSize().x : 0) << "x" << (tex0 ? tex0->getSize().y : 0)
 		        << " tex=" << (name ? name->string() : (tex0 ? "(unnamed)" : "(none)"));
 	}
+	return true;
 }
 
 void D3D12Renderer::drawGpuVerts(Primitive primitive, const void * verts, size_t stride, size_t count) {
-	if(!verts || count == 0 || !beginRecording()) {
+	if(!verts || count == 0 || !m->uploadMapped || !beginRecording()) {
 		return;
 	}
 	const UINT bytes = UINT(stride * count);
-	if(m->uploadOffset + bytes > kUploadBytes) {
-		m->uploadOffset = 0;
+	if(m->uploadOffset + bytes > m->uploadLimit) {
+		m->uploadOffset = m->frame * (kUploadBytes / kFrameCount);
 	}
 	const UINT aligned = (m->uploadOffset + 255u) & ~255u;
-	if(aligned + bytes > kUploadBytes) {
+	if(aligned + bytes > m->uploadLimit) {
 		LogWarning << "D3D12: upload buffer full, dropping draw";
 		return;
 	}
 	m->uploadOffset = aligned;
 	std::memcpy(static_cast<char *>(m->uploadMapped) + m->uploadOffset, verts, bytes);
-	bindDrawState(primitive);
+	if(!bindDrawState(primitive)) {
+		return;
+	}
 	D3D12_VERTEX_BUFFER_VIEW vbv {};
 	vbv.BufferLocation = m->upload->GetGPUVirtualAddress() + m->uploadOffset;
 	vbv.SizeInBytes = bytes;
@@ -2755,29 +2972,10 @@ void D3D12Renderer::drawTextured(Primitive primitive, const TexturedVertex * ver
 	drawGpuVerts(primitive, converted.data(), sizeof(GpuVert), converted.size());
 }
 
-void D3D12Renderer::collectWorld(Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                                 const unsigned short * indices, size_t nindices) {
-	ARX_UNUSED(primitive);
-	ARX_UNUSED(vertices);
-	ARX_UNUSED(nvertices);
-	ARX_UNUSED(indices);
-	ARX_UNUSED(nindices);
-}
-
-void D3D12Renderer::collectWorld(Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-                                 const unsigned short * indices, size_t nindices) {
-	ARX_UNUSED(primitive);
-	ARX_UNUSED(vertices);
-	ARX_UNUSED(nvertices);
-	ARX_UNUSED(indices);
-	ARX_UNUSED(nindices);
-}
-
 void D3D12Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * vertices, size_t count) {
 	if(!vertices || count == 0) {
 		return;
 	}
-	collectWorld(primitive, vertices, count, nullptr, 0);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
@@ -2785,18 +2983,28 @@ void D3D12Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * ve
 		drawGpuVerts(Renderer::TriangleList, converted.data(), sizeof(GpuVert), converted.size());
 		return;
 	}
+	static bool s_logged = false;
+	if(!s_logged) {
+		s_logged = true;
+		LogWarning << "D3D12: non-triangle world draw dropped";
+	}
 }
 
 void D3D12Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * vertices, size_t count) {
 	if(!vertices || count == 0) {
 		return;
 	}
-	collectWorld(primitive, vertices, count, nullptr, 0);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
 		clipWorldTriangles3(primitive, vertices, count, nullptr, 0, m_view, m_proj, m_viewport, fog, converted);
 		drawGpuVerts(Renderer::TriangleList, converted.data(), sizeof(GpuVert), converted.size());
+		return;
+	}
+	static bool s_logged = false;
+	if(!s_logged) {
+		s_logged = true;
+		LogWarning << "D3D12: non-triangle world draw dropped";
 	}
 }
 
@@ -2805,13 +3013,18 @@ void D3D12Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX * ver
 	if(!vertices || !indices || nvertices == 0 || nindices == 0) {
 		return;
 	}
-	collectWorld(primitive, vertices, nvertices, indices, nindices);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
 		clipWorldTriangles(primitive, vertices, nvertices, indices, nindices, m_view, m_proj,
 		                   m_viewport, fog, converted);
 		drawGpuVerts(Renderer::TriangleList, converted.data(), sizeof(GpuVert), converted.size());
+		return;
+	}
+	static bool s_logged = false;
+	if(!s_logged) {
+		s_logged = true;
+		LogWarning << "D3D12: non-triangle world draw dropped";
 	}
 }
 
@@ -2820,13 +3033,18 @@ void D3D12Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX3 * ve
 	if(!vertices || !indices || nvertices == 0 || nindices == 0) {
 		return;
 	}
-	collectWorld(primitive, vertices, nvertices, indices, nindices);
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd };
 	thread_local std::vector<GpuVert> converted;
 	if(isTrianglePrimitive(primitive)) {
 		clipWorldTriangles3(primitive, vertices, nvertices, indices, nindices, m_view, m_proj,
 		                    m_viewport, fog, converted);
 		drawGpuVerts(Renderer::TriangleList, converted.data(), sizeof(GpuVert), converted.size());
+		return;
+	}
+	static bool s_logged = false;
+	if(!s_logged) {
+		s_logged = true;
+		LogWarning << "D3D12: non-triangle world draw dropped";
 	}
 }
 
@@ -2862,15 +3080,87 @@ std::unique_ptr<VertexBuffer<SMY_VERTEX3>> D3D12Renderer::createVertexBuffer3(si
 }
 
 bool D3D12Renderer::getSnapshot(Image & image) {
-	ARX_UNUSED(image);
-	return false;
+	return getSnapshot(image, size_t((std::max)(m_width, 0)), size_t((std::max)(m_height, 0)));
 }
 
 bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
-	ARX_UNUSED(image);
-	ARX_UNUSED(width);
-	ARX_UNUSED(height);
-	return false;
+	if(!m || m->unusable || !m->device || !m->queue || !m->backbuffers[m->frame] || width == 0 || height == 0) {
+		return false;
+	}
+	waitGpu();
+	ID3D12Resource * src = m->backbuffers[m->frame].Get();
+	const D3D12_RESOURCE_DESC srcDesc = src->GetDesc();
+	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};
+	UINT64 uploadSize = 0;
+	m->device->GetCopyableFootprints(&srcDesc, 0, 1, 0, &footprint, nullptr, nullptr, &uploadSize);
+	if(uploadSize == 0) {
+		return false;
+	}
+	D3D12_RESOURCE_DESC rb {};
+	rb.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	rb.Width = uploadSize;
+	rb.Height = 1;
+	rb.DepthOrArraySize = 1;
+	rb.MipLevels = 1;
+	rb.SampleDesc.Count = 1;
+	rb.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	D3D12_HEAP_PROPERTIES heap {};
+	heap.Type = D3D12_HEAP_TYPE_READBACK;
+	DxPtr<ID3D12Resource> readback;
+	if(FAILED(m->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rb,
+	                                             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+	                                             IID_PPV_ARGS(readback.put())))) {
+		return false;
+	}
+	if(!ensureCommandList()) {
+		return false;
+	}
+	if(!m->inPresentState) {
+		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	} else {
+		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	}
+	D3D12_TEXTURE_COPY_LOCATION dst {};
+	dst.pResource = readback.Get();
+	dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+	dst.PlacedFootprint = footprint;
+	D3D12_TEXTURE_COPY_LOCATION srcLoc {};
+	srcLoc.pResource = src;
+	srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	m->list->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
+	if(!m->inPresentState) {
+		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	} else {
+		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+	}
+	if(FAILED(m->list->Close())) {
+		m->recording = false;
+		return false;
+	}
+	ID3D12CommandList * lists[] = { m->list.Get() };
+	m->queue->ExecuteCommandLists(1, lists);
+	m->recording = false;
+	waitGpu();
+	void * mapped = nullptr;
+	if(FAILED(readback->Map(0, nullptr, &mapped)) || !mapped) {
+		return false;
+	}
+	const UINT srcW = UINT(srcDesc.Width);
+	const UINT srcH = UINT(srcDesc.Height);
+	image.create(width, height, Image::Format_B8G8R8A8);
+	unsigned char * out = image.getData();
+	const char * rows = static_cast<const char *>(mapped);
+	for(size_t y = 0; y < height; ++y) {
+		const size_t sy = (height == 1) ? 0 : y * (srcH - 1) / (height - 1);
+		const u32 * srcRow = reinterpret_cast<const u32 *>(rows + UINT64(sy) * footprint.Footprint.RowPitch);
+		u32 * dstRow = reinterpret_cast<u32 *>(out + y * width * 4);
+		for(size_t x = 0; x < width; ++x) {
+			const size_t sx = (width == 1) ? 0 : x * (srcW - 1) / (width - 1);
+			dstRow[x] = srcRow[sx];
+		}
+	}
+	readback->Unmap(0, nullptr);
+	return true;
 }
 
 bool D3D12Renderer::supportsRayTracing() const {
@@ -2938,7 +3228,7 @@ void D3D12Renderer::bindPassTargets() {
 	} else {
 		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
 	}
-	m->list->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+	m->list->OMSetRenderTargets(1, &rtv, FALSE, m->depth ? &dsv : nullptr);
 	const int pw = passWidth();
 	const int ph = passHeight();
 	D3D12_VIEWPORT vp {};
@@ -2947,11 +3237,13 @@ void D3D12Renderer::bindPassTargets() {
 	vp.MaxDepth = 1.f;
 	m->list->RSSetViewports(1, &vp);
 	D3D12_RECT sc { 0, 0, LONG(pw), LONG(ph) };
-	if(!m->worldPass && m_scissor.isValid()) {
-		sc.left = LONG(m_scissor.left);
-		sc.top = LONG(m_scissor.top);
-		sc.right = LONG(m_scissor.right);
-		sc.bottom = LONG(m_scissor.bottom);
+	if(m_scissor.isValid()) {
+		const float sx = usingSceneTargets() ? float(pw) / float((std::max)(m_width, 1)) : 1.f;
+		const float sy = usingSceneTargets() ? float(ph) / float((std::max)(m_height, 1)) : 1.f;
+		sc.left = LONG((std::max)(0.f, float(m_scissor.left) * sx));
+		sc.top = LONG((std::max)(0.f, float(m_scissor.top) * sy));
+		sc.right = LONG((std::min)(float(pw), float(m_scissor.right) * sx));
+		sc.bottom = LONG((std::min)(float(ph), float(m_scissor.bottom) * sy));
 	}
 	m->list->RSSetScissorRects(1, &sc);
 }
@@ -3125,6 +3417,10 @@ void D3D12Renderer::beginSceneUpscale() {
 		if(wantRr) {
 			m->dlssMode = D3D12Streamline::resolveDlssMode(1, m_height);
 		}
+		if(m->prevDlssActive) {
+			m->dlssReset = true;
+		}
+		m->prevDlssActive = 0;
 		if(m_rtao) {
 			m_rtao->resize(m_width, m_height);
 		}
@@ -3152,6 +3448,7 @@ void D3D12Renderer::beginSceneUpscale() {
 	if(!ensureSceneTargets(rw, rh)) {
 		m->sceneW = m_width;
 		m->sceneH = m_height;
+		m->dlssMode = wantRr ? D3D12Streamline::resolveDlssMode(1, m_height) : 0;
 		if(m_rtao) {
 			m_rtao->resize(m_width, m_height);
 		}
@@ -3160,6 +3457,10 @@ void D3D12Renderer::beginSceneUpscale() {
 	}
 	m->worldPass = true;
 	m->sceneUsed = true;
+	if(!m->prevDlssActive) {
+		m->dlssReset = true;
+	}
+	m->prevDlssActive = 1;
 	m->jitterFrame++;
 	// Pixel-space Halton. Streamline undoes it via jitterOffset; matrices
 	// stay unjittered. Without this, Ultra Performance is a bilinear 360p.
@@ -3170,19 +3471,9 @@ void D3D12Renderer::beginSceneUpscale() {
 	}
 	static int s_mode = -1, s_rw = 0, s_rh = 0;
 	if(slMode != s_mode || rw != s_rw || rh != s_rh) {
-		const char * name = "Off";
-		switch(slMode) {
-			case 1: name = "Performance"; break;
-			case 2: name = "Balanced"; break;
-			case 3: name = "Quality"; break;
-			case 4: name = "UltraPerformance"; break;
-			case 5: name = "UltraQuality"; break;
-			case 6: name = "DLAA"; break;
-			default: break;
-		}
-		if(config.video.dxrDlss == 5 && slMode == 1) {
-			name = "UltraPerformance→Performance";
-		}
+		const char * name = D3D12Streamline::wasDowngraded(config.video.dxrDlss, m_height)
+			? "UltraPerformance→Performance"
+			: D3D12Streamline::dlssModeName(slMode);
 		m->dlssReset = true;
 		LogInfo << "Streamline: DLSS " << name << " render=" << rw << "x" << rh
 		        << " output=" << m_width << "x" << m_height
@@ -3210,7 +3501,7 @@ void D3D12Renderer::applyStreamlineRr() {
 		m->worldPass = false;
 		return;
 	}
-	const int slMode = m->dlssMode > 0 ? m->dlssMode : 6;
+	const int slMode = m->dlssMode > 0 ? m->dlssMode : D3D12Streamline::dlaaMode();
 	const bool haveScene = m->sceneReady && m->sceneColor && m->sceneDepth;
 	D3D12Streamline::Frame frame;
 	frame.list = m->list.Get();
@@ -3223,7 +3514,7 @@ void D3D12Renderer::applyStreamlineRr() {
 	frame.height = haveScene ? m->sceneH : passHeight();
 	frame.outputWidth = m_width;
 	frame.outputHeight = m_height;
-	frame.dlssMode = slMode > 0 ? slMode : 6;
+	frame.dlssMode = slMode;
 	frame.jitterX = m->jitterX;
 	frame.jitterY = m->jitterY;
 	frame.reset = m->dlssReset;
@@ -3232,8 +3523,12 @@ void D3D12Renderer::applyStreamlineRr() {
 	frame.wantFg = wantFg;
 	if(m_rtao) {
 		frame.albedoSrc = m_rtao->colorCopyResource();
-		frame.waterMask = m_rtao->waterMaskResource();
-		frame.metalMask = m_rtao->metalMaskResource();
+		if(m_rtao->masksReadable() && m_rtao->masksRasterized()) {
+			frame.waterMask = m_rtao->waterMaskResource();
+			frame.metalMask = m_rtao->metalMaskResource();
+			frame.waterDepth = m_rtao->waterDepthResource();
+			frame.masksReady = true;
+		}
 	}
 	if(g_camera) {
 		frame.cameraPos = glm::vec3(g_camera->m_pos.x, g_camera->m_pos.y, g_camera->m_pos.z);
@@ -3244,8 +3539,12 @@ void D3D12Renderer::applyStreamlineRr() {
 		frame.cameraPos = glm::vec3(invView[3]);
 	}
 	frame.cameraNear = kNearW;
+	bool upscaled = false;
 	if(wantDlss || wantRr) {
-		m_sl->evaluate(frame);
+		upscaled = m_sl->evaluate(frame);
+	}
+	if(haveScene && !upscaled) {
+		m_sl->blitSceneToOutput(frame);
 	}
 	m_sl->prepareFrameGen(frame);
 	m->dlssReset = false;
@@ -3453,11 +3752,29 @@ void D3D12Renderer::showFrame() {
 		m_sl->syncFrameGen(config.video.dxrFg > 0 && m_sl->supportsFg());
 		m_sl->onPresent();
 	}
-	m->swapchain->Present(0, 0);
+	const HRESULT presented = m->swapchain->Present(m_vsync == 0 ? 0u : 1u, 0);
+	if(FAILED(presented)) {
+		if(presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
+			const HRESULT reason = m->device ? m->device->GetDeviceRemovedReason() : presented;
+			LogError << "D3D12: device removed (" << unsigned(reason) << ")";
+			markUnusable();
+		} else {
+			LogError << "D3D12: Present failed";
+		}
+		m->recording = false;
+		return;
+	}
 	if(m_sl) {
 		m_sl->afterPresent();
 	}
-	waitGpu();
+	const UINT64 value = ++m->fenceValue;
+	if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
+		m->inflight.clear();
+		markUnusable();
+		m->recording = false;
+		return;
+	}
+	m->frameFence[m->frame] = value;
 	m->recording = false;
 	m->frame = m->swapchain->GetCurrentBackBufferIndex();
 }

@@ -64,7 +64,11 @@ D3DCOLOR fogFactorSpecular(float depth, const VertexFog & fog) {
 	return D3DCOLOR_ARGB(u8(factor * 255.f + 0.5f), 0, 0, 0);
 }
 
-D3DPRESENT_PARAMETERS makePresentParams(HWND hwnd, int width, int height) {
+UINT presentInterval(int vsync) {
+	return (vsync == 0) ? D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;
+}
+
+D3DPRESENT_PARAMETERS makePresentParams(HWND hwnd, int width, int height, int vsync) {
 	D3DPRESENT_PARAMETERS pp {};
 	pp.BackBufferWidth = UINT(width);
 	pp.BackBufferHeight = UINT(height);
@@ -79,18 +83,19 @@ D3DPRESENT_PARAMETERS makePresentParams(HWND hwnd, int width, int height) {
 	pp.Windowed = TRUE;
 	pp.EnableAutoDepthStencil = TRUE;
 	pp.AutoDepthStencilFormat = D3DFMT_D24S8;
-	pp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
+	pp.PresentationInterval = presentInterval(vsync);
 	return pp;
 }
 
-bool createHalDevice(IDirect3D9 * d3d, HWND hwnd, int width, int height, IDirect3DDevice9 ** outDevice) {
+bool createHalDevice(IDirect3D9 * d3d, HWND hwnd, int width, int height, int vsync,
+                     IDirect3DDevice9 ** outDevice) {
 	
-	D3DPRESENT_PARAMETERS pp = makePresentParams(hwnd, width, height);
+	D3DPRESENT_PARAMETERS pp = makePresentParams(hwnd, width, height, vsync);
 	HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
 	                               D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
 	                               &pp, outDevice);
 	if(FAILED(hr)) {
-		pp = makePresentParams(hwnd, width, height);
+		pp = makePresentParams(hwnd, width, height, vsync);
 		hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
 		                       D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
 		                       &pp, outDevice);
@@ -106,18 +111,19 @@ bool createHalDevice(IDirect3D9 * d3d, HWND hwnd, int width, int height, IDirect
 }
 
 #if ARX_HAVE_RTX_REMIX
-bool createHalDeviceEx(IDirect3D9Ex * d3d, HWND hwnd, int width, int height, IDirect3DDevice9Ex ** outDevice) {
+bool createHalDeviceEx(IDirect3D9Ex * d3d, HWND hwnd, int width, int height, int vsync,
+                       IDirect3DDevice9Ex ** outDevice) {
 	
 	if(!d3d || !outDevice) {
 		return false;
 	}
 	*outDevice = nullptr;
-	D3DPRESENT_PARAMETERS pp = makePresentParams(hwnd, width, height);
+	D3DPRESENT_PARAMETERS pp = makePresentParams(hwnd, width, height, vsync);
 	HRESULT hr = d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
 	                                 D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
 	                                 &pp, nullptr, outDevice);
 	if(FAILED(hr)) {
-		pp = makePresentParams(hwnd, width, height);
+		pp = makePresentParams(hwnd, width, height, vsync);
 		hr = d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
 		                         D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
 		                         &pp, nullptr, outDevice);
@@ -203,12 +209,74 @@ void projectToScreen(float x, float y, float z, float w, float & ox, float & oy,
 // Match Camera.cpp nearDist. clip.w == view.z with the D3D-style projection.
 const float kNearW = 1.f;
 
+template <int NUv>
 struct HVert {
 	float x, y, z, w;
 	D3DCOLOR color;
 	D3DCOLOR specular;
-	float u, v;
+	float u[NUv];
+	float v[NUv];
 };
+
+template <typename Src>
+struct ClipTraits;
+
+template <>
+struct ClipTraits<SMY_VERTEX> {
+	using H = HVert<1>;
+	using Out = TLVertex;
+};
+
+template <>
+struct ClipTraits<SMY_VERTEX3> {
+	using H = HVert<3>;
+	using Out = TLVertex3;
+};
+
+void assignUv(HVert<1> & h, const SMY_VERTEX & v) {
+	h.u[0] = v.uv.x;
+	h.v[0] = v.uv.y;
+}
+
+void assignUv(HVert<3> & h, const SMY_VERTEX3 & v) {
+	for(int i = 0; i < 3; ++i) {
+		h.u[i] = v.uv[i].x;
+		h.v[i] = v.uv[i].y;
+	}
+}
+
+void assignUv(HVert<1> & h, const TexturedVertex & v) {
+	h.u[0] = v.uv.x;
+	h.v[0] = v.uv.y;
+}
+
+void writeUv(const HVert<1> & h, TLVertex & o) {
+	o.u = h.u[0];
+	o.v = h.v[0];
+}
+
+void writeUv(const HVert<3> & h, TLVertex3 & o) {
+	o.u0 = h.u[0];
+	o.v0 = h.v[0];
+	o.u1 = h.u[1];
+	o.v1 = h.v[1];
+	o.u2 = h.u[2];
+	o.v2 = h.v[2];
+}
+
+void writeUv(const SMY_VERTEX & v, TLVertex & o) {
+	o.u = v.uv.x;
+	o.v = v.uv.y;
+}
+
+void writeUv(const SMY_VERTEX3 & v, TLVertex3 & o) {
+	o.u0 = v.uv[0].x;
+	o.v0 = v.uv[0].y;
+	o.u1 = v.uv[1].x;
+	o.v1 = v.uv[1].y;
+	o.u2 = v.uv[2].x;
+	o.v2 = v.uv[2].y;
+}
 
 template <typename Vertex>
 bool isFiniteTL(const Vertex & v) {
@@ -224,16 +292,19 @@ D3DCOLOR lerpColor(D3DCOLOR a, D3DCOLOR b, float t) {
 	return D3DCOLOR_ARGB(channel(a, b, 24), channel(a, b, 16), channel(a, b, 8), channel(a, b, 0));
 }
 
-HVert lerpH(const HVert & a, const HVert & b, float t) {
-	HVert o;
+template <int NUv>
+HVert<NUv> lerpH(const HVert<NUv> & a, const HVert<NUv> & b, float t) {
+	HVert<NUv> o;
 	o.x = a.x + (b.x - a.x) * t;
 	o.y = a.y + (b.y - a.y) * t;
 	o.z = a.z + (b.z - a.z) * t;
 	o.w = a.w + (b.w - a.w) * t;
 	o.color = lerpColor(a.color, b.color, t);
 	o.specular = lerpFogSpecular(a.specular, b.specular, t);
-	o.u = a.u + (b.u - a.u) * t;
-	o.v = a.v + (b.v - a.v) * t;
+	for(int i = 0; i < NUv; ++i) {
+		o.u[i] = a.u[i] + (b.u[i] - a.u[i]) * t;
+		o.v[i] = a.v[i] + (b.v[i] - a.v[i]) * t;
+	}
 	return o;
 }
 
@@ -275,8 +346,9 @@ void clipAgainstPlane(const Vert * in, int nIn, Vert * out, int & nOut, DistFn d
 	}
 }
 
-template <typename Vert, typename LerpFn>
-int clipHomogeneousFrustum(const Vert & a, const Vert & b, const Vert & c, Vert * out, LerpFn lerpFn) {
+template <typename Vert, typename LerpFn, typename DistL, typename DistR, typename DistB, typename DistT>
+int clipFrustum(const Vert & a, const Vert & b, const Vert & c, Vert * out, LerpFn lerpFn,
+                DistL distL, DistR distR, DistB distB, DistT distT) {
 	Vert buf0[kMaxClipVerts];
 	Vert buf1[kMaxClipVerts];
 	buf0[0] = a;
@@ -297,16 +369,7 @@ int clipHomogeneousFrustum(const Vert & a, const Vert & b, const Vert & c, Vert 
 	if(!pass([](const Vert & v) { return v.w - kNearW; })) {
 		return 0;
 	}
-	if(!pass([](const Vert & v) { return v.w + v.x; })) {
-		return 0;
-	}
-	if(!pass([](const Vert & v) { return v.w - v.x; })) {
-		return 0;
-	}
-	if(!pass([](const Vert & v) { return v.w + v.y; })) {
-		return 0;
-	}
-	if(!pass([](const Vert & v) { return v.w - v.y; })) {
+	if(!pass(distL) || !pass(distR) || !pass(distB) || !pass(distT)) {
 		return 0;
 	}
 	if(!pass([](const Vert & v) { return v.z; })) {
@@ -322,50 +385,22 @@ int clipHomogeneousFrustum(const Vert & a, const Vert & b, const Vert & c, Vert 
 }
 
 template <typename Vert, typename LerpFn>
+int clipHomogeneousFrustum(const Vert & a, const Vert & b, const Vert & c, Vert * out, LerpFn lerpFn) {
+	return clipFrustum(a, b, c, out, lerpFn,
+	                   [](const Vert & v) { return v.w + v.x; },
+	                   [](const Vert & v) { return v.w - v.x; },
+	                   [](const Vert & v) { return v.w + v.y; },
+	                   [](const Vert & v) { return v.w - v.y; });
+}
+
+template <typename Vert, typename LerpFn>
 int clipScreenFrustum(const Vert & a, const Vert & b, const Vert & c, Vert * out,
                       float xMin, float xMax, float yMin, float yMax, LerpFn lerpFn) {
-	Vert buf0[kMaxClipVerts];
-	Vert buf1[kMaxClipVerts];
-	buf0[0] = a;
-	buf0[1] = b;
-	buf0[2] = c;
-	int n = 3;
-	Vert * src = buf0;
-	Vert * dst = buf1;
-	auto pass = [&](auto dist) -> bool {
-		int nOut = 0;
-		clipAgainstPlane(src, n, dst, nOut, dist, lerpFn);
-		n = nOut;
-		Vert * tmp = src;
-		src = dst;
-		dst = tmp;
-		return n >= 3;
-	};
-	if(!pass([](const Vert & v) { return v.w - kNearW; })) {
-		return 0;
-	}
-	if(!pass([&](const Vert & v) { return v.x - xMin * v.w; })) {
-		return 0;
-	}
-	if(!pass([&](const Vert & v) { return xMax * v.w - v.x; })) {
-		return 0;
-	}
-	if(!pass([&](const Vert & v) { return v.y - yMin * v.w; })) {
-		return 0;
-	}
-	if(!pass([&](const Vert & v) { return yMax * v.w - v.y; })) {
-		return 0;
-	}
-	if(!pass([](const Vert & v) { return v.z; })) {
-		return 0;
-	}
-	if(!pass([](const Vert & v) { return v.w - v.z; })) {
-		return 0;
-	}
-	for(int i = 0; i < n; ++i) {
-		out[i] = src[i];
-	}
-	return n;
+	return clipFrustum(a, b, c, out, lerpFn,
+	                   [&](const Vert & v) { return v.x - xMin * v.w; },
+	                   [&](const Vert & v) { return xMax * v.w - v.x; },
+	                   [&](const Vert & v) { return v.y - yMin * v.w; },
+	                   [&](const Vert & v) { return yMax * v.w - v.y; });
 }
 
 bool finiteHomogeneous(float x, float y, float z, float w) {
@@ -506,6 +541,36 @@ TLFrameStats g_tlFrameStats;
 
 WorldDrawStats g_worldStats;
 
+bool g_collectStats = true;
+
+void logDrawSkip(const char * entry, const char * reason) {
+	static unsigned seen = 0;
+	unsigned bit = 0;
+	if(std::strcmp(reason, "null or empty") == 0) {
+		bit = 1u;
+	} else if(std::strcmp(reason, "no primitives") == 0) {
+		bit = 2u;
+	} else if(std::strcmp(reason, "BeginScene failed") == 0) {
+		bit = 4u;
+	} else {
+		bit = 8u;
+	}
+	if(std::strcmp(entry, "drawIndexed") == 0) {
+		bit <<= 4;
+	} else if(std::strcmp(entry, "drawTextured") == 0) {
+		bit <<= 8;
+	} else if(std::strcmp(entry, "drawWorldVertices") == 0) {
+		bit <<= 12;
+	} else if(std::strcmp(entry, "drawWorldIndexed") == 0) {
+		bit <<= 16;
+	}
+	if(seen & bit) {
+		return;
+	}
+	seen |= bit;
+	LogWarning << "D3D9 " << entry << " skipped (" << reason << ")";
+}
+
 void projectClipToTL(const Vec4f & clip, const Rect & vp, float & x, float & y, float & z, float & rhw) {
 	float w = clip.w;
 	if(w == 0.f) {
@@ -530,15 +595,16 @@ void projectClipToTL(const Vec4f & clip, const Rect & vp, float & x, float & y, 
 	rhw = (w > 0.f) ? invW : 1.f / std::abs(w);
 }
 
-void projectWorldH(const HVert & h, const Rect & vp, TLVertex & o) {
+template <typename Out, int NUv>
+void projectWorldH(const HVert<NUv> & h, const Rect & vp, Out & o) {
 	projectClipToTL(Vec4f(h.x, h.y, h.z, h.w), vp, o.x, o.y, o.z, o.rhw);
 	o.color = h.color;
 	o.specular = h.specular;
-	o.u = h.u;
-	o.v = h.v;
+	writeUv(h, o);
 }
 
-void projectTLH(const HVert & h, const Rect & vp, bool addViewportOrigin, bool affineRhw, TLVertex & o) {
+template <typename Out, int NUv>
+void projectTLH(const HVert<NUv> & h, const Rect & vp, bool addViewportOrigin, bool affineRhw, Out & o) {
 	projectToScreen(h.x, h.y, h.z, h.w, o.x, o.y, o.z, o.rhw);
 	if(addViewportOrigin) {
 		o.x += float(vp.left);
@@ -554,16 +620,16 @@ void projectTLH(const HVert & h, const Rect & vp, bool addViewportOrigin, bool a
 	}
 	o.color = h.color;
 	o.specular = h.specular;
-	o.u = h.u;
-	o.v = h.v;
+	writeUv(h, o);
 }
 
-void emitProjectedFan(const HVert * poly, int n, const Rect & vp, bool worldSpace, bool addViewportOrigin,
-                      bool affineRhw, std::vector<TLVertex> & out) {
+template <typename Out, int NUv>
+void emitProjectedFan(const HVert<NUv> * poly, int n, const Rect & vp, bool worldSpace,
+                      bool addViewportOrigin, bool affineRhw, std::vector<Out> & out) {
 	if(n < 3) {
 		return;
 	}
-	TLVertex projected[kMaxClipVerts];
+	Out projected[kMaxClipVerts];
 	const int count = (std::min)(n, kMaxClipVerts);
 	for(int i = 0; i < count; ++i) {
 		if(worldSpace) {
@@ -600,17 +666,18 @@ bool submitWorldVerts(IDirect3DDevice9 * device, Renderer::Primitive primitive,
 // fades). Everything else is a projected 3D position and must be frustum-clipped:
 // near-only clip leaves ndc x/y unbounded, and D3D's ±1e8 guard band rasterizes
 // those as a smear over the whole screen.
-void emitClippedTriangle(const HVert & a, const HVert & b, const HVert & c, const Rect & vp,
-                         bool worldSpace, bool hudSpace, std::vector<TLVertex> & out) {
+template <typename Out, int NUv>
+void emitClippedTriangle(const HVert<NUv> & a, const HVert<NUv> & b, const HVert<NUv> & c, const Rect & vp,
+                         bool worldSpace, bool hudSpace, std::vector<Out> & out) {
 	if(hudSpace) {
-		HVert tri[3] = { a, b, c };
+		HVert<NUv> tri[3] = { a, b, c };
 		emitProjectedFan(tri, 3, vp, false, false, true, out);
 		return;
 	}
-	if(worldSpace) {
+	if(worldSpace && g_collectStats) {
 		g_worldStats.triTotal++;
 	}
-	HVert clipped[kMaxClipVerts];
+	HVert<NUv> clipped[kMaxClipVerts];
 	int n = 0;
 	bool clippedAny = false;
 	if(worldSpace) {
@@ -623,7 +690,7 @@ void emitClippedTriangle(const HVert & a, const HVert & b, const HVert & c, cons
 			n = 3;
 		} else {
 			clippedAny = true;
-			n = clipHomogeneousFrustum(a, b, c, clipped, lerpH);
+			n = clipHomogeneousFrustum(a, b, c, clipped, lerpH<NUv>);
 		}
 	} else {
 		float xMin, xMax, yMin, yMax;
@@ -637,53 +704,53 @@ void emitClippedTriangle(const HVert & a, const HVert & b, const HVert & c, cons
 			n = 3;
 		} else {
 			clippedAny = true;
-			n = clipScreenFrustum(a, b, c, clipped, xMin, xMax, yMin, yMax, lerpH);
+			n = clipScreenFrustum(a, b, c, clipped, xMin, xMax, yMin, yMax, lerpH<NUv>);
 		}
 	}
 	if(n < 3) {
-		if(worldSpace) {
+		if(worldSpace && g_collectStats) {
 			g_worldStats.triDropped++;
 		}
 		return;
 	}
-	if(worldSpace && clippedAny) {
+	if(worldSpace && clippedAny && g_collectStats) {
 		g_worldStats.triClipped++;
 	}
 	emitProjectedFan(clipped, n, vp, worldSpace, !worldSpace, false, out);
 }
 
-HVert fromWorld(const SMY_VERTEX & v, const glm::mat4x4 & view, const glm::mat4x4 & proj,
-                const VertexFog & fog) {
+template <typename Src>
+typename ClipTraits<Src>::H fromWorld(const Src & v, const glm::mat4x4 & view, const glm::mat4x4 & proj,
+                                     const VertexFog & fog) {
 	const Vec4f clip = proj * view * Vec4f(v.p, 1.f);
-	HVert h;
+	typename ClipTraits<Src>::H h;
 	h.x = clip.x;
 	h.y = clip.y;
 	h.z = clip.z;
 	h.w = clip.w;
 	h.color = toD3DColor(v.color);
 	h.specular = fogFactorSpecular(clip.w, fog);
-	h.u = v.uv.x;
-	h.v = v.uv.y;
+	assignUv(h, v);
 	return h;
 }
 
-HVert fromTL(const TexturedVertex & v, const VertexFog & fog) {
-	HVert h;
+HVert<1> fromTL(const TexturedVertex & v, const VertexFog & fog) {
+	HVert<1> h;
 	h.x = v.p.x;
 	h.y = v.p.y;
 	h.z = v.p.z;
 	h.w = v.w;
 	h.color = toD3DColor(v.color);
 	h.specular = fogFactorSpecular(std::abs(v.w), fog);
-	h.u = v.uv.x;
-	h.v = v.uv.y;
+	assignUv(h, v);
 	return h;
 }
 
-void clipWorldTriangles(Renderer::Primitive primitive, const SMY_VERTEX * verts, size_t nverts,
+template <typename Src>
+void clipWorldTriangles(Renderer::Primitive primitive, const Src * verts, size_t nverts,
                         const unsigned short * indices, size_t nindices, const glm::mat4x4 & view,
                         const glm::mat4x4 & proj, const Rect & vp, const VertexFog & fog,
-                        std::vector<TLVertex> & out) {
+                        std::vector<typename ClipTraits<Src>::Out> & out) {
 	out.clear();
 	if(!verts || nverts == 0) {
 		return;
@@ -729,19 +796,19 @@ void clipTLTriangles(Renderer::Primitive primitive, const TexturedVertex * verts
 	});
 }
 
-void convertWorld(const SMY_VERTEX * src, size_t count, const glm::mat4x4 & view,
+template <typename Src, typename Out>
+void convertWorld(const Src * src, size_t count, const glm::mat4x4 & view,
                   const glm::mat4x4 & proj, const Rect & vp, const VertexFog & fog,
-                  std::vector<TLVertex> & dst) {
+                  std::vector<Out> & dst) {
 	dst.resize(count);
 	for(size_t i = 0; i < count; ++i) {
-		const SMY_VERTEX & v = src[i];
+		const Src & v = src[i];
 		const Vec4f clip = proj * view * Vec4f(v.p, 1.f);
-		TLVertex & o = dst[i];
+		Out & o = dst[i];
 		projectClipToTL(clip, vp, o.x, o.y, o.z, o.rhw);
 		o.color = toD3DColor(v.color);
 		o.specular = fogFactorSpecular(clip.w, fog);
-		o.u = v.uv.x;
-		o.v = v.uv.y;
+		writeUv(v, o);
 		if(!g_worldStats.haveSample) {
 			g_worldStats.haveSample = true;
 			g_worldStats.clipW = clip.w;
@@ -755,150 +822,11 @@ void convertWorld(const SMY_VERTEX * src, size_t count, const glm::mat4x4 & view
 	}
 }
 
-void convertWorld3(const SMY_VERTEX3 * src, size_t count, const glm::mat4x4 & view,
-                   const glm::mat4x4 & proj, const Rect & vp, const VertexFog & fog,
-                   std::vector<TLVertex3> & dst) {
-	dst.resize(count);
-	for(size_t i = 0; i < count; ++i) {
-		const SMY_VERTEX3 & v = src[i];
-		const Vec4f clip = proj * view * Vec4f(v.p, 1.f);
-		TLVertex3 & o = dst[i];
-		projectClipToTL(clip, vp, o.x, o.y, o.z, o.rhw);
-		o.color = toD3DColor(v.color);
-		o.specular = fogFactorSpecular(clip.w, fog);
-		o.u0 = v.uv[0].x;
-		o.v0 = v.uv[0].y;
-		o.u1 = v.uv[1].x;
-		o.v1 = v.uv[1].y;
-		o.u2 = v.uv[2].x;
-		o.v2 = v.uv[2].y;
-	}
-}
-
-// Same frustum clip as the SMY_VERTEX path, for the multi-texture tile batches.
-struct HVert3 {
-	float x, y, z, w;
-	D3DCOLOR color;
-	D3DCOLOR specular;
-	float u[3], v[3];
-};
-
-HVert3 lerpH3(const HVert3 & a, const HVert3 & b, float t) {
-	HVert3 o;
-	o.x = a.x + (b.x - a.x) * t;
-	o.y = a.y + (b.y - a.y) * t;
-	o.z = a.z + (b.z - a.z) * t;
-	o.w = a.w + (b.w - a.w) * t;
-	o.color = lerpColor(a.color, b.color, t);
-	o.specular = lerpFogSpecular(a.specular, b.specular, t);
-	for(int i = 0; i < 3; ++i) {
-		o.u[i] = a.u[i] + (b.u[i] - a.u[i]) * t;
-		o.v[i] = a.v[i] + (b.v[i] - a.v[i]) * t;
-	}
-	return o;
-}
-
-void projectWorldH3(const HVert3 & h, const Rect & vp, TLVertex3 & o) {
-	projectClipToTL(Vec4f(h.x, h.y, h.z, h.w), vp, o.x, o.y, o.z, o.rhw);
-	o.color = h.color;
-	o.specular = h.specular;
-	o.u0 = h.u[0];
-	o.v0 = h.v[0];
-	o.u1 = h.u[1];
-	o.v1 = h.v[1];
-	o.u2 = h.u[2];
-	o.v2 = h.v[2];
-}
-
-void emitProjectedFan3(const HVert3 * poly, int n, const Rect & vp, std::vector<TLVertex3> & out) {
-	if(n < 3) {
-		return;
-	}
-	TLVertex3 projected[kMaxClipVerts];
-	const int count = (std::min)(n, kMaxClipVerts);
-	for(int i = 0; i < count; ++i) {
-		projectWorldH3(poly[i], vp, projected[i]);
-		if(!isFiniteTL(projected[i]) || projected[i].rhw <= 0.f) {
-			return;
-		}
-	}
-	for(int i = 1; i + 1 < count; ++i) {
-		out.push_back(projected[0]);
-		out.push_back(projected[i]);
-		out.push_back(projected[i + 1]);
-	}
-}
-
-void emitClippedTriangle3(const HVert3 & a, const HVert3 & b, const HVert3 & c, const Rect & vp,
-                          std::vector<TLVertex3> & out) {
-	g_worldStats.triTotal++;
-	HVert3 clipped[kMaxClipVerts];
-	int n = 0;
-	bool clippedAny = false;
-	if(insideWorldFrustum(a.x, a.y, a.z, a.w)
-	   && insideWorldFrustum(b.x, b.y, b.z, b.w)
-	   && insideWorldFrustum(c.x, c.y, c.z, c.w)) {
-		clipped[0] = a;
-		clipped[1] = b;
-		clipped[2] = c;
-		n = 3;
-	} else {
-		clippedAny = true;
-		n = clipHomogeneousFrustum(a, b, c, clipped, lerpH3);
-	}
-	if(n < 3) {
-		g_worldStats.triDropped++;
-		return;
-	}
-	if(clippedAny) {
-		g_worldStats.triClipped++;
-	}
-	emitProjectedFan3(clipped, n, vp, out);
-}
-
-HVert3 fromWorld3(const SMY_VERTEX3 & src, const glm::mat4x4 & view, const glm::mat4x4 & proj,
-                  const VertexFog & fog) {
-	const Vec4f clip = proj * view * Vec4f(src.p, 1.f);
-	HVert3 h;
-	h.x = clip.x;
-	h.y = clip.y;
-	h.z = clip.z;
-	h.w = clip.w;
-	h.color = toD3DColor(src.color);
-	h.specular = fogFactorSpecular(clip.w, fog);
-	for(int i = 0; i < 3; ++i) {
-		h.u[i] = src.uv[i].x;
-		h.v[i] = src.uv[i].y;
-	}
-	return h;
-}
-
-void clipWorldTriangles3(Renderer::Primitive primitive, const SMY_VERTEX3 * verts, size_t nverts,
-                         const unsigned short * indices, size_t nindices, const glm::mat4x4 & view,
-                         const glm::mat4x4 & proj, const Rect & vp, const VertexFog & fog,
-                         std::vector<TLVertex3> & out) {
-	out.clear();
-	if(!verts || nverts == 0) {
-		return;
-	}
-	const size_t n = indices ? nindices : nverts;
-	out.reserve(n);
-	forEachTriangleIndices(primitive, n, [&](size_t i0, size_t i1, size_t i2) {
-		size_t a = 0, b = 0, c = 0;
-		if(!resolveIndex(indices, nindices, nverts, i0, a)
-		   || !resolveIndex(indices, nindices, nverts, i1, b)
-		   || !resolveIndex(indices, nindices, nverts, i2, c)) {
-			return;
-		}
-		emitClippedTriangle3(fromWorld3(verts[a], view, proj, fog),
-		                     fromWorld3(verts[b], view, proj, fog),
-		                     fromWorld3(verts[c], view, proj, fog),
-		                     vp, out);
-	});
-}
-
 template <typename Vertex>
 void accumulateTLStats(const Vertex * verts, size_t count, const Rect & vp) {
+	if(!g_collectStats || !verts || count == 0) {
+		return;
+	}
 	const float left = float(vp.left);
 	const float top = float(vp.top);
 	const float right = float(vp.right);
@@ -926,7 +854,7 @@ void accumulateTLStats(const Vertex * verts, size_t count, const Rect & vp) {
 }
 
 void accumulateTLFrameStats(const TLVertex * verts, size_t count) {
-	if(!verts || count == 0) {
+	if(!g_collectStats || !verts || count == 0) {
 		return;
 	}
 	g_tlFrameStats.draws++;
@@ -1329,10 +1257,18 @@ private:
 
 D3D9Texture::D3D9Texture(D3D9Renderer * renderer)
 	: m_renderer(renderer)
-{ }
+{
+	if(m_renderer) {
+		m_renderer->registerTexture(this);
+	}
+}
 
 D3D9Texture::~D3D9Texture() {
 	destroy();
+	if(m_renderer) {
+		m_renderer->unregisterTexture(this);
+		m_renderer = nullptr;
+	}
 }
 
 bool D3D9Texture::createGpuTexture() {
@@ -1356,7 +1292,9 @@ bool D3D9Texture::createGpuTexture() {
 		return false;
 	}
 	
-	HRESULT hr = m_renderer->device()->CreateTexture(UINT(size.x), UINT(size.y), 1, 0,
+	const bool wantMips = hasMipmaps() && m_storedSize == m_size;
+	const UINT levels = wantMips ? 0u : 1u;
+	HRESULT hr = m_renderer->device()->CreateTexture(UINT(size.x), UINT(size.y), levels, 0,
 	                                                 D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &m_texture, nullptr);
 	if(FAILED(hr) || !m_texture) {
 		LogError << "D3D9: CreateTexture " << size.x << "x" << size.y << " failed (hr=" << long(hr) << ")";
@@ -1365,6 +1303,7 @@ bool D3D9Texture::createGpuTexture() {
 	}
 	
 	m_gpuSize = size;
+	m_hasMips = wantMips && m_texture->GetLevelCount() > 1;
 	return true;
 }
 
@@ -1405,14 +1344,29 @@ void D3D9Texture::upload() {
 		src = &padded;
 	}
 	
-	D3DLOCKED_RECT locked {};
-	HRESULT hr = m_texture->LockRect(0, &locked, nullptr, 0);
-	if(FAILED(hr)) {
-		LogError << "D3D9: LockRect failed (hr=" << long(hr) << ")";
-		return;
+	Image levelImage;
+	const Image * levelSrc = src;
+	const DWORD levelCount = m_texture->GetLevelCount();
+	for(DWORD level = 0; level < levelCount; ++level) {
+		D3DSURFACE_DESC desc {};
+		if(FAILED(m_texture->GetLevelDesc(level, &desc))) {
+			break;
+		}
+		if(level > 0) {
+			Image next;
+			next.resizeFrom(*levelSrc, desc.Width, desc.Height);
+			levelImage = std::move(next);
+			levelSrc = &levelImage;
+		}
+		D3DLOCKED_RECT locked {};
+		HRESULT hr = m_texture->LockRect(level, &locked, nullptr, 0);
+		if(FAILED(hr)) {
+			LogError << "D3D9: LockRect failed (hr=" << long(hr) << ")";
+			return;
+		}
+		uploadImageToLockedRect(*levelSrc, locked);
+		m_texture->UnlockRect(level);
 	}
-	uploadImageToLockedRect(*src, locked);
-	m_texture->UnlockRect(0);
 }
 
 void D3D9Texture::destroy() {
@@ -1430,10 +1384,12 @@ void D3D9Texture::destroy() {
 		m_texture = nullptr;
 	}
 	m_gpuSize = Vec2i(0);
+	m_hasMips = false;
 }
 
-D3D9TextureStage::D3D9TextureStage(unsigned stage)
+D3D9TextureStage::D3D9TextureStage(D3D9Renderer * renderer, unsigned stage)
 	: TextureStage(stage)
+	, m_renderer(renderer)
 {
 	if(stage == 0) {
 		m_colorOp = OpModulate;
@@ -1444,7 +1400,11 @@ D3D9TextureStage::D3D9TextureStage(unsigned stage)
 	}
 }
 
-void D3D9TextureStage::apply(IDirect3DDevice9 * device) const {
+void D3D9TextureStage::invalidateApplied() {
+	m_applied = Applied();
+}
+
+void D3D9TextureStage::apply(IDirect3DDevice9 * device) {
 	
 	if(!device) {
 		return;
@@ -1452,6 +1412,24 @@ void D3D9TextureStage::apply(IDirect3DDevice9 * device) const {
 	
 	auto * tex = static_cast<D3D9Texture *>(m_texture);
 	IDirect3DTexture9 * handle = (tex) ? tex->handle() : nullptr;
+	TextureStage::WrapMode wrap = getWrapMode();
+	if(tex && tex->isNPOT()) {
+		wrap = TextureStage::WrapClamp;
+	}
+	const float anisotropy = m_renderer ? m_renderer->anisotropy() : 1.f;
+	
+	if(m_applied.valid
+	   && m_applied.handle == handle
+	   && m_applied.colorOp == m_colorOp
+	   && m_applied.alphaOp == m_alphaOp
+	   && m_applied.wrap == wrap
+	   && m_applied.minFilter == getMinFilter()
+	   && m_applied.magFilter == getMagFilter()
+	   && m_applied.lodBias == m_lodBias
+	   && m_applied.anisotropy == anisotropy) {
+		return;
+	}
+	
 	device->SetTexture(mStage, handle);
 	
 	if(!handle) {
@@ -1464,6 +1442,8 @@ void D3D9TextureStage::apply(IDirect3DDevice9 * device) const {
 			device->SetTextureStageState(mStage, D3DTSS_COLOROP, D3DTOP_DISABLE);
 			device->SetTextureStageState(mStage, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 		}
+		m_applied = Applied();
+		m_applied.valid = true;
 		return;
 	}
 	
@@ -1475,10 +1455,6 @@ void D3D9TextureStage::apply(IDirect3DDevice9 * device) const {
 	device->SetTextureStageState(mStage, D3DTSS_ALPHAOP, toD3DTextureOp(m_alphaOp, mStage));
 	device->SetTextureStageState(mStage, D3DTSS_TEXCOORDINDEX, mStage);
 	
-	TextureStage::WrapMode wrap = getWrapMode();
-	if(tex->isNPOT()) {
-		wrap = TextureStage::WrapClamp;
-	}
 	D3DTEXTUREADDRESS address = D3DTADDRESS_WRAP;
 	if(wrap == TextureStage::WrapMirror) {
 		address = D3DTADDRESS_MIRROR;
@@ -1488,24 +1464,47 @@ void D3D9TextureStage::apply(IDirect3DDevice9 * device) const {
 	device->SetSamplerState(mStage, D3DSAMP_ADDRESSU, address);
 	device->SetSamplerState(mStage, D3DSAMP_ADDRESSV, address);
 	
-	const D3DTEXTUREFILTERTYPE minFilter = (getMinFilter() == FilterLinear) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+	const bool useAniso = anisotropy > 1.f && getMinFilter() == FilterLinear;
+	const D3DTEXTUREFILTERTYPE minFilter = useAniso ? D3DTEXF_ANISOTROPIC
+	                                 : ((getMinFilter() == FilterLinear) ? D3DTEXF_LINEAR : D3DTEXF_POINT);
 	const D3DTEXTUREFILTERTYPE magFilter = (getMagFilter() == FilterLinear) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
 	device->SetSamplerState(mStage, D3DSAMP_MINFILTER, minFilter);
 	device->SetSamplerState(mStage, D3DSAMP_MAGFILTER, magFilter);
-	device->SetSamplerState(mStage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	if(useAniso) {
+		device->SetSamplerState(mStage, D3DSAMP_MAXANISOTROPY, DWORD((std::max)(1.f, anisotropy)));
+	}
+	device->SetSamplerState(mStage, D3DSAMP_MIPFILTER, tex->hasGpuMips() ? D3DTEXF_LINEAR : D3DTEXF_NONE);
 	DWORD lodBits = 0;
 	float bias = m_lodBias;
 	std::memcpy(&lodBits, &bias, sizeof(lodBits));
 	device->SetSamplerState(mStage, D3DSAMP_MIPMAPLODBIAS, lodBits);
+	
+	m_applied.handle = handle;
+	m_applied.colorOp = m_colorOp;
+	m_applied.alphaOp = m_alphaOp;
+	m_applied.wrap = wrap;
+	m_applied.minFilter = getMinFilter();
+	m_applied.magFilter = getMagFilter();
+	m_applied.lodBias = m_lodBias;
+	m_applied.anisotropy = anisotropy;
+	m_applied.valid = true;
 }
 
 D3D9Renderer::D3D9Renderer() {
 	for(unsigned i = 0; i < 4; ++i) {
-		m_TextureStages.push_back(std::make_unique<D3D9TextureStage>(i));
+		m_TextureStages.push_back(std::make_unique<D3D9TextureStage>(this, i));
 	}
 }
 
 D3D9Renderer::~D3D9Renderer() {
+	if(m_initialized) {
+		onRendererShutdown();
+		m_initialized = false;
+	}
+	for(D3D9Texture * texture : m_liveTextures) {
+		texture->detachRenderer();
+	}
+	m_liveTextures.clear();
 	releaseDevice();
 }
 
@@ -1631,7 +1630,10 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 		m_requirePow2Textures = pow2Required && !conditionalNPOT;
 		// If the device does not clip pre-transformed vertices we have to bound the
 		// projected coordinates ourselves instead of relying on the guard band.
-		m_clipsTLVertices = (caps.PrimitiveMiscCaps & D3DPMISCCAPS_CLIPTLVERTS) != 0;
+		const bool clipsTLVertices = (caps.PrimitiveMiscCaps & D3DPMISCCAPS_CLIPTLVERTS) != 0;
+		if(caps.MaxAnisotropy > 0) {
+			m_maxAnisotropyCap = float(caps.MaxAnisotropy);
+		}
 		/*
 		 * How many map lights can reach the path tracer at once. Fixed-function
 		 * D3D9 usually answers 8, which is why a room with 500 lights is lit by
@@ -1644,7 +1646,8 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 		}
 		LogInfo << "D3D9 caps: maxActiveLights=" << caps.MaxActiveLights
 		        << " using=" << m_maxLights
-		        << " clipTLVerts=" << (m_clipsTLVertices ? 1 : 0)
+		        << " clipTLVerts=" << (clipsTLVertices ? 1 : 0)
+		        << " maxAniso=" << m_maxAnisotropyCap
 		        << " guardBand=(" << caps.GuardBandLeft << ", " << caps.GuardBandTop
 		        << ", " << caps.GuardBandRight << ", " << caps.GuardBandBottom << ")"
 		        << " maxTexture=" << m_maxTextureSize
@@ -1654,16 +1657,16 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	bool createdDevice = false;
 #if ARX_HAVE_RTX_REMIX
 	if(remixD3dEx) {
-		createdDevice = createHalDeviceEx(remixD3dEx, hwnd, width, height, &remixDeviceEx);
+		createdDevice = createHalDeviceEx(remixD3dEx, hwnd, width, height, m_vsync, &remixDeviceEx);
 		if(createdDevice) {
 			m_device = remixDeviceEx;
 		} else {
 			LogWarning << "D3D9: Remix CreateDeviceEx failed, trying CreateDevice on IDirect3D9Ex";
-			createdDevice = createHalDevice(m_d3d, hwnd, width, height, &m_device);
+			createdDevice = createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device);
 		}
 	}
 #endif
-	if(!createdDevice && !createHalDevice(m_d3d, hwnd, width, height, &m_device)) {
+	if(!createdDevice && !createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device)) {
 #if ARX_HAVE_RTX_REMIX
 		if(usedRemix) {
 			LogError << "D3D9: Remix CreateDevice failed, falling back to system d3d9.dll";
@@ -1677,7 +1680,7 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 				LogError << "D3D9: Direct3DCreate9 failed";
 				return false;
 			}
-			if(!createHalDevice(m_d3d, hwnd, width, height, &m_device)) {
+			if(!createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device)) {
 				releaseDevice();
 				return false;
 			}
@@ -1755,6 +1758,7 @@ void D3D9Renderer::applyDefaultStates() {
 	m_device->SetRenderState(D3DRS_FOGVERTEXMODE, D3DFOG_NONE);
 	m_device->SetRenderState(D3DRS_FOGTABLEMODE, D3DFOG_NONE);
 	m_device->SetRenderState(D3DRS_RANGEFOGENABLE, FALSE);
+	m_device->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
 	m_device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 	m_device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
 	m_device->SetRenderState(D3DRS_ZFUNC, D3DCMP_ALWAYS);
@@ -1765,7 +1769,6 @@ void D3D9Renderer::applyDefaultStates() {
 	m_device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
 	m_device->SetRenderState(D3DRS_COLORVERTEX, TRUE);
 	m_device->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_COLOR1);
-	m_device->SetRenderState(D3DRS_SPECULARENABLE, FALSE);
 	m_device->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
 	m_device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, floatBits(0.f));
 	m_device->SetRenderState(D3DRS_DEPTHBIAS, floatBits(0.f));
@@ -1776,6 +1779,7 @@ void D3D9Renderer::applyDefaultStates() {
 	applyTransforms();
 	applyFog();
 	m_appliedStateValid = false;
+	invalidateTextureStages();
 }
 
 void D3D9Renderer::initialize() {
@@ -1799,7 +1803,86 @@ void D3D9Renderer::beforeResize(bool wasOrIsFullscreen) {
 		for(DWORD i = 0; i < 4; ++i) {
 			m_device->SetTexture(i, nullptr);
 		}
+		invalidateTextureStages();
 	}
+}
+
+bool D3D9Renderer::resetDevice(int width, int height) {
+	if(!m_device || !m_hwnd || width < 1 || height < 1) {
+		return false;
+	}
+	if(m_inScene) {
+		m_device->EndScene();
+		m_inScene = false;
+	}
+	for(DWORD i = 0; i < 4; ++i) {
+		m_device->SetTexture(i, nullptr);
+	}
+	invalidateTextureStages();
+	releaseRemixBuffers();
+	D3DPRESENT_PARAMETERS pp = makePresentParams(static_cast<HWND>(m_hwnd), width, height, m_vsync);
+	HRESULT hr = E_FAIL;
+#if ARX_HAVE_RTX_REMIX
+	IDirect3DDevice9Ex * ex = nullptr;
+	if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
+	                                      reinterpret_cast<void **>(&ex))) && ex) {
+		hr = ex->ResetEx(&pp, nullptr);
+		ex->Release();
+	} else
+#endif
+	{
+		hr = m_device->Reset(&pp);
+	}
+	if(FAILED(hr)) {
+		LogWarning << "D3D9: Reset failed (hr=" << long(hr) << ") size=" << width << "x" << height;
+		m_deviceLost = true;
+		return false;
+	}
+	m_width = width;
+	m_height = height;
+	m_appliedStateValid = false;
+	m_remixDummyThisScene = false;
+	m_deviceLost = false;
+	applyDefaultStates();
+	SetViewport(Rect(0, 0, m_width, m_height));
+#if ARX_HAVE_RTX_REMIX
+	if(remix::isRemixDllHooked() && remix::remixApi().iface().dxvk_RegisterD3D9Device) {
+		IDirect3DDevice9Ex * registered = nullptr;
+		if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
+		                                      reinterpret_cast<void **>(&registered))) && registered) {
+			const remixapi_ErrorCode st = remix::remixApi().iface().dxvk_RegisterD3D9Device(registered);
+			if(st != REMIXAPI_ERROR_CODE_SUCCESS) {
+				LogWarning << "D3D9: dxvk_RegisterD3D9Device after Reset "
+				           << RemixApi::errorString(st);
+			} else {
+				remix::applyPreviewConfig();
+			}
+			registered->Release();
+		}
+	}
+#endif
+	LogInfo << "D3D9: Reset device " << width << "x" << height
+	        << " vsync=" << m_vsync << " hwnd=" << m_hwnd;
+	return true;
+}
+
+bool D3D9Renderer::recoverDeviceIfNeeded() {
+	if(!m_device) {
+		return false;
+	}
+	const HRESULT coop = m_device->TestCooperativeLevel();
+	if(coop == D3D_OK) {
+		m_deviceLost = false;
+		return true;
+	}
+	if(coop == D3DERR_DEVICELOST) {
+		m_deviceLost = true;
+		return false;
+	}
+	if(coop == D3DERR_DEVICENOTRESET) {
+		return resetDevice(m_width, m_height);
+	}
+	return false;
 }
 
 void D3D9Renderer::resetSwapchain() {
@@ -1829,51 +1912,7 @@ void D3D9Renderer::resetSwapchain() {
 	if(width == m_width && height == m_height) {
 		return;
 	}
-	// D3DPOOL_DEFAULT resources have to be gone before a Reset.
-	releaseRemixBuffers();
-	D3DPRESENT_PARAMETERS pp = makePresentParams(static_cast<HWND>(m_hwnd), width, height);
-	HRESULT hr = E_FAIL;
-#if ARX_HAVE_RTX_REMIX
-	IDirect3DDevice9Ex * ex = nullptr;
-	if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
-	                                      reinterpret_cast<void **>(&ex))) && ex) {
-		hr = ex->ResetEx(&pp, nullptr);
-		ex->Release();
-	} else
-#endif
-	{
-		hr = m_device->Reset(&pp);
-	}
-	if(FAILED(hr)) {
-		LogWarning << "D3D9: Reset swapchain failed (hr=" << long(hr)
-		           << ") size=" << width << "x" << height;
-		return;
-	}
-	m_width = width;
-	m_height = height;
-	m_appliedStateValid = false;
-	m_remixDummyThisScene = false;
-	applyDefaultStates();
-	SetViewport(Rect(0, 0, m_width, m_height));
-#if ARX_HAVE_RTX_REMIX
-	if(remix::isRemixDllHooked() && remix::remixApi().iface().dxvk_RegisterD3D9Device) {
-		IDirect3DDevice9Ex * registered = nullptr;
-		if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
-		                                      reinterpret_cast<void **>(&registered))) && registered) {
-			const remixapi_ErrorCode st = remix::remixApi().iface().dxvk_RegisterD3D9Device(registered);
-			if(st != REMIXAPI_ERROR_CODE_SUCCESS) {
-				LogWarning << "D3D9: dxvk_RegisterD3D9Device after Reset "
-				           << RemixApi::errorString(st);
-			} else {
-				// A Reset re-registers the device, so the settings need pushing again.
-				remix::applyPreviewConfig();
-			}
-			registered->Release();
-		}
-	}
-#endif
-	LogInfo << "D3D9: Reset swapchain " << width << "x" << height
-	        << " format=X8R8G8B8 hwnd=" << m_hwnd;
+	(void)resetDevice(width, height);
 }
 
 void D3D9Renderer::afterResize() {
@@ -1932,9 +1971,57 @@ void D3D9Renderer::SetProjectionMatrix(const glm::mat4x4 & matProj) {
 	}
 }
 
-void D3D9Renderer::ReleaseAllTextures() { }
-void D3D9Renderer::RestoreAllTextures() { }
-void D3D9Renderer::reloadColorKeyTextures() { }
+void D3D9Renderer::registerTexture(D3D9Texture * texture) {
+	if(texture) {
+		m_liveTextures.push_back(texture);
+	}
+}
+
+void D3D9Renderer::unregisterTexture(D3D9Texture * texture) {
+	m_liveTextures.erase(std::remove(m_liveTextures.begin(), m_liveTextures.end(), texture),
+	                     m_liveTextures.end());
+}
+
+void D3D9Renderer::invalidateTextureStages() {
+	for(size_t i = 0; i < m_TextureStages.size(); ++i) {
+		static_cast<D3D9TextureStage *>(m_TextureStages[i].get())->invalidateApplied();
+	}
+}
+
+void D3D9Renderer::setMaxAnisotropy(float value) {
+	m_anisotropy = (std::min)((std::max)(value, 1.f), m_maxAnisotropyCap);
+	invalidateTextureStages();
+}
+
+void D3D9Renderer::setPresentVSync(int vsync) {
+	if(m_vsync == vsync) {
+		return;
+	}
+	m_vsync = vsync;
+	if(m_device && m_hwnd) {
+		(void)resetDevice(m_width, m_height);
+	}
+}
+
+void D3D9Renderer::ReleaseAllTextures() {
+	for(D3D9Texture * texture : m_liveTextures) {
+		texture->destroy();
+	}
+}
+
+void D3D9Renderer::RestoreAllTextures() {
+	for(D3D9Texture * texture : m_liveTextures) {
+		texture->restore();
+	}
+}
+
+void D3D9Renderer::reloadColorKeyTextures() {
+	for(D3D9Texture * texture : m_liveTextures) {
+		if(texture->hasColorKey()) {
+			texture->restore();
+		}
+	}
+}
 
 Texture * D3D9Renderer::createTexture() {
 	return new D3D9Texture(this);
@@ -1974,7 +2061,7 @@ void D3D9Renderer::SetScissor(const Rect & rect) {
 }
 
 bool D3D9Renderer::beginSceneIfNeeded() {
-	if(!m_device) {
+	if(!m_device || !recoverDeviceIfNeeded()) {
 		return false;
 	}
 	if(m_inScene) {
@@ -2344,12 +2431,13 @@ void D3D9Renderer::flushDeviceState() {
 	if(!m_appliedStateValid || m_appliedState != m_state) {
 		
 		m_device->SetRenderState(D3DRS_CULLMODE, m_state.getCull() ? D3DCULL_CW : D3DCULL_NONE);
-		// XYZRHW + FOGENABLE with FOGVERTEXMODE/FOGTABLEMODE NONE paints every 3D
-		// pixel as fog colour (black in the cell). Specular-alpha fog is unused
-		// while SPECULARENABLE is off, so the hardware factor is 0. Keep D3D fog
-		// off; the cell is inside fog start (~1920) anyway. OpenGL still fogs
-		// correctly from clip.w after texturing.
-		m_device->SetRenderState(D3DRS_FOGENABLE, FALSE);
+		// Specular alpha carries the per-vertex fog factor. FOGVERTEXMODE /
+		// FOGTABLEMODE NONE tells D3D to consume that factor instead of a table.
+		const bool fog = m_state.getFog();
+		m_device->SetRenderState(D3DRS_FOGENABLE, fog ? TRUE : FALSE);
+		m_device->SetRenderState(D3DRS_SPECULARENABLE, fog ? TRUE : FALSE);
+		m_device->SetRenderState(D3DRS_FOGVERTEXMODE, D3DFOG_NONE);
+		m_device->SetRenderState(D3DRS_FOGTABLEMODE, D3DFOG_NONE);
 		
 		BlendingFactor blendSrc = m_state.getBlendSrc();
 		BlendingFactor blendDst = m_state.getBlendDst();
@@ -2397,15 +2485,18 @@ void D3D9Renderer::flushDeviceState() {
 void D3D9Renderer::drawTextured(Primitive primitive, const TexturedVertex * vertices, size_t count) {
 	
 	if(!m_device || !vertices || count == 0) {
+		logDrawSkip("drawTextured", "null or empty");
 		return;
 	}
 	
 	const UINT prims = primitiveCount(primitive, count);
 	if(prims == 0) {
+		logDrawSkip("drawTextured", "no primitives");
 		return;
 	}
 	
 	if(!beginSceneIfNeeded()) {
+		logDrawSkip("drawTextured", "BeginScene failed");
 		return;
 	}
 	flushDeviceState();
@@ -2484,11 +2575,17 @@ std::unique_ptr<VertexBuffer<SMY_VERTEX3>> D3D9Renderer::createVertexBuffer3(siz
 void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * vertices, size_t count) {
 	
 	if(!m_device || !vertices || count == 0) {
+		logDrawSkip("drawWorldVertices", "null or empty");
 		return;
 	}
 	
 	const UINT prims = primitiveCount(primitive, count);
-	if(prims == 0 || !beginWorldDraw()) {
+	if(prims == 0) {
+		logDrawSkip("drawWorldVertices", "no primitives");
+		return;
+	}
+	if(!beginWorldDraw()) {
+		logDrawSkip("drawWorldVertices", "BeginScene failed");
 		return;
 	}
 	
@@ -2498,7 +2595,7 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * ver
 		for(size_t i = 0; i < count; ++i) {
 			worldVerts[i] = toWorldVertex(vertices[i]);
 		}
-		if(isTrianglePrimitive(primitive)) {
+		if(primitive == Renderer::TriangleList) {
 			computeSmoothNormals(worldVerts.data(), count, nullptr, 0);
 		}
 		logWorldSpaceSubmit(count, false);
@@ -2534,11 +2631,17 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * ver
 void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * vertices, size_t count) {
 	
 	if(!m_device || !vertices || count == 0) {
+		logDrawSkip("drawWorldVertices", "null or empty");
 		return;
 	}
 	
 	const UINT prims = primitiveCount(primitive, count);
-	if(prims == 0 || !beginWorldDraw()) {
+	if(prims == 0) {
+		logDrawSkip("drawWorldVertices", "no primitives");
+		return;
+	}
+	if(!beginWorldDraw()) {
+		logDrawSkip("drawWorldVertices", "BeginScene failed");
 		return;
 	}
 	
@@ -2548,7 +2651,7 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * ve
 		for(size_t i = 0; i < count; ++i) {
 			worldVerts[i] = toWorldVertex3(vertices[i]);
 		}
-		if(isTrianglePrimitive(primitive)) {
+		if(primitive == Renderer::TriangleList) {
 			computeSmoothNormals(worldVerts.data(), count, nullptr, 0);
 		}
 		logWorldSpaceSubmit(count, false);
@@ -2562,8 +2665,8 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * ve
 	thread_local std::vector<TLVertex3> converted;
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd, m_fogColor };
 	if(isTrianglePrimitive(primitive)) {
-		clipWorldTriangles3(primitive, vertices, count, nullptr, 0, m_view, m_proj, m_viewport, fog,
-		                    converted);
+		clipWorldTriangles(primitive, vertices, count, nullptr, 0, m_view, m_proj, m_viewport, fog,
+		                   converted);
 		if(converted.size() < 3) {
 			return;
 		}
@@ -2574,7 +2677,7 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * ve
 		                          converted.data(), sizeof(TLVertex3));
 		return;
 	}
-	convertWorld3(vertices, count, m_view, m_proj, m_viewport, fog, converted);
+	convertWorld(vertices, count, m_view, m_proj, m_viewport, fog, converted);
 	g_worldStats.draws++;
 	accumulateTLStats(converted.data(), converted.size(), m_viewport);
 	m_device->SetFVF(kTL3FVF);
@@ -2585,17 +2688,31 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX * vert
                                     const unsigned short * indices, size_t nindices) {
 	
 	if(!m_device || !vertices || !indices || nvertices == 0 || nindices == 0) {
+		logDrawSkip("drawWorldIndexed", "null or empty");
 		return;
 	}
 	
 	const UINT prims = primitiveCount(primitive, nindices);
-	if(prims == 0 || !beginWorldDraw()) {
+	if(prims == 0) {
+		logDrawSkip("drawWorldIndexed", "no primitives");
+		return;
+	}
+	if(!beginWorldDraw()) {
+		logDrawSkip("drawWorldIndexed", "BeginScene failed");
 		return;
 	}
 	
 	if(remixWantsWorldSpace()) {
 		const UINT vertexBytes = UINT(nvertices * sizeof(WorldVertex));
 		const UINT indexBytes = UINT(nindices * sizeof(unsigned short));
+		thread_local std::vector<WorldVertex> worldVerts;
+		worldVerts.resize(nvertices);
+		for(size_t i = 0; i < nvertices; ++i) {
+			worldVerts[i] = toWorldVertex(vertices[i]);
+		}
+		if(primitive == Renderer::TriangleList) {
+			computeSmoothNormals(worldVerts.data(), nvertices, indices, nindices);
+		}
 		/*
 		 * Through real buffers, not DrawIndexedPrimitiveUP. Remix's geometry
 		 * capture appears to only see draws with bound buffers: with UP draws
@@ -2607,13 +2724,7 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX * vert
 			void * dst = nullptr;
 			bool filled = false;
 			if(SUCCEEDED(m_remixVB->Lock(0, vertexBytes, &dst, D3DLOCK_DISCARD)) && dst) {
-				WorldVertex * out = static_cast<WorldVertex *>(dst);
-				for(size_t i = 0; i < nvertices; ++i) {
-					out[i] = toWorldVertex(vertices[i]);
-				}
-				if(isTrianglePrimitive(primitive)) {
-					computeSmoothNormals(out, nvertices, indices, nindices);
-				}
+				std::memcpy(dst, worldVerts.data(), vertexBytes);
 				m_remixVB->Unlock();
 				filled = true;
 			}
@@ -2630,16 +2741,6 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX * vert
 				                               0, prims);
 				return;
 			}
-		}
-		// Buffers unavailable: fall back to the user-pointer draw so the room
-		// still renders, even if Remix will not trace it.
-		thread_local std::vector<WorldVertex> worldVerts;
-		worldVerts.resize(nvertices);
-		for(size_t i = 0; i < nvertices; ++i) {
-			worldVerts[i] = toWorldVertex(vertices[i]);
-		}
-		if(isTrianglePrimitive(primitive)) {
-			computeSmoothNormals(worldVerts.data(), nvertices, indices, nindices);
 		}
 		logWorldSpaceSubmit(nvertices, true);
 		g_worldStats.draws++;
@@ -2670,11 +2771,17 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX3 * ver
                                     const unsigned short * indices, size_t nindices) {
 	
 	if(!m_device || !vertices || !indices || nvertices == 0 || nindices == 0) {
+		logDrawSkip("drawWorldIndexed", "null or empty");
 		return;
 	}
 	
 	const UINT prims = primitiveCount(primitive, nindices);
-	if(prims == 0 || !beginWorldDraw()) {
+	if(prims == 0) {
+		logDrawSkip("drawWorldIndexed", "no primitives");
+		return;
+	}
+	if(!beginWorldDraw()) {
+		logDrawSkip("drawWorldIndexed", "BeginScene failed");
 		return;
 	}
 	
@@ -2684,7 +2791,7 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX3 * ver
 		for(size_t i = 0; i < nvertices; ++i) {
 			worldVerts[i] = toWorldVertex3(vertices[i]);
 		}
-		if(isTrianglePrimitive(primitive)) {
+		if(primitive == Renderer::TriangleList) {
 			computeSmoothNormals(worldVerts.data(), nvertices, indices, nindices);
 		}
 		logWorldSpaceSubmit(nvertices, true);
@@ -2700,15 +2807,15 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX3 * ver
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd, m_fogColor };
 	
 	if(isTrianglePrimitive(primitive)) {
-		clipWorldTriangles3(primitive, vertices, nvertices, indices, nindices, m_view, m_proj,
-		                    m_viewport, fog, converted);
+		clipWorldTriangles(primitive, vertices, nvertices, indices, nindices, m_view, m_proj,
+		                   m_viewport, fog, converted);
 		g_worldStats.draws++;
 		accumulateTLStats(converted.data(), converted.size(), m_viewport);
 		drawDeindexed(m_device, kTL3FVF, sizeof(TLVertex3), converted.data(), converted.size());
 		return;
 	}
 	
-	convertWorld3(vertices, nvertices, m_view, m_proj, m_viewport, fog, converted);
+	convertWorld(vertices, nvertices, m_view, m_proj, m_viewport, fog, converted);
 	g_worldStats.draws++;
 	accumulateTLStats(converted.data(), converted.size(), m_viewport);
 	m_device->SetFVF(kTL3FVF);
@@ -2721,29 +2828,19 @@ void D3D9Renderer::drawIndexed(Primitive primitive, const TexturedVertex * verti
 	
 	// Every one of these used to bail silently, which is why an entire cinematic could
 	// go missing without a single line in the log.
-	static bool loggedSkip = false;
-	auto logSkip = [&](const char * reason) {
-		if(!loggedSkip) {
-			loggedSkip = true;
-			LogWarning << "D3D9 drawIndexed skipped (" << reason << "): nverts=" << nvertices
-			           << " nidx=" << nindices << " indices=" << (indices ? 1 : 0)
-			           << " verts=" << (vertices ? 1 : 0) << " prim=" << int(primitive);
-		}
-	};
-	
 	if(!m_device || !vertices || !indices || nvertices == 0 || nindices == 0) {
-		logSkip("null or empty");
+		logDrawSkip("drawIndexed", "null or empty");
 		return;
 	}
 	
 	const UINT prims = primitiveCount(primitive, nindices);
 	if(prims == 0) {
-		logSkip("no primitives");
+		logDrawSkip("drawIndexed", "no primitives");
 		return;
 	}
 	
 	if(!beginSceneIfNeeded()) {
-		logSkip("BeginScene failed");
+		logDrawSkip("drawIndexed", "BeginScene failed");
 		return;
 	}
 	flushDeviceState();
@@ -2893,6 +2990,7 @@ void D3D9Renderer::showFrame() {
 		}
 	}
 	g_tlFrameStats = TLFrameStats();
+	g_collectStats = (worldSamples < 24) || (tlSamples < 24) || (cineLikeSamples < 12);
 #if ARX_HAVE_RTX_REMIX
 	remix::tickDllHookFrame();
 #endif
@@ -2901,7 +2999,11 @@ void D3D9Renderer::showFrame() {
 		m_inScene = false;
 	}
 	HWND presentWindow = static_cast<HWND>(m_hwnd);
-	m_device->Present(nullptr, nullptr, presentWindow, nullptr);
+	const HRESULT presentHr = m_device->Present(nullptr, nullptr, presentWindow, nullptr);
+	if(presentHr == D3DERR_DEVICELOST || presentHr == D3DERR_DEVICENOTRESET) {
+		m_deviceLost = true;
+		(void)recoverDeviceIfNeeded();
+	}
 }
 
 #endif // ARX_HAVE_D3D9

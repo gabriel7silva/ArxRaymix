@@ -11,6 +11,7 @@
 
 #if ARX_HAVE_D3D12
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -36,8 +37,6 @@ public:
 	void destroy() override;
 	
 	[[nodiscard]] unsigned srvIndex() const { return m_srvIndex; }
-	[[nodiscard]] bool onGpu() const { return m_onGpu; }
-	void setOnGpu(bool ready) { m_onGpu = ready; }
 	
 protected:
 	bool create() override;
@@ -63,7 +62,7 @@ public:
 	
 	void setColorOp(TextureOp textureOp) override { m_colorOp = textureOp; }
 	void setAlphaOp(TextureOp textureOp) override { m_alphaOp = textureOp; }
-	void setMipMapLODBias(float bias) override { m_lodBias = bias; }
+	void setMipMapLODBias(float bias) override { ARX_UNUSED(bias); }
 	
 	[[nodiscard]] TextureOp getColorOp() const { return m_colorOp; }
 	[[nodiscard]] TextureOp getAlphaOp() const { return m_alphaOp; }
@@ -72,7 +71,6 @@ private:
 	Texture * m_texture = nullptr;
 	TextureOp m_colorOp = OpModulate;
 	TextureOp m_alphaOp = OpSelectArg1;
-	float m_lodBias = 0.f;
 };
 
 class D3D12Renderer final : public Renderer {
@@ -107,7 +105,7 @@ public:
 	void SetAntialiasing(bool enable) override;
 	void SetFillMode(FillMode mode) override;
 	
-	[[nodiscard]] bool needsHalfPixelOffset() const override { return false; }
+	[[nodiscard]] bool needsHalfPixelOffset() const override { return true; }
 	[[nodiscard]] const char * getGraphicsApiName() const override { return "DirectX 12"; }
 	
 	[[nodiscard]] float getMaxSupportedAnisotropy() const override { return 16.f; }
@@ -128,6 +126,7 @@ public:
 	bool getSnapshot(Image & image, size_t width, size_t height) override;
 	
 	void showFrame() override;
+	void setPresentVSync(int vsync) override { m_vsync = vsync; }
 	void beginSceneUpscale() override;
 	void applyWorldRayEffects() override;
 	void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) override;
@@ -149,10 +148,13 @@ public:
 	
 	[[nodiscard]] ID3D12Device * device() const;
 	[[nodiscard]] unsigned allocateSrv();
+	void freeSrv(unsigned index);
 	void createTextureSrv(ID3D12Resource * resource, unsigned index);
 	bool uploadTextureData(ID3D12Resource * dest, const void * bgra, unsigned width, unsigned height,
 	                       bool alreadyOnGpu);
 	void freeTexture(ID3D12Resource * resource);
+	void registerTexture(D3D12Texture * texture);
+	void unregisterTexture(D3D12Texture * texture);
 	
 private:
 	void releaseDevice();
@@ -163,7 +165,7 @@ private:
 	void waitGpu();
 	bool ensureCommandList();
 	bool beginRecording();
-	void bindDrawState(Primitive primitive);
+	bool bindDrawState(Primitive primitive);
 	void drawGpuVerts(Primitive primitive, const void * verts, size_t stride, size_t count);
 	void restoreRasterBind();
 	void applyStreamlineRr();
@@ -174,10 +176,9 @@ private:
 	[[nodiscard]] bool usingSceneTargets() const;
 	[[nodiscard]] int passWidth() const;
 	[[nodiscard]] int passHeight() const;
-	void collectWorld(Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	                  const unsigned short * indices, size_t nindices);
-	void collectWorld(Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-	                  const unsigned short * indices, size_t nindices);
+	void markUnusable();
+	void retireCompleted();
+	void waitFence(std::uint64_t value);
 	
 	struct Impl;
 	Impl * m = nullptr;
@@ -200,9 +201,11 @@ private:
 	float m_fogStart = 0.f;
 	float m_fogEnd = 1.f;
 	float m_anisotropy = 1.f;
+	int m_vsync = 1;
 	FillMode m_fillMode = FillSolid;
 	int m_width = 0;
 	int m_height = 0;
+	std::vector<D3D12Texture *> m_liveTextures;
 };
 
 #endif // ARX_HAVE_D3D12

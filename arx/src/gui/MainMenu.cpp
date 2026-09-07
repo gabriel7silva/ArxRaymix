@@ -1553,6 +1553,7 @@ public:
 				getLocalised("system_menus_options_raytracing_rr"));
 			cb->valueChanged = [=](int pos, std::string_view /* string */) {
 				config.video.dxrRr = pos;
+				markCustom();
 				syncEnabled();
 				config.save();
 			};

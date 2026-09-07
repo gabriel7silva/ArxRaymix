@@ -385,6 +385,9 @@ public:
 	
 	virtual void showFrame() { }
 	
+	//! 0 = immediate, 1 / -1 = one refresh. D3D backends honour this on Present / Reset.
+	virtual void setPresentVSync(int vsync) { ARX_UNUSED(vsync); }
+	
 	//! Bind scene color/depth at the Streamline render size when DLSS / RR is on.
 	virtual void beginSceneUpscale() { }
 	
