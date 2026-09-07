@@ -40,7 +40,7 @@ At full strength, gate bars and cutout decals (roots, webs) went black. Causes a
 
 - Normal from depth used a raw-z discontinuity test (`0.04`) that never fired, so at any silhouette the normal tilted up to ~80° and rays started inside the receiver. Now each axis takes the closer neighbour in linear depth and a pixel is a discontinuity when the step exceeds `4 * footprint` (`footprint = w * pixelWorld`, `pixelWorld = 2 / (width * proj[0][0])`, sent in the old `frameIndex` slot).
 - Ray origins step off by `4 + 2 * footprint` (shadow) / `8 + 2 * footprint` (AO, GI) and `TMin` equals that bias, so the receiver's own thickness is skipped.
-- Cutout textures (`Texture::hasAlpha()`, color-keyed too) are opaque quads to the BLAS since rays never see the texture; those polygons and entity faces are not casters at all until **Transparency** is High (then they are included as opaque casters). `DXR room casters rooms=… alphaSkipped=…` says how many were dropped; if that is most of the room, the criterion is catching real walls.
+- Cutout textures (`Texture::hasAlpha()`, color-keyed too) are opaque quads to the BLAS since rays never see the texture; those polygons and entity faces are not casters unless **Transparency** is Low or High (then they are included as opaque casters, still no any-hit). `DXR room casters rooms=… alphaSkipped=…` says how many were dropped; if that is most of the room, the criterion is catching real walls.
 - The composite floors `ao * sh` at 0.08 so the two never compound to black.
 
 The composite bilateral radius is 2 or 3 for shadows (denoise Low / High) and 5 for AO. The old 13x13 on shadows erased bar shadows a few pixels wide once the camera stepped back; the per-pixel rotation plus history do the smoothing now. Discontinuity pixels trace AO too, with the camera-facing normal, instead of being forced to 1 (bright specks on thin geometry).
@@ -57,7 +57,7 @@ Quality: Low = 1 ray half-res; Medium = 1 ray full-res; High = 2 rays + IGN. His
 
 Opaque metal (`POLY_METAL` / `[metal]`) is rasterized to a second R8 mask. Spec is a coat on the raster albedo (`F0 ≈ 0.18`, tight cone) — it must not replace the iron texture (the elevator rope plate became 2-ray static at `F0=0.56`).
 
-**Direct lighting** in the menu is the existing DXR shadow + penumbra pass, not a second path tracer. **Indirect lighting** is still one bounce. **Contact shadows** add a short `TMax ≈ 60` ray on silhouette pixels. **Debris** includes `IO_NOSHADOW` props near lights. **Transparency High** includes alpha-cutout casters (no any-hit yet).
+**Direct lighting** in the menu is the existing DXR shadow + penumbra pass, not a second path tracer. **Indirect lighting** is still one bounce. **Contact shadows** add a short `TMax ≈ 60` ray on silhouette pixels. **Debris** includes `IO_NOSHADOW` props near lights. **Transparency Low** includes alpha-cutout casters; **High** also includes `POLY_TRANS` (no any-hit yet).
 
 ### Phase 5 — Streamline (DLSS + Frame Generation; RR experimental)
 
@@ -69,7 +69,7 @@ World + DXR draw to a **scene color/depth** at `slDLSSGetOptimalSettings` (DLAA 
 
 Log: `Streamline: slInit ok`, `Ray tracing: DXR=… DLSS=… DLSS-RR=… DLSS-G=…`, `Streamline: DLSS-G on (2x, Reflex, HUD-less before HUD)` once while the Video toggle is On (and `DLSS-G off` only when you turn it Off), `Streamline: DLSS evaluate ok 640x360 -> 1920x1080`, `Streamline: DLSS-RR evaluate ok … (LDR, preset D, albedo=pre-DXR)`.
 
-`cfg.ini` `[video] dxr_dlss=` is 0–5 (`dlss_schema=1`). Old `1` (Auto) migrates to Quality; old `6` (DLAA) migrates to `1`. `dxr_rr=` is 0/1. RT presets do not change DLSS or `dxr_distance`.
+`cfg.ini` `[video] dxr_dlss=` is 0–5 (`dlss_schema=1`). Old `1` (Auto) migrates to Quality; old `6` (DLAA) migrates to `1`. `dxr_rr=` is 0/1. RT presets do not change DLSS or `dxr_distance`. They set `dxr_rr` to 0.
 
 **Options → Render → Render distance** (`fog=` 0–10) is the far plane. Slider 0 is ~1600 (one cell + fog wall); 10 is 28000. D3D12 world pixels fade into the zone fog colour from 40 % to 92 % of that distance. Fog is applied whenever `render3D().fog()` is on — it must not depend on the DLSS `worldPass` flag. HUD stays unfogged.
 
@@ -88,7 +88,7 @@ Not doing this. Indirect lighting stays one analytic bounce. A path tracer with 
 
 ## Hook
 
-`Renderer::applyWorldRayEffects()` runs right after `ARX_SCENE_Render()` (opaque world, entities, transparent polys, water, halos) and **before** particles, magic flares, spell effects, light flares and HUD, from [`ArxGame::renderLevel`](../../../core/ArxGame.cpp). Composited later, a spell's additive flare was multiplied by the shading of the surface behind it and showed the table's shadow through itself. `showFrame` is too late (HUD is already in the backbuffer). 2D already uses `ZFUNC ALWAYS`. Do not apply RTAO to HUD or cinematics (`isInCinematic()`).
+`Renderer::applyWorldRayEffects()` runs right after `ARX_SCENE_Render()` (opaque world, entities, transparent polys, water, halos) and **before** particles, magic flares, spell effects, light flares and HUD, from [`ArxGame::renderLevel`](../../core/ArxGame.cpp). Composited later, a spell's additive flare was multiplied by the shading of the surface behind it and showed the table's shadow through itself. `showFrame` is too late (HUD is already in the backbuffer). 2D already uses `ZFUNC ALWAYS`. Do not apply RTAO to HUD or cinematics (`isInCinematic()`).
 
 `createDevice` asks for `D3D_FEATURE_LEVEL_11_0` and queries `D3D12_FEATURE_D3D12_OPTIONS5` / `RaytracingTier`. If the tier is `NOT_SUPPORTED`, raster only.
 
@@ -121,11 +121,12 @@ One symptom at a time. Prove it in `runtime/user/arx.log`:
 5. `DXR GI disabled` or `DXR GI enabled quality=…`
 6. `DXR reflections disabled` or `DXR reflections trans=… metal=…`
 7. `Streamline: slInit ok` then `Ray tracing: DXR=… DLSS=… DLSS-RR=…`
-8. 1920×1080 + Ultra Performance: `Streamline: DLSS UltraPerformance render=` well below 1920×1080 and `sceneRT=yes`, then `Streamline: DLSS evaluate ok … -> 1920x1080`
-9. DLAA: `render=` equals `output=`
-10. Quality → Performance recreates targets (new `render=`). HUD stays sharp at display res.
-11. With `dxr_rr=1`, DXR on, and RR supported: `Streamline: DLSS-RR evaluate ok … (LDR, preset D, albedo=pre-DXR)`. RR without DXR stays gray. NGX create / evaluate failure logs once (`DLSS-RR evaluate failed` / `nvngx_dlssd` create `0xbad00005`); homemade denoise stays. Do not retry create every frame.
-12. Render distance: `Render distance slider=… cdepth=… fog=…-…`. Room cache: `DXR room cache tris=… lights=… dist=… caster=…` on room / distance changes, never every frame.
+8. 1920×1080 + Ultra Performance: `Streamline: DLSS UltraPerformance→Performance render=960x540` then `Streamline: DLSS evaluate ok … -> 1920x1080`
+9. 1440p or 4K + Ultra Performance: `Streamline: DLSS UltraPerformance render=` at ~33 % of display (real Ultra stays)
+10. DLAA: `render=` equals `output=`
+11. Quality → Performance recreates targets (new `render=`). HUD stays sharp at display res.
+12. With `dxr_rr=1`, DXR on, and RR supported: `Streamline: DLSS-RR evaluate ok … (LDR, preset D, albedo=pre-DXR)`. RR without DXR stays gray. NGX create / evaluate failure logs once (`DLSS-RR evaluate failed` / `nvngx_dlssd` create `0xbad00005`); homemade denoise stays. Do not retry create every frame.
+13. Render distance: `Render distance slider=… cdepth=… fog=…-…`. Room cache: `DXR room cache tris=… lights=… dist=… caster=…` on room / distance changes, never every frame.
 
 Preset Medium should turn on shadow / AO / GI and water reflections without opening every slider. Changing only Transparent reflections must set the preset to Custom. Water must reflect the ceiling / torch **on the water plane**. Off on that slider is the old `enviro` water. HUD / particles stay untouched. DLSS / RR stay Off on presets and stay gray when Streamline says the GPU lacks that feature.
 

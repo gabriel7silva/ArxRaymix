@@ -56,7 +56,7 @@ Aplicados na hora. Cinzentos no menu, e ignorados no `cfg.ini`, quando o hardwar
 | `dxr_fg` | Opções → Vídeo → Frame Generation | 0 / 1 (2×). Só este seletor liga ou desliga o FG |
 | `dxr_rr` | Opções → Ray tracing → Reconstrução de raios (experimental) | 0 / 1. O denoiser caseiro fica se o NGX falhar ao criar |
 
-Os presets de RT não gravam `dxr_dlss`, `dxr_fg`, `dxr_rr` nem `dxr_distance`. `dxr_dlss` usa o esquema `dlss_schema=1`.
+Os presets de RT não gravam `dxr_dlss`, `dxr_fg` nem `dxr_distance`. Eles põem `dxr_rr` a 0. `dxr_dlss` usa o esquema `dlss_schema=1`.
 
 Iluminação indireta é um salto analítico. Não há chave de número de saltos nem de path tracing. A Phase 6 está arquivada.
 
