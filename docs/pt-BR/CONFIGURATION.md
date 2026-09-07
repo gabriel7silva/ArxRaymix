@@ -30,6 +30,36 @@ Os scripts de lançamento definem `ARX_RENDERER` só para aquele processo. Não 
 
 `--list-dirs` lista os diretórios de dados por prioridade.
 
+## Distância do render
+
+`cfg.ini` `[video] fog=` continua a ser a chave (0–10). Neste fork é o **plano longe**, não um seletor de densidade de neblina. Opções → Render → Distância do render. O valor 0 é cerca de uma célula mais uma parede de neblina (~1600 unidades Arx); 10 é o máximo antigo (~28000). Os pixels do mundo desaparecem na cor de neblina da zona de 40 % a 92 % dessa distância. A neblina segue o estado do `Renderer` (`getFog()`); não pode depender da flag `worldPass` do DLSS. O HUD fica sem neblina.
+
+## Ray tracing e Streamline
+
+Aplicados na hora. Cinzentos no menu, e ignorados no `cfg.ini`, quando o hardware não os corre.
+
+| Chave | Menu | Valores |
+|---|---|---|
+| `dxr_preset` | Opções → Ray tracing → Preset | 0 Desligado, 1 Baixo, 2 Médio, 3 Alto, 4 Personalizado |
+| `rtao` | Oclusão ambiente | 0–3 |
+| `dxr_shadows` | Iluminação direta (sombras DXR) | 0–3 |
+| `dxr_shadow_denoise` | Denoise direto | 0 Baixo, 1 Alto |
+| `dxr_contact` | Sombras de contacto | 0 / 1 |
+| `dxr_gi` | Iluminação indireta (um salto) | 0–3 |
+| `dxr_gi_denoise` | Denoise indireto | 0–2 |
+| `dxr_reflections` | Reflexos de metal | 0–3 |
+| `dxr_trans_reflections` | Reflexos de água / transparentes | 0–3 |
+| `dxr_transparency` | Casters recortados | 0 / 1 / 2 |
+| `dxr_debris` | Adereços pequenos no TLAS | 0 / 1 |
+| `dxr_distance` | Distância do ray tracing | 0 Baixo, 1 Médio, 2 Alto, 3 Ultra |
+| `dxr_dlss` | Opções → Vídeo → Upscaling / modo DLSS | 0 Desligado, 1 DLAA, 2 Quality, 3 Balanced, 4 Performance, 5 Ultra Performance |
+| `dxr_fg` | Opções → Vídeo → Frame Generation | 0 / 1 (2×). Só este seletor liga ou desliga o FG |
+| `dxr_rr` | Opções → Ray tracing → Reconstrução de raios (experimental) | 0 / 1. O denoiser caseiro fica se o NGX falhar ao criar |
+
+Os presets de RT não gravam `dxr_dlss`, `dxr_fg`, `dxr_rr` nem `dxr_distance`. `dxr_dlss` usa o esquema `dlss_schema=1`.
+
+Iluminação indireta é um salto analítico. Não há chave de número de saltos nem de path tracing. A Phase 6 está arquivada.
+
 ## O que não commitar
 
 - `runtime/user/cfg.ini`, `runtime/user/arx.log`, saves

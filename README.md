@@ -17,7 +17,7 @@
   <a href="README.md">English</a> · <a href="docs/pt-BR/README.md">Português (Brasil)</a>
 </p>
 
-**Arx Raymix** is a Windows remaster of *Arx Fatalis*. It keeps the Arx Libertatis engine and adds a **Direct3D 12** raster backend, with an optional **DXR** layer that ray traces ambient occlusion, shadows and one bounce of indirect light on top of that raster. **Direct3D 9** stays as a fallback. One window, one device.
+**Arx Raymix** is a Windows remaster of *Arx Fatalis*. It keeps the Arx Libertatis engine and adds a **Direct3D 12** raster backend, with an optional **DXR** layer that ray traces ambient occlusion, shadows, one bounce of indirect light, and water / metal reflections on top of that raster. NVIDIA **DLSS** and **Frame Generation** sit in Options → Video. **Direct3D 9** stays as a fallback. One window, one device.
 
 This repository does not ship game data. You need your own copy of Arx Fatalis (Steam or GOG).
 
@@ -49,15 +49,19 @@ Work in progress, and the bars are meant literally.
 ### Working
 
 - **Direct3D 12 is the default.** On Windows the window creates a D3D12 device. If that fails, it falls back to D3D9 for that launch.
-- **Ray tracing on top of the raster.** With a DXR-capable GPU, the D3D12 backend adds ray traced ambient occlusion, shadows from the level's own lights, and one bounce of indirect light. Each is **Off / Low / Medium / High** in Options → Ray tracing. Results are denoised and reused between frames, so they stay steady while you move. Without DXR support the game runs the plain raster and says so in the log.
+- **Ray tracing on top of the raster.** With a DXR-capable GPU, the D3D12 backend adds ray traced ambient occlusion, shadows from the level's own lights, one bounce of indirect light, and water / metal reflections. Each DXR effect is **Off / Low / Medium / High** in Options → Ray tracing, plus a **Ray tracing distance** (Low / Medium / High / Ultra). Results are denoised and reused between frames, so they stay steady while you move. Without DXR support the game runs the plain raster and says so in the log.
+- **DLSS and Frame Generation.** Options → Video: Upscaling Off / DLSS (DLAA through Ultra Performance) and Frame Generation Off / On. They are independent of the RT preset. **DLSS Ray Reconstruction** is experimental: the slider stays, but if NGX cannot create the feature the homemade denoiser keeps drawing.
+- **Render distance.** Options → Render controls the far plane (`cfg.ini` `fog=`). Geometry fades into zone fog; there is no unloaded-map hole.
 - **Direct3D 9 is a first-class fallback.** Same game, same HWND, separate backend under `arx/src/graphics/d3d9/`.
 - **Video Options picks the API.** Choose DirectX 9 or DirectX 12. The change is saved and applied on the next launch. The current session always shows which API is active.
 - **Separate launch scripts** for each backend. See [`scripts/README.md`](scripts/README.md).
 - **Português (Brasil)** is available in Options → Language for text and, when the speech files are imported, for audio.
 
-### Not a path tracer
+### Hybrid renderer — path tracing is archived
 
-The world is rastered and rays are traced on top of the finished image. Nothing here replaces rasterisation with tracing, and switching ray tracing off leaves a complete renderer rather than a broken one. Earlier experiments with RTX Remix are not the product and are not how the game is launched.
+The world is rastered and rays are traced on top of the finished image. Switching ray tracing off leaves a complete renderer rather than a black screen. That is the product. Multi-bounce path tracing (the old Phase 6) is **archived** and is not being built. Earlier experiments with RTX Remix are not the product and are not how the game is launched.
+
+Phases 1–4 (RTAO, DXR shadows, penumbra + one bounce, water / metal reflections) are done. Phase 5 is DLSS + Frame Generation done; Ray Reconstruction stays experimental. See [`arx/src/graphics/dxr/README.md`](arx/src/graphics/dxr/README.md).
 
 ---
 
@@ -66,7 +70,7 @@ The world is rastered and rays are traced on top of the finished image. Nothing 
 | | |
 |---|---|
 | OS | Windows 10 or 11, x64 |
-| GPU | A Direct3D 12 GPU for the default backend; Direct3D 9 for the fallback. Ray tracing additionally needs DXR support, and turns itself off without it |
+| GPU | A Direct3D 12 GPU for the default backend; Direct3D 9 for the fallback. Ray tracing additionally needs DXR support, and turns itself off without it. DLSS and Frame Generation need NVIDIA + Streamline; Ray Reconstruction is experimental |
 | Game | Your own copy of **Arx Fatalis** (Steam or GOG). No game data is distributed here |
 | Toolchain | Visual Studio 2022 or newer with the C++ desktop workload, CMake 3.12+ |
 
@@ -111,7 +115,9 @@ build\arx\RelWithDebInfo\arx.exe --user-dir runtime\user --data-dir "<path to Ar
 
 In game: **Options → Video**. The first line is the API in use (`Graphics API: DirectX 12` or `Graphics API: DirectX 9`). The slider chooses the API for the **next** launch. A restart notice appears when the saved choice differs from the session. **Apply** saves resolution and fullscreen; it does not recreate the graphics device to switch APIs.
 
-**Options → Ray tracing** has ambient occlusion, shadows and indirect light, each Off / Low / Medium / High. These apply immediately, with no restart. The page says so instead of offering dead controls when the GPU has no DXR support, and the choices are saved to `cfg.ini` as `rtao`, `dxr_shadows` and `dxr_gi`.
+**Options → Ray tracing** has a preset plus per-effect sliders (AO, shadows, indirect light, water / metal reflections, denoise, contact, debris, transparency) and **Ray tracing distance**. These apply immediately, with no restart. The page says so instead of offering dead controls when the GPU has no DXR support. Keys are listed in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+
+**Options → Video** also holds **Upscaling** (DLSS) and **Frame Generation**. **Options → Render → Render distance** is the far plane.
 
 Quit from the **menu**.
 

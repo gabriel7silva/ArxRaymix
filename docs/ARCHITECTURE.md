@@ -61,7 +61,7 @@ D3D9 is the historical Windows raster path, including CPU frustum clipping for `
 
 ## The ray tracing layer
 
-`arx/src/graphics/dxr/` adds ray traced ambient occlusion, shadows and one bounce of indirect light on top of the finished D3D12 raster. It is a layer, not a replacement: the world is rastered first, and switching every effect off leaves the raster untouched.
+`arx/src/graphics/dxr/` adds ray traced ambient occlusion, shadows, one bounce of indirect light, and water / metal reflections on top of the finished D3D12 raster. NVIDIA Streamline (`D3D12Streamline`) adds DLSS Super Resolution, Frame Generation, and experimental Ray Reconstruction. It is a layer, not a replacement: the world is rastered first, and switching every effect off leaves the raster untouched. Multi-bounce path tracing is archived.
 
 It is compiled with the D3D12 backend and is reached through one optional method on the renderer interface, which defaults to doing nothing, so the other backends need no knowledge of it. The call sits after the world is drawn and before particles, flares and the HUD, so additive effects are not multiplied by the world's shading.
 
@@ -71,11 +71,13 @@ It is compiled with the D3D12 backend and is reached through one optional method
 | Casters | Nearby rooms, cached and rebuilt on room changes, plus in-scene entities every frame |
 | Lights | A bounded set chosen per frame from the level's lit lights, faded in and out so the set changing is never a visible pop |
 | Stability | Each result is denoised and blended with the previous frame, reprojected through the previous camera |
-| Settings | `rtao`, `dxr_shadows`, `dxr_gi` in `cfg.ini`, each Off / Low / Medium / High, applied immediately |
+| Settings | `rtao`, `dxr_shadows`, `dxr_gi`, reflections, denoise, `dxr_distance` in `cfg.ini`, applied immediately. DLSS / FG / RR are `dxr_dlss`, `dxr_fg`, `dxr_rr` |
 
 Every stage degrades to plain raster rather than to a broken frame: unsupported hardware, a missing shader compiler, a shader that fails to build, or a scene with nothing to trace each stop the pass and leave the rastered image alone. The log always says which stage stopped.
 
-For why a given value is what it is, read [`arx/src/graphics/dxr/README.md`](../arx/src/graphics/dxr/README.md). For where things live and what breaks when you change them, read [`docs/maintenance/`](maintenance/README.md).
+Phases 1–4 are done. Phase 5 is DLSS + Frame Generation; Ray Reconstruction is experimental (homemade denoise stays if NGX create fails). Phase 6 (path-traced multi-bounce) is **archived**.
+
+For why a given value is what it is, read [`arx/src/graphics/dxr/README.md`](../arx/src/graphics/dxr/README.md). For where things live and what breaks when you change them, read [`docs/maintenance/`](maintenance/README.md). Keys are listed in [`CONFIGURATION.md`](CONFIGURATION.md).
 
 ## Leftover Remix sources
 

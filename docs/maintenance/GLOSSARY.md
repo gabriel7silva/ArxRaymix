@@ -25,7 +25,7 @@ Anything in the level that is not background: a creature, an item, a door, the p
 The ordinary triangle rendering of the world, done by the Direct3D 12 backend. Everything the ray tracer does is layered on top of a finished raster image. The fork never replaces the raster with tracing.
 
 **Hybrid**
-The arrangement this fork uses: raster the world, then trace rays for ambient occlusion, shadows and bounce light, then combine the two. The opposite would be path tracing, which this project does not do.
+The arrangement this fork uses: raster the world, then trace rays for ambient occlusion, shadows, bounce light and reflections, then combine the two. The opposite would be path tracing. Path tracing is archived (Phase 6) and is not the product.
 
 **Composite**
 The full-screen pass at the end of the ray tracing work that takes the rastered image and multiplies or adds the traced results into it. When someone says "the composite", they mean this pass and the pixel shader that implements it.
@@ -68,13 +68,25 @@ Deliberately varying the ray directions per pixel so that too-few-rays shows up 
 **Quality level**
 The four-way Off / Low / Medium / High setting each effect has. Quality levels change ray counts and denoiser strength. They do not change how strong an effect looks — that is fixed in the shader.
 
+**Render distance**
+The Options → Render slider persisted as `fog=` (0–10). In this fork it is the far plane. The world fades into zone fog; it is not a density knob and it is not an unload of the map.
+
+**Ray tracing distance**
+The Options → Ray tracing slider persisted as `dxr_distance=` (Low / Medium / High / Ultra). It scales how far casters are collected and how far reflection / GI rays travel. Independent of the quality preset.
+
+**Streamline**
+NVIDIA's hook SDK used for DLSS Super Resolution, Frame Generation and Ray Reconstruction. Implementation: `D3D12Streamline`. Fetch with `scripts/fetch-streamline.ps1`.
+
+**Ray Reconstruction / `rrLive()`**
+DLSS Ray Reconstruction. Experimental. `slIsFeatureSupported` can be true while NGX create still fails (`0xBAD00005` on some laptops). Homemade denoise stays until `rrLive()` is true after a successful evaluate. Do not skip temporal history just because the slider is On.
+
 ## Process
 
 **Option A**
 The original name for the ambient occlusion work, still used in `arx/src/graphics/dxr/README.md` and in some log lines. It means the hybrid approach: keep the raster, add ray traced ambient occlusion on top.
 
 **Phase**
-A numbered stage of the ray tracing roadmap, tracked in `arx/src/graphics/dxr/README.md`. Phases are historical labels, not code structure.
+A numbered stage of the ray tracing roadmap, tracked in `arx/src/graphics/dxr/README.md`. Phases 1–4 are done. Phase 5 is DLSS + Frame Generation (RR experimental). Phase 6 (path-traced multi-bounce) is archived. Phases are historical labels, not code structure.
 
 **Remix**
 An abandoned experiment that routed the game through the NVIDIA RTX Remix runtime. Dead. See the dead code section of [COMPONENTS.md](COMPONENTS.md#dead-code).

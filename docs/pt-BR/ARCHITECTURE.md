@@ -46,7 +46,7 @@ OpenGL é o caminho fora do Windows. No Windows não é escolha em tempo de exec
 
 ## A camada de ray tracing
 
-`arx/src/graphics/dxr/` acrescenta oclusão ambiente traçada, sombras e um salto de luz indireta sobre o raster D3D12 já pronto. É uma camada, não uma substituição: o mundo é rasterizado primeiro, e desligar todos os efeitos deixa o raster intacto.
+`arx/src/graphics/dxr/` acrescenta oclusão ambiente traçada, sombras, um salto de luz indireta e reflexos de água / metal sobre o raster D3D12 já pronto. O NVIDIA Streamline (`D3D12Streamline`) acrescenta DLSS, Frame Generation e Reconstrução de raios experimental. É uma camada, não uma substituição: o mundo é rasterizado primeiro, e desligar todos os efeitos deixa o raster intacto. Path tracing de vários saltos está arquivado.
 
 Compila junto com o backend D3D12 e é alcançada por um único método opcional na interface do renderizador, cujo padrão é não fazer nada — então os outros backends não precisam saber dela. A chamada fica depois do mundo desenhado e antes de partículas, clarões e HUD, para que efeitos aditivos não sejam multiplicados pelo sombreamento do mundo.
 
@@ -56,11 +56,13 @@ Compila junto com o backend D3D12 e é alcançada por um único método opcional
 | Bloqueadores | Salas próximas, em cache e reconstruídas na troca de sala, mais as entidades em cena a cada quadro |
 | Luzes | Um conjunto limitado escolhido por quadro entre as luzes acesas do nível, com entrada e saída suavizadas para que a troca nunca apareça como um salto |
 | Estabilidade | Cada resultado passa por *denoise* e é misturado com o quadro anterior, reprojetado pela câmera anterior |
-| Ajustes | `rtao`, `dxr_shadows`, `dxr_gi` no `cfg.ini`, cada um Desligado / Baixo / Médio / Alto, aplicados na hora |
+| Ajustes | `rtao`, `dxr_shadows`, `dxr_gi`, reflexos, denoise, `dxr_distance` no `cfg.ini`, aplicados na hora. DLSS / FG / RR são `dxr_dlss`, `dxr_fg`, `dxr_rr` |
 
 Cada etapa degrada para o raster puro, nunca para um quadro quebrado: hardware sem suporte, compilador de shader ausente, shader que falha ao compilar ou cena sem nada a traçar interrompem o passe e deixam a imagem rasterizada como está. O log sempre diz qual etapa parou.
 
-Para saber *por que* um valor é o que é, leia [`arx/src/graphics/dxr/README.md`](../../arx/src/graphics/dxr/README.md). Para onde as coisas ficam e o que quebra ao mudá-las, leia o [`docs/maintenance/`](../maintenance/README.md).
+Phases 1–4 estão feitas. Phase 5 é DLSS + Frame Generation; Reconstrução de raios é experimental (o denoiser caseiro fica se o NGX falhar ao criar). Phase 6 (path tracing de vários saltos) está **arquivada**.
+
+Para saber *por que* um valor é o que é, leia [`arx/src/graphics/dxr/README.md`](../../arx/src/graphics/dxr/README.md). Para onde as coisas ficam e o que quebra ao mudá-las, leia o [`docs/maintenance/`](../maintenance/README.md). As chaves estão em [`CONFIGURATION.md`](CONFIGURATION.md).
 
 ## Fontes Remix antigas
 

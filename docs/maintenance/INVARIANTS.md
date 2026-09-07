@@ -14,7 +14,9 @@ Start here if something is already wrong.
 |---|---|
 | A tuning value behaves as if it were enormous | [INV-01](#inv-01) |
 | The ray passes produce garbage, or a black or white screen, or the device is removed | [INV-02](#inv-02) |
-| The world renders as plain raster with no ray tracing, and nothing looks broken | [INV-03](#inv-03), [INV-12](#inv-12) |
+| The world renders as plain raster with no ray tracing, and nothing looks broken | [INV-03](#inv-03), [INV-12](#inv-12), [INV-13](#inv-13) |
+| Fog never appears when Upscaling is Off | [INV-14](#inv-14) |
+| Frame Generation turns itself off in menus or cinematics | [INV-15](#inv-15) |
 | Shadows and occlusion stop at a fixed distance, and the boundary shimmers | [INV-04](#inv-04) |
 | Thin geometry goes black: gate bars, roots, cobwebs | [INV-05](#inv-05), [INV-07](#inv-07) |
 | Small objects look detached, as if floating | [INV-05](#inv-05) |
@@ -101,6 +103,20 @@ grep -n "aoRayCount\|shadowRays\|giRayCount\|aoRadius" arx/src/graphics/dxr/D3D1
 ```
 
 Every array's first entry must also be zero, because the menu's Off state is the zero index and a non-zero entry would leave the effect running while the menu says it is off.
+
+### <a id="inv-13"></a>INV-13 — The DXR root signature is already at the 64-DWORD cap
+
+**Break it by** adding root constants to `kRootConstants` (for example stuffing `specTMax` / `giTMax` / `rtRange` next to the existing floats).
+
+**Symptom** `CreateRootSignature` fails. The log says `RTAO: DXR pipeline failed — raster only`. RaytracingTier still reports support, so the menu looks live and the world is plain raster.
+
+**Mechanism** a D3D12 root signature allows 64 DWORDs. This one is 60 root constants + 2 descriptor tables + 1 CBV (2 DWORDs). Distance `TMax` and `rtRange` belong in the `ViewParams` CBV (`b1`).
+
+**Detect** the log after launch. Confirm the count:
+
+```
+grep -n "kRootConstants\|ViewParams" arx/src/graphics/dxr/D3D12Rtao.cpp
+```
 
 ## Run-time invariants
 
@@ -220,6 +236,34 @@ grep -n "applyWorldRayEffects" arx/src/core/ArxGame.cpp
 grep -n "RaytracingTier=\|RTAO ready\|raster only" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
+### <a id="inv-14"></a>INV-14 — D3D12 fog enable follows renderer state, not the DLSS world pass
+
+**Break it by** gating vertex fog on `worldPass`.
+
+**Symptom** with Upscaling Off the world never fogs. Render distance looks like it does nothing: far rooms stay sharp and there is no fog wall.
+
+**Mechanism** `worldPass` is true only while Streamline has scene-colour targets. DLSS Off never sets it. Fog must use `m_state.getFog()`. HUD vertices with `w == 1` stay unfogged even if fog is on.
+
+**Detect** `Render distance slider=` in the log, then walk toward the far plane with Upscaling Off.
+
+```
+grep -n "getFog()\|worldPass" arx/src/graphics/d3d12/D3D12Renderer.cpp
+```
+
+### <a id="inv-15"></a>INV-15 — Frame Generation is switched only from the Video menu
+
+**Break it by** calling `setDlssg(false)` from an untagged Present (menu, cinematic, or an RT / DLSS evaluate path).
+
+**Symptom** the Video toggle stays On but interpolated frames stop. The log prints `DLSS-G off` while the player did not turn it off.
+
+**Mechanism** Streamline Frame Generation follows the upgraded swapchain Present. `syncFrameGen(config.video.dxrFg)` belongs in `showFrame` only. `onPresent` is PCL markers.
+
+**Detect** with the toggle On, `Streamline: DLSS-G on` once and no later `DLSS-G off`.
+
+```
+grep -n "syncFrameGen\|setDlssg" arx/src/graphics/d3d12/D3D12Renderer.cpp arx/src/graphics/dxr/D3D12Streamline.cpp
+```
+
 ## Process invariants
 
 No detection, because these are about how you work rather than what the code does. Each one exists because breaking it has already cost days.
@@ -228,6 +272,7 @@ No detection, because these are about how you work rather than what the code doe
 - **Prove it in `runtime/user/arx.log`.** A screenshot shows that something changed. The log shows what the code decided. Both belong in a pull request; the log is the one that settles arguments.
 - **Quit through the menu when testing.** It produces a clean shutdown and a complete log.
 - **Never revive the Remix path**, and never introduce `toRemix`. See [COMPONENTS.md](COMPONENTS.md#dead-code).
+- **Never start path-traced multi-bounce.** Phase 6 is archived. Indirect lighting stays one analytic bounce.
 - **Never dual-boot the OpenGL renderer** to answer a Direct3D question.
 - **Do not weaken an effect to hide an artefact.** Turning a shadow down until the flicker stops leaves both a weak shadow and the bug.
 
@@ -245,7 +290,11 @@ Every ray tracing line the game writes to `runtime/user/arx.log`, and what each 
 | `DXR shadows enabled quality=` | `applyWorldRayEffects` | Shadows are running, with how many lights | Light count is zero in a lit room |
 | `DXR GI enabled quality=` | `applyWorldRayEffects` | Bounce light is running | Level does not match the menu |
 | `RTAO disabled`, `DXR shadows disabled`, `DXR GI disabled` | `applyWorldRayEffects` | The effect is off by setting, not by failure | Present when the menu says otherwise |
-| `DXR room cache tris=` | `applyWorldRayEffects` | Cached room geometry was rebuilt | **Every frame.** Expect it on room changes and long moves only |
+| `DXR room cache tris=` | `applyWorldRayEffects` | Cached room geometry was rebuilt (`dist=` / `caster=` are the slider and collect range) | **Every frame.** Expect it on room changes, `dxr_distance` changes and long moves only |
+| `Render distance slider=` | `ARX_GLOBALMODS_Apply` | Far plane from the Render distance slider | `cdepth` ignores the slider |
+| `Streamline: slInit ok` | `D3D12Streamline` | Streamline initialised | Absent when you expected DLSS / FG |
+| `Streamline: DLSS-G on` / `off` | `D3D12Streamline::setDlssg` | Frame Generation actually toggled | `off` while the Video toggle is On — see [INV-15](#inv-15) |
+| `DLSS-RR evaluate failed` / `nvngx_dlssd` create | `D3D12Streamline` | RR did not become live; homemade denoise stays | Retried every frame |
 | `DXR room casters rooms=` … `alphaSkipped=` | `collectRoomCasters` | How much geometry was gathered, and how much cutout was excluded | `alphaSkipped` is most of the room — see [INV-07](#inv-07) |
 | `DXR lights set changed` | `fillShadowLights` | Which lights joined or left, with their distances | Repeats while standing still — see [INV-10](#inv-10) |
 | `DXR lights params changed` | `fillShadowLights` | Same lights, different values | Repeats while standing still |

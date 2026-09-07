@@ -20,8 +20,9 @@ Upstream licensing, authorship and history files are kept intact: [`arx/LICENSE`
 ## New files (not upstream)
 
 ```
-arx/src/graphics/d3d12/D3D12Renderer.{h,cpp}
-arx/src/graphics/d3d9/D3D9Renderer.{h,cpp}
+arx/src/graphics/d3d12/
+arx/src/graphics/dxr/
+arx/src/graphics/d3d9/
 ```
 
 Leftover experiment (not compiled into the product path):
@@ -31,9 +32,11 @@ arx/src/graphics/remix/
 arx/third_party/rtx-remix/
 ```
 
+NVIDIA Streamline is fetched into `arx/third_party/streamline/` by `scripts/fetch-streamline.ps1` and is not an Arx Libertatis file.
+
 ## Modified files
 
-The Windows remaster also touches window creation, configuration, the Video Options menu, draw helpers, and localisation overlays. The two files most likely to conflict on an upstream rebase are `SDL2Window.cpp` and `MainMenu.cpp`.
+The Windows remaster also touches window creation, configuration, Video / Render / Ray tracing menus, `GlobalFog`, draw helpers, and localisation overlays. The files most likely to conflict on an upstream rebase are `SDL2Window.cpp`, `MainMenu.cpp`, `Config.{h,cpp}` and `GlobalFog.cpp`.
 
 Crash fixes that are not renderer-specific and would apply upstream:
 
