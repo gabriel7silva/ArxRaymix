@@ -74,17 +74,6 @@ struct TexturedVertex {
 	
 	Vec2f uv = Vec2f(0.f);
 	
-	/*!
-	 * Surface normal, only filled on the world-space path (w == 0).
-	 *
-	 * Arx models carry smooth per-vertex normals, but nothing downstream used
-	 * to need them: the software pipeline lit the vertices itself and handed the
-	 * renderer a colour. A path tracer does need them - without one it falls
-	 * back to the triangle's geometric normal and every facet of a low-poly
-	 * model shades separately.
-	 */
-	Vec3f normal = Vec3f(0.f, 1.f, 0.f);
-	
 	constexpr TexturedVertex() arx_noexcept_default
 	
 	constexpr TexturedVertex(const Vec3f & _p, float _w, ColorRGBA _color, Vec2f _uv) noexcept

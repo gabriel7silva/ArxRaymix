@@ -79,6 +79,6 @@ Phases 1–4 are done. Phase 5 is DLSS + Frame Generation; Ray Reconstruction is
 
 For why a given value is what it is, read [`arx/src/graphics/dxr/README.md`](../arx/src/graphics/dxr/README.md). For where things live and what breaks when you change them, read [`docs/maintenance/`](maintenance/README.md). Keys are listed in [`CONFIGURATION.md`](CONFIGURATION.md).
 
-## Leftover Remix sources
+## Remix is gone
 
-`arx/src/graphics/remix/` and `arx/third_party/rtx-remix/` still exist from an earlier experiment. `ARX_HAVE_RTX_REMIX` is not enabled. Those files are not how the game is launched.
+The RTX Remix experiment was deleted. There is no `graphics/remix/` tree, no `ARX_HAVE_RTX_REMIX` guard, and no D3D9 world-space hook path. Do not revive it.

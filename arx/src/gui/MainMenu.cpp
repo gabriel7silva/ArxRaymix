@@ -67,9 +67,6 @@
 #include "graphics/font/Font.h"
 #include "graphics/data/TextureContainer.h"
 #include "Configure.h"
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixScene.h"
-#endif
 
 #include "input/Input.h"
 #include "input/Keyboard.h"
@@ -84,7 +81,6 @@
 #include "util/Unicode.h"
 
 #include "window/RenderWindow.h"
-
 
 class NewQuestMenuPage final : public MenuPage {
 	
@@ -486,13 +482,6 @@ public:
 			addCenter(std::move(txt));
 		}
 		
-#if ARX_HAVE_RTX_REMIX
-		{
-			auto txt = std::make_unique<TextWidget>(hFontMenu, "Remix");
-			txt->setTargetPage(Page_OptionsRemix);
-			addCenter(std::move(txt));
-		}
-#endif
 		
 		addCenter(std::make_unique<Spacer>(std::max(2, hFontControls->getLineHeight() / 2)));
 		
@@ -1588,103 +1577,6 @@ public:
 	
 };
 
-#if ARX_HAVE_RTX_REMIX
-class RemixOptionsMenuPage final : public MenuPage {
-	
-public:
-	
-	RemixOptionsMenuPage()
-		: MenuPage(Page_OptionsRemix)
-	{ }
-	
-	void init() override {
-		
-		reserveBottom();
-		
-		auto commit = [] {
-			config.save();
-			remix::applyUserGfxConfig();
-		};
-		
-		{
-			std::string_view label = "Path tracing";
-			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
-			slider->valueChanged = [commit](int pos, std::string_view /* string */) {
-				config.video.remix.pathTracing = (pos != 0);
-				commit();
-			};
-			slider->addEntry("Off");
-			slider->addEntry("On");
-			slider->setValue(config.video.remix.pathTracing ? 1 : 0);
-			addCenter(std::move(slider));
-		}
-		
-		{
-			std::string_view label = "Quality";
-			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label);
-			slider->valueChanged = [commit](int pos, std::string_view /* string */) {
-				config.video.remix.quality = pos;
-				commit();
-			};
-			slider->addEntry("Low");
-			slider->addEntry("Medium");
-			slider->addEntry("High");
-			slider->addEntry("Ultra");
-			slider->setValue(config.video.remix.quality);
-			addCenter(std::move(slider));
-		}
-		
-		{
-			std::string_view label = "DLSS";
-			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
-			cb->setChecked(config.video.remix.dlss);
-			cb->stateChanged = [commit](bool checked) {
-				config.video.remix.dlss = checked;
-				commit();
-			};
-			addCenter(std::move(cb));
-		}
-		
-		{
-			std::string_view label = "Ray Reconstruction";
-			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
-			cb->setChecked(config.video.remix.rayReconstruction);
-			cb->stateChanged = [commit](bool checked) {
-				config.video.remix.rayReconstruction = checked;
-				commit();
-			};
-			addCenter(std::move(cb));
-		}
-		
-		{
-			std::string_view label = "Denoiser";
-			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
-			cb->setChecked(config.video.remix.denoiser);
-			cb->stateChanged = [commit](bool checked) {
-				config.video.remix.denoiser = checked;
-				commit();
-			};
-			addCenter(std::move(cb));
-		}
-		
-		{
-			std::string_view label = "Bloom";
-			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
-			cb->setChecked(config.video.remix.bloom);
-			cb->stateChanged = [commit](bool checked) {
-				config.video.remix.bloom = checked;
-				commit();
-			};
-			addCenter(std::move(cb));
-		}
-		
-		addBackButton(Page_Options);
-		
-	}
-	
-};
-#endif
-
 class InterfaceOptionsMenuPage final : public MenuPage {
 	
 public:
@@ -1840,7 +1732,6 @@ public:
 	}
 	
 };
-
 
 class AudioOptionsMenuPage final : public MenuPage {
 	
@@ -2222,7 +2113,6 @@ protected:
 	
 };
 
-
 class ControlOptionsMenuPage1 final : public ControlOptionsPage {
 	
 public:
@@ -2406,9 +2296,6 @@ void MainMenu::initWindowPages() {
 	m_window->add(std::make_unique<VideoOptionsMenuPage>());
 	m_window->add(std::make_unique<RenderOptionsMenuPage>());
 	m_window->add(std::make_unique<RayTracingOptionsMenuPage>());
-#if ARX_HAVE_RTX_REMIX
-	m_window->add(std::make_unique<RemixOptionsMenuPage>());
-#endif
 	m_window->add(std::make_unique<InterfaceOptionsMenuPage>());
 	m_window->add(std::make_unique<AudioOptionsMenuPage>());
 	m_window->add(std::make_unique<InputOptionsMenuPage>());
@@ -2419,8 +2306,6 @@ void MainMenu::initWindowPages() {
 	m_window->add(std::make_unique<LocalizationMenuPage>());
 	
 }
-
-
 
 MainMenu::MainMenu()
 	: bReInitAll(false)

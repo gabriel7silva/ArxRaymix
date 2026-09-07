@@ -22,12 +22,6 @@
 #include "io/log/Logger.h"
 #include "platform/Platform.h"
 
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixApi.h"
-#include "graphics/remix/RemixScene.h"
-#include "platform/WindowsUtils.h"
-#endif
-
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -72,9 +66,7 @@ D3DPRESENT_PARAMETERS makePresentParams(HWND hwnd, int width, int height, int vs
 	D3DPRESENT_PARAMETERS pp {};
 	pp.BackBufferWidth = UINT(width);
 	pp.BackBufferHeight = UINT(height);
-	// UNKNOWN left Remix logging D3D9Format::Unknown and
-	// "[D3D9WindowProc] Swapchain handle is invalid" — Alt+X never attached
-	// (remix-dxvk.log 28 Ago). Windowed 32-bit backbuffer is X8R8G8B8.
+	// Windowed 32-bit backbuffer. UNKNOWN made the swapchain unusable.
 	pp.BackBufferFormat = D3DFMT_X8R8G8B8;
 	pp.BackBufferCount = 1;
 	pp.MultiSampleType = D3DMULTISAMPLE_NONE;
@@ -110,33 +102,6 @@ bool createHalDevice(IDirect3D9 * d3d, HWND hwnd, int width, int height, int vsy
 	return true;
 }
 
-#if ARX_HAVE_RTX_REMIX
-bool createHalDeviceEx(IDirect3D9Ex * d3d, HWND hwnd, int width, int height, int vsync,
-                       IDirect3DDevice9Ex ** outDevice) {
-	
-	if(!d3d || !outDevice) {
-		return false;
-	}
-	*outDevice = nullptr;
-	D3DPRESENT_PARAMETERS pp = makePresentParams(hwnd, width, height, vsync);
-	HRESULT hr = d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
-	                                 D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
-	                                 &pp, nullptr, outDevice);
-	if(FAILED(hr)) {
-		pp = makePresentParams(hwnd, width, height, vsync);
-		hr = d3d->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
-		                         D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_FPU_PRESERVE,
-		                         &pp, nullptr, outDevice);
-	}
-	if(FAILED(hr) || !*outDevice) {
-		LogError << "D3D9: CreateDeviceEx failed (hr=" << long(hr) << ")";
-		*outDevice = nullptr;
-		return false;
-	}
-	return true;
-}
-#endif
-
 D3DCOLOR lerpFogSpecular(D3DCOLOR a, D3DCOLOR b, float t) {
 	const float fa = float(a >> 24);
 	const float fb = float(b >> 24);
@@ -160,36 +125,8 @@ struct TLVertex3 {
 static_assert(sizeof(TLVertex) == 32, "XYZRHW+DIFFUSE+SPECULAR+TEX1 is 32 bytes");
 static_assert(sizeof(TLVertex3) == 48, "XYZRHW+DIFFUSE+SPECULAR+TEX3 is 48 bytes");
 
-struct WorldVertex {
-	float x, y, z;
-	// D3DFVF component order is fixed: position, normal, diffuse, texcoords.
-	float nx, ny, nz;
-	D3DCOLOR color;
-	float u, v;
-};
-
-struct WorldVertex3 {
-	float x, y, z;
-	float nx, ny, nz;
-	D3DCOLOR color;
-	float u0, v0, u1, v1, u2, v2;
-};
-
-static_assert(sizeof(WorldVertex) == 36, "XYZ+NORMAL+DIFFUSE+TEX1 is 36 bytes");
-static_assert(sizeof(WorldVertex3) == 52, "XYZ+NORMAL+DIFFUSE+TEX3 is 52 bytes");
-
 const DWORD kTLFVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX1;
 const DWORD kTL3FVF = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR | D3DFVF_TEX3;
-/*
- * Upper bound on map lights handed to the runtime in one frame, whatever the
- * device claims it can take. Each one is a real light in the traced scene, so
- * this trades cost against how much of the level's lighting survives.
- */
-constexpr unsigned kMaxSceneLights = 32;
-
-const DWORD kWorldFVF = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX1;
-const DWORD kWorld3FVF = D3DFVF_XYZ | D3DFVF_NORMAL | D3DFVF_DIFFUSE | D3DFVF_TEX3;
-
 DWORD floatBits(float f) {
 	DWORD bits = 0;
 	std::memcpy(&bits, &f, sizeof(bits));
@@ -652,16 +589,6 @@ bool isHudW(float w) {
 	return std::abs(w - 1.f) <= 1e-5f;
 }
 
-//! w == 0 means TexturedVertex::p is already a world position, not a projected
-//! one. See Renderer::wantsWorldSpaceEntities().
-bool isWorldSpaceW(float w) {
-	return std::abs(w) <= 1e-6f;
-}
-
-bool submitWorldVerts(IDirect3DDevice9 * device, Renderer::Primitive primitive,
-                      const std::vector<WorldVertex> & verts,
-                      const unsigned short * indices, size_t nindices, bool direct);
-
 // hudSpace means the TL vertices are already window pixels with w == 1 (menus, HUD,
 // fades). Everything else is a projected 3D position and must be frustum-clipped:
 // near-only clip leaves ndc x/y unbounded, and D3D's ±1e8 guard band rasterizes
@@ -905,159 +832,6 @@ HRESULT drawDeindexed(IDirect3DDevice9 * device, DWORD fvf, UINT stride,
 	}
 	device->SetFVF(fvf);
 	return device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, UINT(vertexCount / 3), vertices, stride);
-}
-
-bool remixWantsWorldSpace() {
-#if ARX_HAVE_RTX_REMIX
-	return remix::isRemixDllHooked();
-#else
-	return false;
-#endif
-}
-
-void logWorldSpaceSubmit(size_t count, bool indexed) {
-	static bool logged = false;
-	if(logged) {
-		return;
-	}
-	logged = true;
-	LogInfo << "D3D9 world: untransformed XYZ for Remix PT (indexed=" << (indexed ? 1 : 0)
-	        << " n=" << count << ", DLF baked diffuse)";
-}
-
-/*
- * There used to be an unprojectClipToWorld() here, rebuilding world positions
- * from the engine's screen-space TL vertices so they could be path traced.
- * It is gone on purpose. Two things it could never get right:
- *
- *  - precision: the reconstruction is unstable wherever w is small, so meshes
- *    visibly trembled frame to frame
- *  - billboards: a camera-facing quad built in screen space has no world
- *    orientation left in it to recover
- *
- * Geometry that needs to be in the path-traced scene is converted at the source
- * instead - see Renderer::wantsWorldSpaceEntities(). One trap worth keeping in
- * mind if anyone tries again: worldToClipSpace() writes m_worldToScreen * pos,
- * not clip, so the inverse needs ndcToScreen * proj * view, not just proj*view.
- * Inverting only proj*view put NPCs thousands of units off-camera.
- */
-
-/*!
- * Give the world mesh smooth per-vertex normals.
- *
- * SMY_VERTEX has no normal - Arx never needed one, because the software
- * pipeline lit the vertices itself and handed the renderer a finished colour.
- * A path tracer without normals falls back to each triangle's geometric normal,
- * which is what made the walls read as flat facets.
- *
- * Face normals are area-weighted by construction (the cross product is not
- * normalised before accumulating), which is the usual cheap approximation and
- * behaves well on the long thin triangles Arx rooms are full of.
- *
- * Smoothing only reaches across one draw call, so a hard edge between batches
- * stays hard. That matches the geometry: batches are split by texture.
- */
-template <typename V>
-void computeSmoothNormals(V * verts, size_t nverts, const unsigned short * indices, size_t nindices) {
-	
-	if(!verts || nverts == 0) {
-		return;
-	}
-	
-	for(size_t i = 0; i < nverts; i++) {
-		verts[i].nx = 0.f;
-		verts[i].ny = 0.f;
-		verts[i].nz = 0.f;
-	}
-	
-	const size_t triangles = (indices ? nindices : nverts) / 3;
-	for(size_t t = 0; t < triangles; t++) {
-		size_t i0 = t * 3, i1 = t * 3 + 1, i2 = t * 3 + 2;
-		if(indices) {
-			i0 = indices[i0];
-			i1 = indices[i1];
-			i2 = indices[i2];
-		}
-		if(i0 >= nverts || i1 >= nverts || i2 >= nverts) {
-			continue;
-		}
-		const V & a = verts[i0];
-		const V & b = verts[i1];
-		const V & c = verts[i2];
-		const float e1x = b.x - a.x, e1y = b.y - a.y, e1z = b.z - a.z;
-		const float e2x = c.x - a.x, e2y = c.y - a.y, e2z = c.z - a.z;
-		const float nx = e1y * e2z - e1z * e2y;
-		const float ny = e1z * e2x - e1x * e2z;
-		const float nz = e1x * e2y - e1y * e2x;
-		for(size_t idx : { i0, i1, i2 }) {
-			verts[idx].nx += nx;
-			verts[idx].ny += ny;
-			verts[idx].nz += nz;
-		}
-	}
-	
-	for(size_t i = 0; i < nverts; i++) {
-		V & v = verts[i];
-		const float len = std::sqrt(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz);
-		if(len > 1e-12f) {
-			v.nx /= len;
-			v.ny /= len;
-			v.nz /= len;
-		} else {
-			v.ny = 1.f;
-		}
-	}
-}
-
-WorldVertex toWorldVertex(const SMY_VERTEX & v) {
-	WorldVertex o {};
-	o.x = v.p.x;
-	o.y = v.p.y;
-	o.z = v.p.z;
-	// Filled by computeSmoothNormals() once the whole batch is in.
-	o.nx = 0.f;
-	o.ny = 1.f;
-	o.nz = 0.f;
-	/*
-	 * SMY_VERTEX.color is the DLF light bake. Which value belongs here depends
-	 * on who is lighting the frame, and right now that is nobody:
-	 *
-	 *   path tracing on screen -> white, so Remix relights from scratch and the
-	 *                             baked torch blob does not double up
-	 *   rasterising            -> the bake, because D3DRS_LIGHTING is FALSE and
-	 *                             there is no other light source at all
-	 *
-	 * White with the raster on screen means texture at full brightness and no
-	 * shading anywhere - the "sun inside the dungeon" look. Until the Remix
-	 * present is fixed we are looking at the raster, so send the bake and let
-	 * the room look like Arx. Flip this back to 0xFFFFFFFF the moment the path
-	 * tracer is what reaches the window.
-	 */
-	o.color = toD3DColor(v.color);
-	o.u = v.uv.x;
-	o.v = v.uv.y;
-	return o;
-}
-
-WorldVertex3 toWorldVertex3(const SMY_VERTEX3 & v) {
-	WorldVertex3 o {};
-	o.x = v.p.x;
-	o.y = v.p.y;
-	o.z = v.p.z;
-	// Filled by computeSmoothNormals() once the whole batch is in.
-	o.nx = 0.f;
-	o.ny = 1.f;
-	o.nz = 0.f;
-	// Same reasoning as toWorldVertex(): the bake is the only lighting there is
-	// while the raster is on screen.
-	o.color = toD3DColor(v.color);
-	o.u0 = v.uv[0].x;
-	o.v0 = v.uv[0].y;
-	o.u1 = v.uv[1].x;
-	o.v1 = v.uv[1].y;
-	o.u2 = v.uv[2].x;
-	o.v2 = v.uv[2].y;
-	return o;
 }
 
 D3DPRIMITIVETYPE toD3DPrimitive(Renderer::Primitive primitive) {
@@ -1513,7 +1287,6 @@ void D3D9Renderer::releaseDevice() {
 		m_device->EndScene();
 		m_inScene = false;
 	}
-	releaseRemixBuffers();
 	if(m_device) {
 		m_device->Release();
 		m_device = nullptr;
@@ -1536,87 +1309,7 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	
 	releaseDevice();
 	
-	bool usedRemix = false;
-#if ARX_HAVE_RTX_REMIX
-	IDirect3D9Ex * remixD3dEx = nullptr;
-	IDirect3DDevice9Ex * remixDeviceEx = nullptr;
-	remix::setRemixDllHooked(false);
-	const std::wstring requested = RemixApi::requestedRuntimeDll();
-	if(remix::sceneRequested() && requested.empty()) {
-		LogWarning << "--remix-scene is ignored: C API play is off. Pass --remix-dll so D3D9Renderer loads Remix.";
-	}
-	if(!requested.empty()) {
-		RemixApi & api = remix::remixApi();
-		const std::string pathUtf8 = platform::WideString::toUTF8(requested.c_str());
-		LogInfo << "D3D9: loading Remix " << pathUtf8;
-		if(api.load(requested.c_str()) != REMIXAPI_ERROR_CODE_SUCCESS) {
-			LogError << "D3D9: Remix load failed, falling back to system d3d9.dll";
-		} else if(api.iface().dxvk_CreateD3D9) {
-			// CreateLight / DrawLightInstance require a device from this IDirect3D9Ex.
-			/*
-			 * Direct3DCreate9 is deliberately preferred over dxvk_CreateD3D9.
-			 *
-			 * dxvk_CreateD3D9 was chosen originally because Direct3DCreate9 on
-			 * this DLL yields a non-Ex object, QI for IDirect3DDevice9Ex fails,
-			 * and the C API's CreateLight then returns
-			 * REMIX_DEVICE_WAS_NOT_REGISTERED. That constraint is gone: the C API
-			 * light path never reached the scene at all (Light Statistics read
-			 * "Total Lights: 0" with 17 lights submitted per frame), so the
-			 * lights now go in as D3DLIGHT9 and nothing needs the Ex object.
-			 *
-			 * What remained was a scene Remix presented but never traced - no
-			 * lights, capture wrote no USD, toggling ray tracing changed no
-			 * pixel - with real vertex buffers making no difference. The one
-			 * assumption never tested was that dxvk_CreateD3D9 hands back a
-			 * device whose draw calls feed the path tracer. Direct3DCreate9 is
-			 * the entry point a d3d9.dll hijack uses, which is how every other
-			 * Remix title is captured.
-			 */
-			typedef IDirect3D9 * (WINAPI * Direct3DCreate9Proc)(UINT);
-			const Direct3DCreate9Proc createRemix =
-				reinterpret_cast<Direct3DCreate9Proc>(GetProcAddress(api.module(), "Direct3DCreate9"));
-			if(createRemix) {
-				m_d3d = createRemix(D3D_SDK_VERSION);
-				if(m_d3d) {
-					usedRemix = true;
-					LogInfo << "D3D9: Remix Direct3DCreate9 (capture path, no C API device)";
-				}
-			}
-			if(!m_d3d) {
-				LogWarning << "D3D9: Remix Direct3DCreate9 unavailable, trying dxvk_CreateD3D9";
-				const remixapi_ErrorCode created = api.iface().dxvk_CreateD3D9(FALSE, &remixD3dEx);
-				if(created != REMIXAPI_ERROR_CODE_SUCCESS || !remixD3dEx) {
-					LogError << "D3D9: dxvk_CreateD3D9 failed (" << RemixApi::errorString(created) << ')';
-				} else {
-					m_d3d = remixD3dEx;
-					usedRemix = true;
-					LogInfo << "D3D9: dxvk_CreateD3D9 returned IDirect3D9Ex";
-				}
-			}
-		}
-		if(!m_d3d && api.isLoaded()) {
-			typedef IDirect3D9 * (WINAPI * Direct3DCreate9Proc)(UINT);
-			const Direct3DCreate9Proc create =
-				reinterpret_cast<Direct3DCreate9Proc>(GetProcAddress(api.module(), "Direct3DCreate9"));
-			if(!create) {
-				LogError << "D3D9: Remix d3d9.dll has no Direct3DCreate9, falling back to system";
-				api.unloadLibrary();
-			} else {
-				m_d3d = create(D3D_SDK_VERSION);
-				if(!m_d3d) {
-					LogError << "D3D9: Remix Direct3DCreate9 failed, falling back to system d3d9.dll";
-					api.unloadLibrary();
-				} else {
-					usedRemix = true;
-				}
-			}
-		}
-	}
-#endif
-	if(!m_d3d) {
-		m_d3d = Direct3DCreate9(D3D_SDK_VERSION);
-		usedRemix = false;
-	}
+	m_d3d = Direct3DCreate9(D3D_SDK_VERSION);
 	if(!m_d3d) {
 		LogError << "D3D9: Direct3DCreate9 failed";
 		return false;
@@ -1634,18 +1327,7 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 		if(caps.MaxAnisotropy > 0) {
 			m_maxAnisotropyCap = float(caps.MaxAnisotropy);
 		}
-		/*
-		 * How many map lights can reach the path tracer at once. Fixed-function
-		 * D3D9 usually answers 8, which is why a room with 500 lights is lit by
-		 * the nearest handful and looks nothing like the baked original. The
-		 * runtime is dxvk-remix rather than a 2002 driver, so ask instead of
-		 * assuming, and log the answer either way.
-		 */
-		if(caps.MaxActiveLights > 0) {
-			m_maxLights = (std::min)(unsigned(caps.MaxActiveLights), kMaxSceneLights);
-		}
 		LogInfo << "D3D9 caps: maxActiveLights=" << caps.MaxActiveLights
-		        << " using=" << m_maxLights
 		        << " clipTLVerts=" << (clipsTLVertices ? 1 : 0)
 		        << " maxAniso=" << m_maxAnisotropyCap
 		        << " guardBand=(" << caps.GuardBandLeft << ", " << caps.GuardBandTop
@@ -1654,87 +1336,15 @@ bool D3D9Renderer::createDevice(void * nativeHwnd, int width, int height) {
 		        << " pow2=" << (m_requirePow2Textures ? 1 : 0);
 	}
 	
-	bool createdDevice = false;
-#if ARX_HAVE_RTX_REMIX
-	if(remixD3dEx) {
-		createdDevice = createHalDeviceEx(remixD3dEx, hwnd, width, height, m_vsync, &remixDeviceEx);
-		if(createdDevice) {
-			m_device = remixDeviceEx;
-		} else {
-			LogWarning << "D3D9: Remix CreateDeviceEx failed, trying CreateDevice on IDirect3D9Ex";
-			createdDevice = createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device);
-		}
-	}
-#endif
-	if(!createdDevice && !createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device)) {
-#if ARX_HAVE_RTX_REMIX
-		if(usedRemix) {
-			LogError << "D3D9: Remix CreateDevice failed, falling back to system d3d9.dll";
-			releaseDevice();
-			remix::remixApi().unloadLibrary();
-			usedRemix = false;
-			remixD3dEx = nullptr;
-			remixDeviceEx = nullptr;
-			m_d3d = Direct3DCreate9(D3D_SDK_VERSION);
-			if(!m_d3d) {
-				LogError << "D3D9: Direct3DCreate9 failed";
-				return false;
-			}
-			if(!createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device)) {
-				releaseDevice();
-				return false;
-			}
-		} else
-#endif
-		{
-			releaseDevice();
-			return false;
-		}
+	if(!createHalDevice(m_d3d, hwnd, width, height, m_vsync, &m_device)) {
+		releaseDevice();
+		return false;
 	}
 	
 	m_hwnd = hwnd;
 	m_width = width;
 	m_height = height;
 	applyDefaultStates();
-#if ARX_HAVE_RTX_REMIX
-	if(usedRemix) {
-		remix::onDllHookReady();
-		RemixApi & api = remix::remixApi();
-		IDirect3DDevice9Ex * ex = remixDeviceEx;
-		bool releaseEx = false;
-		if(!ex && m_device) {
-			if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
-			                                      reinterpret_cast<void **>(&ex))) && ex) {
-				releaseEx = true;
-			} else if(remixD3dEx) {
-				// NVIDIA: Register needs the 9Ex from dxvk_CreateD3D9 even if QI
-				// does not advertise it.
-				ex = static_cast<IDirect3DDevice9Ex *>(m_device);
-			}
-		}
-		if(ex && api.iface().dxvk_RegisterD3D9Device) {
-			const remixapi_ErrorCode st = api.iface().dxvk_RegisterD3D9Device(ex);
-			LogInfo << "D3D9: dxvk_RegisterD3D9Device " << RemixApi::errorString(st);
-			remix::setCApiDeviceRegistered(st == REMIXAPI_ERROR_CODE_SUCCESS);
-			if(st == REMIXAPI_ERROR_CODE_SUCCESS) {
-				// onDllHookReady() already tried this, but that runs before the
-				// device is registered and the runtime drops it on the floor.
-				LogInfo << "D3D9: re-applying Remix config now that the device is registered";
-				remix::applyPreviewConfig();
-			}
-		} else {
-			remix::setCApiDeviceRegistered(false);
-			LogInfo << "D3D9: no C API device (capture path). Lights go in as D3DLIGHT9.";
-		}
-		if(releaseEx && ex) {
-			ex->Release();
-		}
-		LogInfo << "Using D3D9 renderer " << width << "x" << height
-		        << " (remix " << platform::WideString::toUTF8(requested.c_str())
-		        << ", 2D+3D, one HWND, hwFog=0)";
-		return true;
-	}
-#endif
 	LogInfo << "Using D3D9 renderer " << width << "x" << height
 	        << " (system d3d9.dll, 2D+3D raster, one HWND, hwFog=0)";
 	LogInfo << "Ray tracing unavailable (D3D9)";
@@ -1745,15 +1355,8 @@ void D3D9Renderer::applyDefaultStates() {
 	if(!m_device) {
 		return;
 	}
-	/*
-	 * Fixed-function lighting stays off for a plain raster build - Arx bakes its
-	 * lighting into vertex colours. Under Remix it has to be on: SetLight() and
-	 * LightEnable() were being called for 8 map lights every frame and the
-	 * runtime's Light Statistics panel still read "Total Lights: 0", because a
-	 * light that the game itself is not using is a light Remix has no reason to
-	 * carry into the scene.
-	 */
-	m_device->SetRenderState(D3DRS_LIGHTING, remixWantsWorldSpace() ? TRUE : FALSE);
+	// Arx bakes lighting into vertex colours; fixed-function lights stay off.
+	m_device->SetRenderState(D3DRS_LIGHTING, FALSE);
 	m_device->SetRenderState(D3DRS_FOGENABLE, FALSE);
 	m_device->SetRenderState(D3DRS_FOGVERTEXMODE, D3DFOG_NONE);
 	m_device->SetRenderState(D3DRS_FOGTABLEMODE, D3DFOG_NONE);
@@ -1819,20 +1422,8 @@ bool D3D9Renderer::resetDevice(int width, int height) {
 		m_device->SetTexture(i, nullptr);
 	}
 	invalidateTextureStages();
-	releaseRemixBuffers();
 	D3DPRESENT_PARAMETERS pp = makePresentParams(static_cast<HWND>(m_hwnd), width, height, m_vsync);
-	HRESULT hr = E_FAIL;
-#if ARX_HAVE_RTX_REMIX
-	IDirect3DDevice9Ex * ex = nullptr;
-	if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
-	                                      reinterpret_cast<void **>(&ex))) && ex) {
-		hr = ex->ResetEx(&pp, nullptr);
-		ex->Release();
-	} else
-#endif
-	{
-		hr = m_device->Reset(&pp);
-	}
+	const HRESULT hr = m_device->Reset(&pp);
 	if(FAILED(hr)) {
 		LogWarning << "D3D9: Reset failed (hr=" << long(hr) << ") size=" << width << "x" << height;
 		m_deviceLost = true;
@@ -1841,26 +1432,9 @@ bool D3D9Renderer::resetDevice(int width, int height) {
 	m_width = width;
 	m_height = height;
 	m_appliedStateValid = false;
-	m_remixDummyThisScene = false;
 	m_deviceLost = false;
 	applyDefaultStates();
 	SetViewport(Rect(0, 0, m_width, m_height));
-#if ARX_HAVE_RTX_REMIX
-	if(remix::isRemixDllHooked() && remix::remixApi().iface().dxvk_RegisterD3D9Device) {
-		IDirect3DDevice9Ex * registered = nullptr;
-		if(SUCCEEDED(m_device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
-		                                      reinterpret_cast<void **>(&registered))) && registered) {
-			const remixapi_ErrorCode st = remix::remixApi().iface().dxvk_RegisterD3D9Device(registered);
-			if(st != REMIXAPI_ERROR_CODE_SUCCESS) {
-				LogWarning << "D3D9: dxvk_RegisterD3D9Device after Reset "
-				           << RemixApi::errorString(st);
-			} else {
-				remix::applyPreviewConfig();
-			}
-			registered->Release();
-		}
-	}
-#endif
 	LogInfo << "D3D9: Reset device " << width << "x" << height
 	        << " vsync=" << m_vsync << " hwnd=" << m_hwnd;
 	return true;
@@ -1907,8 +1481,7 @@ void D3D9Renderer::resetSwapchain() {
 	if(width < 1 || height < 1) {
 		return;
 	}
-	// CreateDevice already used this size. A same-size ResetEx is what Remix
-	// logs as "[D3D9WindowProc] Swapchain handle is invalid" (28 Ago 02:02).
+	// CreateDevice already used this size; a same-size Reset is a no-op.
 	if(width == m_width && height == m_height) {
 		return;
 	}
@@ -2072,296 +1645,7 @@ bool D3D9Renderer::beginSceneIfNeeded() {
 		return false;
 	}
 	m_inScene = true;
-	m_remixDummyThisScene = false;
-#if ARX_HAVE_RTX_REMIX
-	if(remixWantsWorldSpace()) {
-		remix::onDllHookBeginScene();
-		// Lights before geometry: Remix reads the fixed-function light state as
-		// it captures each draw call.
-		applyRemixLights();
-		submitRemixInjectionDummy();
-	}
-#endif
 	return true;
-}
-
-void D3D9Renderer::submitRemixInjectionDummy() {
-#if ARX_HAVE_RTX_REMIX
-	if(!m_device || m_remixDummyThisScene || !remixWantsWorldSpace()) {
-		return;
-	}
-	if(!remix::hasCApiDevice()) {
-		// Existed to make the C API camera attach before the first HUD draw. On
-		// the capture path it is real traced geometry: a white untextured
-		// triangle parked in front of the player.
-		return;
-	}
-	m_remixDummyThisScene = true;
-	
-	D3DMATRIX savedView {};
-	D3DMATRIX savedProj {};
-	m_device->GetTransform(D3DTS_VIEW, &savedView);
-	m_device->GetTransform(D3DTS_PROJECTION, &savedProj);
-	
-	const bool haveProj = std::abs(m_proj[2][3]) > 0.5f;
-	WorldVertex tri[3] {};
-	if(haveProj) {
-		Vec3f pos, forward, up, right;
-		remix::getArxHookCameraBasis(pos, forward, up, right);
-		const Vec3f origin = pos + forward * 2.f;
-		const Vec3f a = origin;
-		const Vec3f b = origin + right * 0.25f + up * 0.15f;
-		const Vec3f c = origin - right * 0.25f + up * 0.15f;
-		tri[0] = { a.x, a.y, a.z, 0.f, 0.f, -1.f, 0xFFFFFFFFu, 0.f, 0.f };
-		tri[1] = { b.x, b.y, b.z, 0.f, 0.f, -1.f, 0xFFFFFFFFu, 1.f, 0.f };
-		tri[2] = { c.x, c.y, c.z, 0.f, 0.f, -1.f, 0xFFFFFFFFu, 0.f, 1.f };
-	} else {
-		tri[0] = {  0.0f,  0.1f, 2.f, 0.f, 0.f, -1.f, 0xFFFFFFFFu, 0.f, 0.f };
-		tri[1] = {  0.2f, -0.1f, 2.f, 0.f, 0.f, -1.f, 0xFFFFFFFFu, 1.f, 0.f };
-		tri[2] = { -0.2f, -0.1f, 2.f, 0.f, 0.f, -1.f, 0xFFFFFFFFu, 0.f, 1.f };
-		const float aspect = (m_height > 0) ? float(m_width) / float((std::max)(m_height, 1)) : (16.f / 9.f);
-		const glm::mat4 view(1.f);
-		const glm::mat4 proj = glm::perspectiveLH_ZO(glm::radians(60.f), aspect, 1.f, 100.f);
-		D3DMATRIX d3dView {};
-		D3DMATRIX d3dProj {};
-		std::memcpy(&d3dView, glm::value_ptr(view), sizeof(d3dView));
-		std::memcpy(&d3dProj, glm::value_ptr(proj), sizeof(d3dProj));
-		m_device->SetTransform(D3DTS_VIEW, &d3dView);
-		m_device->SetTransform(D3DTS_PROJECTION, &d3dProj);
-	}
-	
-	D3DMATRIX identity {};
-	identity._11 = identity._22 = identity._33 = identity._44 = 1.f;
-	m_device->SetTransform(D3DTS_WORLD, &identity);
-	for(DWORD i = 0; i < 4; ++i) {
-		m_device->SetTexture(i, nullptr);
-	}
-	m_device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
-	m_device->SetRenderState(D3DRS_LIGHTING, FALSE);
-	m_device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
-	m_device->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
-	m_device->SetRenderState(D3DRS_ZFUNC, D3DCMP_ALWAYS);
-	m_device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
-	m_device->SetFVF(kWorldFVF);
-	const HRESULT hr = m_device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, 1, tri, sizeof(WorldVertex));
-	
-	if(!haveProj) {
-		m_device->SetTransform(D3DTS_VIEW, &savedView);
-		m_device->SetTransform(D3DTS_PROJECTION, &savedProj);
-	}
-	m_appliedStateValid = false;
-	
-	static bool logged = false;
-	if(!logged) {
-		logged = true;
-		LogInfo << "D3D9 world: Remix injection dummy before HUD (haveProj="
-		        << (haveProj ? 1 : 0) << " hr=" << long(hr) << ")";
-	}
-#else
-	ARX_UNUSED(this);
-#endif
-}
-
-bool D3D9Renderer::drawUnprojectedTL(Primitive primitive, const TexturedVertex * vertices, size_t nvertices,
-                                    const unsigned short * indices, size_t nindices) {
-	
-	if(!m_device || !vertices || nvertices == 0) {
-		return false;
-	}
-	
-	/*
-	 * Fast, exact path: the engine already handed us world positions because
-	 * wantsWorldSpaceEntities() said so. Nothing to invert, so nothing to
-	 * jitter - this is what stopped NPCs and props from trembling.
-	 */
-	if(isWorldSpaceW(vertices[0].w)) {
-		thread_local std::vector<WorldVertex> direct;
-		direct.resize(nvertices);
-		for(size_t i = 0; i < nvertices; ++i) {
-			const TexturedVertex & v = vertices[i];
-			WorldVertex & o = direct[i];
-			o.x = v.p.x;
-			o.y = v.p.y;
-			o.z = v.p.z;
-			// Arx's own smooth per-vertex normal, carried through on the
-			// world-space path. Without it the path tracer shades each triangle
-			// flat and low-poly models come out visibly faceted.
-			const float len = std::sqrt(v.normal.x * v.normal.x + v.normal.y * v.normal.y
-			                            + v.normal.z * v.normal.z);
-			if(len > 1e-6f) {
-				o.nx = v.normal.x / len;
-				o.ny = v.normal.y / len;
-				o.nz = v.normal.z / len;
-			} else {
-				o.nx = 0.f;
-				o.ny = 1.f;
-				o.nz = 0.f;
-			}
-			o.color = toD3DColor(v.color);
-			o.u = v.uv.x;
-			o.v = v.uv.y;
-		}
-		return submitWorldVerts(m_device, primitive, direct, indices, nindices, true);
-	}
-	
-	// Not world space: the caller is responsible for keeping it 2D.
-	return false;
-}
-
-
-namespace {
-
-bool submitWorldVerts(IDirect3DDevice9 * device, Renderer::Primitive primitive,
-                      const std::vector<WorldVertex> & verts,
-                      const unsigned short * indices, size_t nindices, bool direct) {
-	
-	const size_t nvertices = verts.size();
-	const size_t count = (indices && nindices > 0) ? nindices : nvertices;
-	const UINT prims = primitiveCount(primitive, count);
-	if(prims == 0) {
-		return false;
-	}
-	
-	device->SetFVF(kWorldFVF);
-	HRESULT hr = D3D_OK;
-	if(indices && nindices > 0) {
-		hr = device->DrawIndexedPrimitiveUP(toD3DPrimitive(primitive), 0, UINT(nvertices), prims,
-		                                    indices, D3DFMT_INDEX16, verts.data(), sizeof(WorldVertex));
-	} else {
-		hr = device->DrawPrimitiveUP(toD3DPrimitive(primitive), prims, verts.data(), sizeof(WorldVertex));
-	}
-	
-	static bool loggedDirect = false;
-	static bool loggedUnprojected = false;
-	bool & logged = direct ? loggedDirect : loggedUnprojected;
-	if(!logged) {
-		logged = true;
-		LogInfo << "D3D9 world: " << (direct ? "engine world-space" : "unprojected")
-		        << " TL 3d for Remix PT nverts=" << nvertices
-		        << " nidx=" << nindices << " prims=" << prims
-		        << " world0=(" << verts[0].x << "," << verts[0].y << "," << verts[0].z
-		        << ") hr=" << long(hr);
-	}
-	if(isTrianglePrimitive(primitive)) {
-		g_tlFrameStats.draws++;
-		g_tlFrameStats.emitted += count;
-	}
-	return SUCCEEDED(hr);
-}
-
-} // namespace
-
-
-bool D3D9Renderer::wantsWorldSpaceEntities() const {
-	return remixWantsWorldSpace();
-}
-
-/*!
- * Feed the map lights to Remix the way every other D3D9 game does.
- *
- * The C API route (CreateLight + DrawLightInstance) looked right in our logs -
- * 17 lights submitted every frame - but Remix's own Light Statistics panel read
- * "Total Lights: 0". Those calls live in the C API's frame, delimited by
- * remixapi_Present, and we present through D3D9, so nothing ever landed.
- *
- * Positions stay in Arx units, matching the world geometry we submit as XYZ.
- * Range comes from the light's own fallend, so the falloff is the game's rather
- * than a magic constant: the old path had ended up multiplying radiance by
- * 10000 to compensate for lights that were not there at all.
- */
-void D3D9Renderer::releaseRemixBuffers() {
-	if(m_remixVB) {
-		m_remixVB->Release();
-		m_remixVB = nullptr;
-	}
-	if(m_remixIB) {
-		m_remixIB->Release();
-		m_remixIB = nullptr;
-	}
-	m_remixVBBytes = 0;
-	m_remixIBBytes = 0;
-}
-
-bool D3D9Renderer::ensureRemixBuffers(unsigned int vertexBytes, unsigned int indexBytes) {
-	
-	if(!m_device || vertexBytes == 0 || indexBytes == 0) {
-		return false;
-	}
-	
-	// Grow with headroom so a room that creeps up in size does not reallocate
-	// every frame.
-	if(!m_remixVB || m_remixVBBytes < vertexBytes) {
-		if(m_remixVB) {
-			m_remixVB->Release();
-			m_remixVB = nullptr;
-		}
-		const UINT bytes = std::max(vertexBytes * 2, UINT(64 * 1024));
-		if(FAILED(m_device->CreateVertexBuffer(bytes, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY,
-		                                       kWorldFVF, D3DPOOL_DEFAULT, &m_remixVB, nullptr))) {
-			m_remixVB = nullptr;
-			return false;
-		}
-		m_remixVBBytes = bytes;
-	}
-	
-	if(!m_remixIB || m_remixIBBytes < indexBytes) {
-		if(m_remixIB) {
-			m_remixIB->Release();
-			m_remixIB = nullptr;
-		}
-		const UINT bytes = std::max(indexBytes * 2, UINT(16 * 1024));
-		if(FAILED(m_device->CreateIndexBuffer(bytes, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY,
-		                                      D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_remixIB, nullptr))) {
-			m_remixIB = nullptr;
-			return false;
-		}
-		m_remixIBBytes = bytes;
-	}
-	
-	return true;
-}
-
-void D3D9Renderer::applyRemixLights() {
-	
-#if ARX_HAVE_RTX_REMIX
-	if(!m_device || !remix::isRemixDllHooked()) {
-		return;
-	}
-	
-	remix::SceneLight lights[kMaxSceneLights];
-	const size_t limit = (std::min)(size_t(m_maxLights), size_t(kMaxSceneLights));
-	const size_t count = remix::collectSceneLights(lights, limit);
-	
-	for(size_t i = 0; i < count; i++) {
-		const remix::SceneLight & src = lights[i];
-		const float scale = std::max(src.intensity, 0.f);
-		
-		D3DLIGHT9 light {};
-		light.Type = D3DLIGHT_POINT;
-		light.Diffuse.r = src.rgb.r * scale;
-		light.Diffuse.g = src.rgb.g * scale;
-		light.Diffuse.b = src.rgb.b * scale;
-		light.Diffuse.a = 1.f;
-		light.Specular = light.Diffuse;
-		light.Position.x = src.pos.x;
-		light.Position.y = src.pos.y;
-		light.Position.z = src.pos.z;
-		light.Range = std::max(src.fallend, 1.f);
-		// Arx fades between fallstart and fallend; a quadratic term over that
-		// span is the closest fixed-function equivalent.
-		const float fade = std::max(src.fallend - src.fallstart, 1.f);
-		light.Attenuation0 = 0.f;
-		light.Attenuation1 = 0.f;
-		light.Attenuation2 = 1.f / (fade * fade);
-		
-		m_device->SetLight(DWORD(i), &light);
-		m_device->LightEnable(DWORD(i), TRUE);
-	}
-	
-	for(size_t i = count; i < limit; i++) {
-		m_device->LightEnable(DWORD(i), FALSE);
-	}
-#endif
 }
 
 void D3D9Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clearDepth,
@@ -2501,23 +1785,6 @@ void D3D9Renderer::drawTextured(Primitive primitive, const TexturedVertex * vert
 	}
 	flushDeviceState();
 	
-	/*
-	 * Only take the world path for geometry the engine converted for us. What is
-	 * left in screen space - sprites, sparks, flames from EERIECreateSprite() -
-	 * is a camera-facing quad built from a projected position and a pixel size.
-	 * There is no world orientation in it to recover here, so it stays a 2D
-	 * overlay rather than being reconstructed and made to shimmer.
-	 *
-	 * EERIECreateSprite() can build those quads in world space instead, where
-	 * the world position is still in hand, under --remix-debug 131072. Then they
-	 * arrive marked and take this path like anything else.
-	 */
-	if(remixWantsWorldSpace() && isWorldSpaceW(vertices[0].w)) {
-		if(drawUnprojectedTL(primitive, vertices, count, nullptr, 0)) {
-			return;
-		}
-	}
-	
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd, m_fogColor };
 	
 	if(isTrianglePrimitive(primitive)) {
@@ -2589,23 +1856,6 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX * ver
 		return;
 	}
 	
-	if(remixWantsWorldSpace()) {
-		thread_local std::vector<WorldVertex> worldVerts;
-		worldVerts.resize(count);
-		for(size_t i = 0; i < count; ++i) {
-			worldVerts[i] = toWorldVertex(vertices[i]);
-		}
-		if(primitive == Renderer::TriangleList) {
-			computeSmoothNormals(worldVerts.data(), count, nullptr, 0);
-		}
-		logWorldSpaceSubmit(count, false);
-		g_worldStats.draws++;
-		g_worldStats.emitted += count;
-		m_device->SetFVF(kWorldFVF);
-		m_device->DrawPrimitiveUP(toD3DPrimitive(primitive), prims, worldVerts.data(), sizeof(WorldVertex));
-		return;
-	}
-	
 	thread_local std::vector<TLVertex> converted;
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd, m_fogColor };
 	if(isTrianglePrimitive(primitive)) {
@@ -2642,23 +1892,6 @@ void D3D9Renderer::drawWorldVertices(Primitive primitive, const SMY_VERTEX3 * ve
 	}
 	if(!beginWorldDraw()) {
 		logDrawSkip("drawWorldVertices", "BeginScene failed");
-		return;
-	}
-	
-	if(remixWantsWorldSpace()) {
-		thread_local std::vector<WorldVertex3> worldVerts;
-		worldVerts.resize(count);
-		for(size_t i = 0; i < count; ++i) {
-			worldVerts[i] = toWorldVertex3(vertices[i]);
-		}
-		if(primitive == Renderer::TriangleList) {
-			computeSmoothNormals(worldVerts.data(), count, nullptr, 0);
-		}
-		logWorldSpaceSubmit(count, false);
-		g_worldStats.draws++;
-		g_worldStats.emitted += count;
-		m_device->SetFVF(kWorld3FVF);
-		m_device->DrawPrimitiveUP(toD3DPrimitive(primitive), prims, worldVerts.data(), sizeof(WorldVertex3));
 		return;
 	}
 	
@@ -2702,55 +1935,6 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX * vert
 		return;
 	}
 	
-	if(remixWantsWorldSpace()) {
-		const UINT vertexBytes = UINT(nvertices * sizeof(WorldVertex));
-		const UINT indexBytes = UINT(nindices * sizeof(unsigned short));
-		thread_local std::vector<WorldVertex> worldVerts;
-		worldVerts.resize(nvertices);
-		for(size_t i = 0; i < nvertices; ++i) {
-			worldVerts[i] = toWorldVertex(vertices[i]);
-		}
-		if(primitive == Renderer::TriangleList) {
-			computeSmoothNormals(worldVerts.data(), nvertices, indices, nindices);
-		}
-		/*
-		 * Through real buffers, not DrawIndexedPrimitiveUP. Remix's geometry
-		 * capture appears to only see draws with bound buffers: with UP draws
-		 * its scene stayed empty - Total Lights 0, capture wrote no USD, and
-		 * toggling ray tracing changed nothing - even though the bound textures
-		 * were registered and the camera was accepted.
-		 */
-		if(ensureRemixBuffers(vertexBytes, indexBytes)) {
-			void * dst = nullptr;
-			bool filled = false;
-			if(SUCCEEDED(m_remixVB->Lock(0, vertexBytes, &dst, D3DLOCK_DISCARD)) && dst) {
-				std::memcpy(dst, worldVerts.data(), vertexBytes);
-				m_remixVB->Unlock();
-				filled = true;
-			}
-			if(filled && SUCCEEDED(m_remixIB->Lock(0, indexBytes, &dst, D3DLOCK_DISCARD)) && dst) {
-				std::memcpy(dst, indices, indexBytes);
-				m_remixIB->Unlock();
-				logWorldSpaceSubmit(nvertices, true);
-				g_worldStats.draws++;
-				g_worldStats.emitted += nindices;
-				m_device->SetFVF(kWorldFVF);
-				m_device->SetStreamSource(0, m_remixVB, 0, sizeof(WorldVertex));
-				m_device->SetIndices(m_remixIB);
-				m_device->DrawIndexedPrimitive(toD3DPrimitive(primitive), 0, 0, UINT(nvertices),
-				                               0, prims);
-				return;
-			}
-		}
-		logWorldSpaceSubmit(nvertices, true);
-		g_worldStats.draws++;
-		g_worldStats.emitted += nindices;
-		m_device->SetFVF(kWorldFVF);
-		m_device->DrawIndexedPrimitiveUP(toD3DPrimitive(primitive), 0, UINT(nvertices), prims,
-		                                 indices, D3DFMT_INDEX16, worldVerts.data(), sizeof(WorldVertex));
-		return;
-	}
-	
 	thread_local std::vector<TLVertex> converted;
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd, m_fogColor };
 	if(isTrianglePrimitive(primitive)) {
@@ -2782,24 +1966,6 @@ void D3D9Renderer::drawWorldIndexed(Primitive primitive, const SMY_VERTEX3 * ver
 	}
 	if(!beginWorldDraw()) {
 		logDrawSkip("drawWorldIndexed", "BeginScene failed");
-		return;
-	}
-	
-	if(remixWantsWorldSpace()) {
-		thread_local std::vector<WorldVertex3> worldVerts;
-		worldVerts.resize(nvertices);
-		for(size_t i = 0; i < nvertices; ++i) {
-			worldVerts[i] = toWorldVertex3(vertices[i]);
-		}
-		if(primitive == Renderer::TriangleList) {
-			computeSmoothNormals(worldVerts.data(), nvertices, indices, nindices);
-		}
-		logWorldSpaceSubmit(nvertices, true);
-		g_worldStats.draws++;
-		g_worldStats.emitted += nindices;
-		m_device->SetFVF(kWorld3FVF);
-		m_device->DrawIndexedPrimitiveUP(toD3DPrimitive(primitive), 0, UINT(nvertices), prims,
-		                                 indices, D3DFMT_INDEX16, worldVerts.data(), sizeof(WorldVertex3));
 		return;
 	}
 	
@@ -2844,23 +2010,6 @@ void D3D9Renderer::drawIndexed(Primitive primitive, const TexturedVertex * verti
 		return;
 	}
 	flushDeviceState();
-	
-	/*
-	 * Only take the world path for geometry the engine converted for us. What is
-	 * left in screen space - sprites, sparks, flames from EERIECreateSprite() -
-	 * is a camera-facing quad built from a projected position and a pixel size.
-	 * There is no world orientation in it to recover here, so it stays a 2D
-	 * overlay rather than being reconstructed and made to shimmer.
-	 *
-	 * EERIECreateSprite() can build those quads in world space instead, where
-	 * the world position is still in hand, under --remix-debug 131072. Then they
-	 * arrive marked and take this path like anything else.
-	 */
-	if(remixWantsWorldSpace() && isWorldSpaceW(vertices[0].w)) {
-		if(drawUnprojectedTL(primitive, vertices, nvertices, indices, nindices)) {
-			return;
-		}
-	}
 	
 	thread_local std::vector<TLVertex> converted;
 	const VertexFog fog{ m_state.getFog(), m_fogStart, m_fogEnd, m_fogColor };
@@ -2991,9 +2140,6 @@ void D3D9Renderer::showFrame() {
 	}
 	g_tlFrameStats = TLFrameStats();
 	g_collectStats = (worldSamples < 24) || (tlSamples < 24) || (cineLikeSamples < 12);
-#if ARX_HAVE_RTX_REMIX
-	remix::tickDllHookFrame();
-#endif
 	if(m_inScene) {
 		m_device->EndScene();
 		m_inScene = false;

@@ -28,13 +28,6 @@
 #include "platform/Platform.h"
 #include "platform/PlatformConfig.h"
 
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixScene.h"
-#if ARX_PLATFORM == ARX_PLATFORM_WIN32
-#include <windows.h>
-#endif
-#endif
-
 static Keyboard::Key sdlToArxKey[SDL_NUM_SCANCODES];
 
 static Mouse::Button sdlToArxButton[10];
@@ -321,147 +314,6 @@ SDL2InputBackend::SDL2InputBackend(SDL2Window * window)
 	
 }
 
-#if ARX_HAVE_RTX_REMIX && ARX_PLATFORM == ARX_PLATFORM_WIN32
-/*
- * Remix subclasses the HWND and swallows WM_KEYDOWN/KEYUP. SDL mouse motion
- * still arrives; the keyboard does not. Poll the OS key state and write it
- * into keyStates. This is the source of truth while Remix is live — do not
- * merge with SDL, or a KEYDOWN that never got a KEYUP sticks forever.
- */
-static Keyboard::Key vkToArxKey(int vk) {
-	
-	if(vk >= 'A' && vk <= 'Z') {
-		return Keyboard::Key(Keyboard::Key_A + (vk - 'A'));
-	}
-	if(vk >= '0' && vk <= '9') {
-		return Keyboard::Key(Keyboard::Key_0 + (vk - '0'));
-	}
-	if(vk >= VK_F1 && vk <= VK_F24) {
-		return Keyboard::Key(Keyboard::Key_F1 + (vk - VK_F1));
-	}
-	if(vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) {
-		return Keyboard::Key(Keyboard::Key_NumPad0 + (vk - VK_NUMPAD0));
-	}
-	
-	switch(vk) {
-		case VK_ESCAPE:     return Keyboard::Key_Escape;
-		case VK_SPACE:      return Keyboard::Key_Spacebar;
-		case VK_TAB:        return Keyboard::Key_Tab;
-		case VK_RETURN:     return Keyboard::Key_Enter;
-		case VK_BACK:       return Keyboard::Key_Backspace;
-		case VK_LSHIFT:     return Keyboard::Key_LeftShift;
-		case VK_RSHIFT:     return Keyboard::Key_RightShift;
-		case VK_LCONTROL:   return Keyboard::Key_LeftCtrl;
-		case VK_RCONTROL:   return Keyboard::Key_RightCtrl;
-		case VK_LMENU:      return Keyboard::Key_LeftAlt;
-		case VK_RMENU:      return Keyboard::Key_RightAlt;
-		case VK_LEFT:       return Keyboard::Key_LeftArrow;
-		case VK_RIGHT:      return Keyboard::Key_RightArrow;
-		case VK_UP:         return Keyboard::Key_UpArrow;
-		case VK_DOWN:       return Keyboard::Key_DownArrow;
-		case VK_INSERT:     return Keyboard::Key_Insert;
-		case VK_DELETE:     return Keyboard::Key_Delete;
-		case VK_HOME:       return Keyboard::Key_Home;
-		case VK_END:        return Keyboard::Key_End;
-		case VK_PRIOR:      return Keyboard::Key_PageUp;
-		case VK_NEXT:       return Keyboard::Key_PageDown;
-		case VK_ADD:        return Keyboard::Key_NumAdd;
-		case VK_SUBTRACT:   return Keyboard::Key_NumSubtract;
-		case VK_MULTIPLY:   return Keyboard::Key_NumMultiply;
-		case VK_DIVIDE:     return Keyboard::Key_NumDivide;
-		case VK_DECIMAL:    return Keyboard::Key_NumPoint;
-		case VK_OEM_1:      return Keyboard::Key_Semicolon;
-		case VK_OEM_PLUS:   return Keyboard::Key_Equals;
-		case VK_OEM_COMMA:  return Keyboard::Key_Comma;
-		case VK_OEM_MINUS:  return Keyboard::Key_Minus;
-		case VK_OEM_PERIOD: return Keyboard::Key_Period;
-		case VK_OEM_2:      return Keyboard::Key_Slash;
-		case VK_OEM_3:      return Keyboard::Key_Grave;
-		case VK_OEM_4:      return Keyboard::Key_LeftBracket;
-		case VK_OEM_5:      return Keyboard::Key_Backslash;
-		case VK_OEM_6:      return Keyboard::Key_RightBracket;
-		case VK_OEM_7:      return Keyboard::Key_Apostrophe;
-		case VK_CAPITAL:    return Keyboard::Key_CapsLock;
-		case VK_NUMLOCK:    return Keyboard::Key_NumLock;
-		case VK_SCROLL:     return Keyboard::Key_ScrollLock;
-		case VK_PAUSE:      return Keyboard::Key_Pause;
-		case VK_SNAPSHOT:   return Keyboard::Key_PrintScreen;
-		case VK_LWIN:       return Keyboard::Key_LeftWin;
-		case VK_RWIN:       return Keyboard::Key_RightWin;
-		case VK_APPS:       return Keyboard::Key_Apps;
-		default:            return Keyboard::Key_Invalid;
-	}
-	
-}
-
-static void syncRemixOsKeyboard(bool * keyStates) {
-	
-	if(!remix::isRemixDllHooked() && !remix::isRemixPreviewActive()) {
-		return;
-	}
-	
-	std::fill_n(keyStates, Keyboard::KeyCount, false);
-	
-	auto apply = [&](int vk) {
-		const Keyboard::Key key = vkToArxKey(vk);
-		if(key == Keyboard::Key_Invalid) {
-			return;
-		}
-		if(GetAsyncKeyState(vk) & 0x8000) {
-			keyStates[key - Keyboard::KeyBase] = true;
-		}
-	};
-	
-	for(int vk = 'A'; vk <= 'Z'; ++vk) {
-		apply(vk);
-	}
-	for(int vk = '0'; vk <= '9'; ++vk) {
-		apply(vk);
-	}
-	for(int vk = VK_F1; vk <= VK_F24; ++vk) {
-		apply(vk);
-	}
-	for(int vk = VK_NUMPAD0; vk <= VK_NUMPAD9; ++vk) {
-		apply(vk);
-	}
-	
-	static const int kNamed[] = {
-		VK_ESCAPE, VK_SPACE, VK_TAB, VK_RETURN, VK_BACK,
-		VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU,
-		VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
-		VK_INSERT, VK_DELETE, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
-		VK_ADD, VK_SUBTRACT, VK_MULTIPLY, VK_DIVIDE, VK_DECIMAL,
-		VK_OEM_1, VK_OEM_PLUS, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
-		VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
-		VK_CAPITAL, VK_NUMLOCK, VK_SCROLL, VK_PAUSE, VK_SNAPSHOT,
-		VK_LWIN, VK_RWIN, VK_APPS
-	};
-	for(int vk : kNamed) {
-		apply(vk);
-	}
-	
-	// Generic Shift/Ctrl/Alt in case the left/right variants are not reported.
-	if(GetAsyncKeyState(VK_SHIFT) & 0x8000) {
-		if(!keyStates[Keyboard::Key_LeftShift - Keyboard::KeyBase]
-		   && !keyStates[Keyboard::Key_RightShift - Keyboard::KeyBase]) {
-			keyStates[Keyboard::Key_LeftShift - Keyboard::KeyBase] = true;
-		}
-	}
-	if(GetAsyncKeyState(VK_CONTROL) & 0x8000) {
-		if(!keyStates[Keyboard::Key_LeftCtrl - Keyboard::KeyBase]
-		   && !keyStates[Keyboard::Key_RightCtrl - Keyboard::KeyBase]) {
-			keyStates[Keyboard::Key_LeftCtrl - Keyboard::KeyBase] = true;
-		}
-	}
-	if(GetAsyncKeyState(VK_MENU) & 0x8000) {
-		if(!keyStates[Keyboard::Key_LeftAlt - Keyboard::KeyBase]
-		   && !keyStates[Keyboard::Key_RightAlt - Keyboard::KeyBase]) {
-			keyStates[Keyboard::Key_LeftAlt - Keyboard::KeyBase] = true;
-		}
-	}
-}
-#endif
-
 bool SDL2InputBackend::update() {
 	
 	currentWheel = wheel;
@@ -476,9 +328,6 @@ bool SDL2InputBackend::update() {
 	std::fill_n(clickCount, std::size(clickCount), 0);
 	std::fill_n(unclickCount, std::size(unclickCount), 0);
 	
-#if ARX_HAVE_RTX_REMIX && ARX_PLATFORM == ARX_PLATFORM_WIN32
-	syncRemixOsKeyboard(keyStates);
-#endif
 	
 	return true;
 }

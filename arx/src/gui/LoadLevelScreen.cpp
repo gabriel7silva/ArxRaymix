@@ -33,10 +33,6 @@
 #include "graphics/data/TextureContainer.h"
 #include "window/RenderWindow.h"
 
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixScene.h"
-#endif
-
 static float PROGRESS_BAR_TOTAL = 0;
 static float PROGRESS_BAR_COUNT = 0;
 static float OLD_PROGRESS_BAR_COUNT = 0;
@@ -75,9 +71,6 @@ void LoadLevelScreen(AreaId area ) {
 	PlatformInstant now = platform::getTime();
 	if(now - last_progress_bar_update > 16ms && OLD_PROGRESS_BAR_COUNT != PROGRESS_BAR_COUNT) {
 		
-#if ARX_HAVE_RTX_REMIX
-		remix::notifyOverlayFrame();
-#endif
 		
 		UseTextureState textureState(TextureStage::FilterLinear, TextureStage::WrapClamp);
 		
@@ -111,13 +104,6 @@ void LoadLevelScreen(AreaId area ) {
 			
 			Vec2f pos = Vec2f(g_size.center());
 			pos += -size * 0.5f;
-#if ARX_HAVE_RTX_REMIX
-			if(remix::isRemixPreviewActive() && size.x > 0.f && size.y > 0.f) {
-				const float fit = std::min(float(g_size.width()) / size.x, float(g_size.height()) / size.y);
-				size *= fit;
-				pos = Vec2f(g_size.center()) - size * 0.5f;
-			}
-#endif
 			
 			EERIEDrawBitmap(Rectf(pos, size.x, size.y), 0.001f, g_loadingScreenImage, Color::white);
 			

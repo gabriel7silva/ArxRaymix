@@ -20,7 +20,7 @@ Inglês: [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 | `scripts/fetch-streamline.ps1` | Obtém o SDK NVIDIA Streamline uma vez |
 | `scripts/Find-ArxFatalis.ps1` | Procura Steam / GOG, sem caminhos fixos |
 
-`arx/src/graphics/remix/` é leftover e não entra no binário de produto. Não começar path tracing de vários saltos (Phase 6 arquivada).
+A camada RTX Remix foi apagada. Não a reavivar. Não começar path tracing de vários saltos (Phase 6 arquivada).
 
 ## Compilar e correr
 
