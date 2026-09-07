@@ -25,10 +25,13 @@ public:
 		ID3D12Resource * color = nullptr;
 		ID3D12Resource * colorOut = nullptr;
 		ID3D12Resource * depth = nullptr;
-		//! Pre-DXR raster (colorCopy). RR albedo — must not be the lit beauty.
+		//! Pre-DXR raster (colorCopy). Lit beauty — not tagged as RR albedo.
 		ID3D12Resource * albedoSrc = nullptr;
 		ID3D12Resource * waterMask = nullptr;
 		ID3D12Resource * metalMask = nullptr;
+		ID3D12Resource * waterDepth = nullptr;
+		//! True only if D3D12Rtao rasterised masks this frame and left them as SRVs.
+		bool masksReady = false;
 		glm::mat4x4 view = glm::mat4x4(1.f);
 		glm::mat4x4 proj = glm::mat4x4(1.f);
 		glm::vec3 cameraPos {};
@@ -70,8 +73,14 @@ public:
 	
 	//! cfg dxr_dlss (0 Off / 1 DLAA / 2–5 quality) → Streamline DLSSMode as int (0 = Off).
 	static int resolveDlssMode(int setting, int outputHeight);
+	//! True when Ultra Performance was demoted because outputH is below 1440p.
+	static bool wasDowngraded(int setting, int outputHeight);
+	static const char * dlssModeName(int slMode);
+	static int dlaaMode();
 	//! Optimal internal render size for a Streamline DLSSMode. Falls back to scale tables.
 	bool queryOptimalSize(int slMode, int outputW, int outputH, int & renderW, int & renderH) const;
+	//! Scene colour → colorOut when evaluate() cannot upscale.
+	bool blitSceneToOutput(const Frame & frame);
 	
 	//! After world raster + DXR, before particles / HUD. Restores nothing — caller
 	//! must restoreRasterBind() after this returns.
@@ -90,11 +99,23 @@ public:
 	void resize(int width, int height);
 	
 private:
+	enum TargetBits : unsigned {
+		kTargetMvec = 1u,
+		kTargetHudless = 2u,
+		kTargetHdrOut = 4u,
+		kTargetGbuffer = 8u
+	};
+	static constexpr unsigned kTargetFg = kTargetMvec | kTargetHudless;
+	static constexpr unsigned kTargetDlss = kTargetFg | kTargetHdrOut;
+	static constexpr unsigned kTargetRr = kTargetDlss | kTargetGbuffer;
+	
 	bool loadLibrary();
-	bool ensureTargets(int inputW, int inputH, int outputW, int outputH);
+	bool ensureTargets(int inputW, int inputH, int outputW, int outputH, unsigned needed);
 	bool rasterGbuffers(const Frame & frame);
 	bool clearMotionVectors(const Frame & frame);
 	bool setConstants(const Frame & frame, void * token);
+	void commitCamera(const Frame & frame);
+	void resetState();
 	bool evaluateRr(const Frame & frame, void * token);
 	bool evaluateDlss(const Frame & frame, void * token);
 	bool tonemapToBackbuffer(const Frame & frame);
@@ -124,12 +145,24 @@ private:
 	bool m_constantsSet = false;
 	bool m_firstFrame = true;
 	bool m_loggedFg = false;
+	bool m_loggedUntagged = false;
+	bool m_targetsFailed = false;
 	void * m_token = nullptr;
 	int m_inW = 0;
 	int m_inH = 0;
 	int m_outW = 0;
 	int m_outH = 0;
+	unsigned m_targetSet = 0;
+	mutable int m_optMode = 0;
+	mutable int m_optOutW = 0;
+	mutable int m_optOutH = 0;
+	mutable int m_optInW = 0;
+	mutable int m_optInH = 0;
+	mutable bool m_optValid = false;
 	glm::mat4x4 m_prevViewProj = glm::mat4x4(1.f);
+	glm::mat4x4 m_invPrevViewProj = glm::mat4x4(1.f);
+	glm::mat4x4 m_viewProj = glm::mat4x4(1.f);
+	glm::mat4x4 m_invViewProj = glm::mat4x4(1.f);
 	
 	struct Gpu;
 	Gpu * m_gpu = nullptr;
