@@ -54,7 +54,7 @@ Applied immediately. Gray in the menu, and ignored from `cfg.ini`, when the hard
 | `dxr_fg` | Options → Video → Frame Generation | 0 Off, 1 On (2×). Only this toggle may turn FG on or off |
 | `dxr_rr` | Options → Ray tracing → Ray Reconstruction (experimental) | 0 Off, 1 On. Homemade denoise stays if NGX create fails |
 
-RT presets do not write `dxr_dlss`, `dxr_fg`, `dxr_rr`, or `dxr_distance`. `dxr_dlss` uses schema `dlss_schema=1` (old Auto / DLAA values migrate on load).
+RT presets do not write `dxr_dlss`, `dxr_fg`, or `dxr_distance`. They set `dxr_rr` to 0. `dxr_dlss` uses schema `dlss_schema=1` (old Auto / DLAA values migrate on load).
 
 Indirect lighting is one analytic bounce. There is no bounce-count key and no path-tracing key. Phase 6 is archived.
 

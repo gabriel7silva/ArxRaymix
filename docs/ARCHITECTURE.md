@@ -55,7 +55,7 @@ D3D9 is the historical Windows raster path, including CPU frustum clipping for `
 |---|---|
 | `cfg.ini` → `[video] renderer=` | Saved choice (`Direct3D 12` or `Direct3D 9`) |
 | `ARX_RENDERER` | Per-process override used by `scripts/run-d3d12.ps1` and `scripts/run-d3d9.ps1` |
-| Video Options slider | Writes and saves the choice; shows a restart notice when it differs from the live API |
+| Video Options | Disabled line shows the live API; the slider writes the next-launch choice; a restart notice appears when they differ |
 
 `runtime/user/` is a local user directory. It is not part of the public tree.
 

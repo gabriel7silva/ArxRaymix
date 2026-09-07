@@ -36,6 +36,13 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 
 `-DataDir '<caminho do Arx Fatalis>'` se a deteção falhar. Log: `runtime/user/arx.log`. Saia pelo menu.
 
+## Depuração
+
+- **Um sintoma de cada vez.** Prove no `runtime/user/arx.log` antes de empilhar hipóteses.
+- **`arx.exe --list-dirs`** mostra qual diretório de dados está em uso.
+- Não faça dual-boot de OpenGL no Windows a menos que essa seja a pergunta.
+- Não acrescente root constants de DXR (`kRootConstants` já está no limite de 64 DWORD). O `TMax` de distância fica no CBV `ViewParams`.
+
 ## Privacidade
 
 O repositório é público. Nunca commitar:

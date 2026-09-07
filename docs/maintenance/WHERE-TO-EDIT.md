@@ -227,7 +227,7 @@ scripts/run-d3d12.ps1
 scripts/run-d3d9.ps1
 ```
 
-Useful arguments: `--loadslot` to skip the menu into a save, `--loadlevel` to jump to a level, `--user-dir` to relocate settings and logs. Both scripts accept `-DataDir` if detection fails.
+Both scripts accept `-Config`, `-DataDir` and `-LoadLevel`. Other flags (`--loadslot`, `--user-dir`, …) require invoking `arx.exe` directly.
 
 **Quit through the menu.** It shuts down cleanly and finishes the log.
 

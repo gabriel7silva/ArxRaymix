@@ -76,6 +76,10 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 
 No jogo: **Opções → Vídeo**. A primeira linha é a API da sessão (`Graphics API: DirectX 12` ou `Graphics API: DirectX 9`). O seletor grava a API da **próxima** inicialização e avisa quando é preciso reiniciar. **Aplicar** salva resolução e ecrã inteiro; não recria o dispositivo para trocar de API.
 
+**Opções → Ray tracing** tem um preset e seletores por efeito (AO, sombras, luz indireta, reflexos de água / metal, denoise, contacto, debris, transparência) e **Distância do ray tracing**. Aplicam na hora, sem reiniciar. A página diz isso em vez de oferecer controlos mortos quando a GPU não tem DXR. As chaves estão em [`CONFIGURATION.md`](CONFIGURATION.md).
+
+**Opções → Vídeo** também tem **Upscaling** (DLSS) e **Frame Generation**. **Opções → Render → Distância do render** é o plano longe.
+
 Saia pelo **menu**.
 
 ## Documentação
