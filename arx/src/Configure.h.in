@@ -53,7 +53,6 @@
 #cmakedefine01 ARX_HAVE_GLX
 #cmakedefine01 ARX_HAVE_EGL
 #cmakedefine01 ARX_HAVE_GL_STATIC
-#cmakedefine01 ARX_HAVE_RTX_REMIX
 #cmakedefine01 ARX_HAVE_D3D9
 #cmakedefine01 ARX_HAVE_D3D12
 #cmakedefine01 ARX_HAVE_STREAMLINE

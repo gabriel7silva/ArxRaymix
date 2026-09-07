@@ -19,7 +19,7 @@ English is the default for file names, folders, comments, and documentation. Por
 | `scripts/fetch-streamline.ps1` | Fetch the NVIDIA Streamline SDK once |
 | `scripts/Find-ArxFatalis.ps1` | Steam / GOG lookup, no hard-coded paths |
 
-`arx/src/graphics/remix/` is leftover and is not compiled in. Do not revive it in the product docs or the default launch path. Do not start path-traced multi-bounce (Phase 6 is archived).
+The RTX Remix layer was deleted. Do not revive it. Do not start path-traced multi-bounce (Phase 6 is archived).
 
 Everything else under `arx/` is Arx Libertatis; [UPSTREAM.md](UPSTREAM.md) lists what diverged.
 

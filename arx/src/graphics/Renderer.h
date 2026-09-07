@@ -435,18 +435,6 @@ public:
 	//! True when Streamline loaded and DLSS Frame Generation + Reflex are supported.
 	[[nodiscard]] virtual bool supportsDlssG() const { return false; }
 	
-	/*!
-	 * Whether entity geometry should be handed over untransformed, in world
-	 * space, instead of the engine's software-transformed screen coordinates.
-	 *
-	 * A path tracer needs real world positions. Recovering them by inverting the
-	 * projection is lossy - the reconstruction jitters frame to frame wherever w
-	 * is small, and camera-facing quads built in screen space have no world
-	 * orientation left to recover. Backends that need world space say so here
-	 * and get TexturedVertex::p in world units with w set to 0.
-	 */
-	[[nodiscard]] virtual bool wantsWorldSpaceEntities() const { return false; }
-	
 	//! D3D9 texel-to-pixel (−0.5 in Draw.cpp). D3D10+/12 apply that shift in the VS instead.
 	[[nodiscard]] virtual bool needsHalfPixelOffset() const { return true; }
 	

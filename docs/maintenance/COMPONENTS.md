@@ -66,7 +66,6 @@ Two directories are absent from this table on purpose: `build/` and `runtime/` a
 | `dxr/` | Hybrid DXR (AO, shadows, one bounce, water / metal reflections) and Streamline (DLSS, FG, experimental RR), layered on the D3D12 raster. Phase 6 path tracing is archived — do not start it here | fork |
 | `d3d9/` | The Direct3D 9 raster backend, kept as a fallback and as a reference for comparing correctness | fork |
 | `opengl/` | The upstream renderer. The non-Windows path | upstream |
-| `remix/` | Dead. See below | dead |
 | `data/`, `effects/`, `font/`, `image/`, `particle/`, `spells/`, `texture/` | Upstream graphics subsystems: mesh and level data, screen effects, fonts, image codecs, particles, spell effects, texture management | upstream |
 
 ## Telling fork code from upstream
@@ -74,7 +73,7 @@ Two directories are absent from this table on purpose: `build/` and `runtime/` a
 Three signals, in order of reliability.
 
 1. **The directory.** `graphics/d3d12/`, `graphics/dxr/` and `graphics/d3d9/` are entirely the fork's.
-2. **The build guard.** Fork-only compilation is gated on `ARX_HAVE_D3D12`, `ARX_HAVE_D3D9` or `ARX_HAVE_RTX_REMIX`, declared in `arx/src/Configure.h.in`.
+2. **The build guard.** Fork-only compilation is gated on `ARX_HAVE_D3D12` or `ARX_HAVE_D3D9`, declared in `arx/src/Configure.h.in`.
 
    ```
    grep -rn "ARX_HAVE_D3D12" arx/src
@@ -86,7 +85,7 @@ Three signals, in order of reliability.
 These are not style preferences. Each one has a reason that will bite.
 
 - **Raster stays in `graphics/d3d12/`; ray work stays in `graphics/dxr/`.** The split is what lets the ray tracing be switched off entirely and leave a working renderer. Fog constants for the far plane live in `graphics/GlobalFog.{h,cpp}` (upstream file, fork-tuned).
-- **`graphics/dxr/` must not include Direct3D 9 or Remix headers.** It is a Direct3D 12 consumer only. Streamline lives in `D3D12Streamline.{h,cpp}` in this directory.
+- **`graphics/dxr/` must not include Direct3D 9 headers.** It is a Direct3D 12 consumer only. Streamline lives in `D3D12Streamline.{h,cpp}` in this directory.
 - **The Direct3D 12 sources compile outside the unity blob.** `d3d9.h` defines `interface` as a macro, which breaks unrelated translation units when they are concatenated together. The exclusion is in `arx/CMakeLists.txt`; adding a new D3D12 source means adding it to the same list, not to the general source list.
 
   ```
@@ -97,17 +96,15 @@ These are not style preferences. Each one has a reason that will bite.
 
 ## Dead code
 
-**`arx/src/graphics/remix/` and `arx/third_party/rtx-remix/` are dead. Never revive them.**
+**The RTX Remix layer was deleted.** `arx/src/graphics/remix/` and `arx/third_party/rtx-remix/` are gone. Do not recreate them, and do not introduce `toRemix`, `remix::`, or `ARX_HAVE_RTX_REMIX`.
 
-`ARX_HAVE_RTX_REMIX` is off, nothing links to them, and `docs/UPSTREAM.md` and `docs/CONTRIBUTING.md` both record them as leftovers. `toRemix` must not appear in new code. Nothing outside these directories references them:
+This grep must return no hits in compiled sources (the DXR README may still name `toRemix` in order to forbid it):
 
 ```
-grep -rn --include=*.cpp --include=*.h "toRemix" arx/src
+grep -rn --include=*.cpp --include=*.h -e "ARX_HAVE_RTX_REMIX" -e "graphics/remix" -e "remix::" arx/src
 ```
 
-Every hit should be inside `arx/src/graphics/remix/`. One outside it means the dead path has leaked into live code and should be removed. The search is restricted to sources on purpose: `arx/src/graphics/dxr/README.md` names `toRemix` in order to forbid it.
-
-The history of what Remix did is in `docs/UPSTREAM.md`. It is deliberately not repeated here, because a description of what it achieved is an invitation to revive it.
+Any hit is leftover coupling and should be removed. The history of what Remix did is in `docs/UPSTREAM.md`. It is deliberately not repeated here, because a description of what it achieved is an invitation to revive it.
 
 Two related prohibitions, for the same reason — they waste days and answer nothing:
 

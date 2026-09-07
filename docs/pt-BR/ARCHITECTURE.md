@@ -64,6 +64,6 @@ Phases 1–4 estão feitas. Phase 5 é DLSS + Frame Generation; Reconstrução d
 
 Para saber *por que* um valor é o que é, leia [`arx/src/graphics/dxr/README.md`](../../arx/src/graphics/dxr/README.md). Para onde as coisas ficam e o que quebra ao mudá-las, leia o [`docs/maintenance/`](../maintenance/README.md). As chaves estão em [`CONFIGURATION.md`](CONFIGURATION.md).
 
-## Fontes Remix antigas
+## Remix foi apagado
 
-`arx/src/graphics/remix/` e `arx/third_party/rtx-remix/` restam de um experimento. `ARX_HAVE_RTX_REMIX` não está ligado. Não é o caminho de lançamento.
+O experimento RTX Remix foi apagado. Não há `graphics/remix/`, nem `ARX_HAVE_RTX_REMIX`, nem o path D3D9 em espaço-mundo. Não o reavivar.

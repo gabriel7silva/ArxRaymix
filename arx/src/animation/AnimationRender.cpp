@@ -670,8 +670,6 @@ void DrawEERIEInter_Render(EERIE_3DOBJ * eobj, const TransformInfo & t, Entity *
 	
 	arx_assert(eobj->vertexColors.size() == eobj->vertexWorldPositions.size());
 	
-	const bool worldSpace = GRenderer->wantsWorldSpaceEntities();
-	
 	for(size_t i = 0; i < eobj->facelist.size(); i++) {
 		const EERIE_FACE & face = eobj->facelist[i];
 		
@@ -695,15 +693,8 @@ void DrawEERIEInter_Render(EERIE_3DOBJ * eobj, const TransformInfo & t, Entity *
 			
 			eobj->vertexColors[face.vid[n]] = ApplyLight(lights, lightsCount, position, normal, colorMod, diffuse);
 			
-			if(worldSpace) {
-				// w == 0 marks p as world space; see Renderer::wantsWorldSpaceEntities().
-				tvList[n].p = position;
-				tvList[n].w = 0.f;
-				tvList[n].normal = normal;
-			} else {
-				tvList[n].p = Vec3f(eobj->vertexClipPositions[face.vid[n]]);
-				tvList[n].w = eobj->vertexClipPositions[face.vid[n]].w;
-			}
+			tvList[n].p = Vec3f(eobj->vertexClipPositions[face.vid[n]]);
+			tvList[n].w = eobj->vertexClipPositions[face.vid[n]].w;
 			tvList[n].uv.x = face.u[n];
 			tvList[n].uv.y = face.v[n];
 			
@@ -1024,30 +1015,6 @@ static void Cedric_RenderObject(EERIE_3DOBJ * eobj, Skeleton * obj, Entity * io,
 		}
 	}
 	
-	const bool worldSpace = GRenderer->wantsWorldSpaceEntities();
-	
-	/*
-	 * Posed normals, for the path tracer.
-	 *
-	 * Cedric_ApplyLighting() derives these as quat * vertexlist[v].norm while it
-	 * shades, but throws them away, and vertexWorldPositions[].norm is not a
-	 * normal at all - its z is scratch space for the halo code. So rebuild them
-	 * here, the same way, once per object.
-	 */
-	thread_local std::vector<Vec3f> posedNormals;
-	if(worldSpace && obj) {
-		posedNormals.assign(eobj->vertexlist.size(), Vec3f(0.f, 1.f, 0.f));
-		for(VertexGroupId group : obj->bones.handles()) {
-			const glm::quat & quat = obj->bones[group].anim.quat;
-			for(VertexId vertex : eobj->m_boneVertices[group]) {
-				const size_t index = size_t(vertex.handleData());
-				if(index < posedNormals.size()) {
-					posedNormals[index] = quat * eobj->vertexlist[vertex].norm;
-				}
-			}
-		}
-	}
-	
 	for(size_t i = 0; i < eobj->facelist.size(); i++) {
 		const EERIE_FACE & face = eobj->facelist[i];
 		
@@ -1069,17 +1036,8 @@ static void Cedric_RenderObject(EERIE_3DOBJ * eobj, Skeleton * obj, Entity * io,
 		TexturedVertex * tvList = GetNewVertexList(pTex->m_modelBatch, face, invisibility, fTransp);
 		
 		for(size_t n = 0; n < 3; n++) {
-			if(worldSpace) {
-				// w == 0 marks p as world space; see Renderer::wantsWorldSpaceEntities().
-				tvList[n].p = eobj->vertexWorldPositions[face.vid[n]].v;
-				tvList[n].w = 0.f;
-				const size_t vi = size_t(face.vid[n].handleData());
-				tvList[n].normal = (vi < posedNormals.size()) ? posedNormals[vi]
-				                                             : eobj->vertexlist[face.vid[n]].norm;
-			} else {
-				tvList[n].p = Vec3f(eobj->vertexClipPositions[face.vid[n]]);
-				tvList[n].w = eobj->vertexClipPositions[face.vid[n]].w;
-			}
+			tvList[n].p = Vec3f(eobj->vertexClipPositions[face.vid[n]]);
+			tvList[n].w = eobj->vertexClipPositions[face.vid[n]].w;
 			tvList[n].uv = Vec2f(face.u[n], face.v[n]);
 			tvList[n].color = eobj->vertexColors[face.vid[n]];
 		}

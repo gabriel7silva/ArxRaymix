@@ -17,7 +17,6 @@
  * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #include <stddef.h>
 #include <string>
 #include <vector>
@@ -67,10 +66,6 @@
 #include "util/cmdline/CommandLine.h"
 
 #include "Configure.h"
-
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixProbe.h"
-#endif
 
 /*
  * Under macOS we want SDLmain to replace the entry point with its own.
@@ -166,21 +161,6 @@ int utf8_main(int argc, char ** argv) {
 		
 		profiler::initialize();
 		
-#if ARX_HAVE_RTX_REMIX
-		if(remix::probeRequested()) {
-			const ExitStatus probeStatus = remix::runProbe();
-			if(probeStatus == ExitFailure) {
-				LogCritical << "Remix probe failed";
-			} else {
-				LogInfo << "Remix probe finished successfully";
-			}
-			benchmark::shutdown();
-			Logger::shutdown();
-			CrashHandler::shutdown();
-			Random::shutdown();
-			return (probeStatus == ExitFailure) ? EXIT_FAILURE : EXIT_SUCCESS;
-		}
-#endif
 		
 		// 14: Start the game already!
 		LogInfo << "Starting " << arx_name << ' ' << arx_version;

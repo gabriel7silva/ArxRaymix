@@ -177,23 +177,8 @@ private:
 	void applyTransforms();
 	void applyFog();
 	[[nodiscard]] bool beginWorldDraw();
-	void submitRemixInjectionDummy();
 	void resetSwapchain();
-	//! Hand the frame's map lights to Remix as fixed-function D3D9 lights.
-	void applyRemixLights();
-	
-	//! Grow the Remix world buffers to fit; false if they could not be created.
-	bool ensureRemixBuffers(unsigned int vertexBytes, unsigned int indexBytes);
-	//! D3DPOOL_DEFAULT buffers must go before a device Reset.
-	void releaseRemixBuffers();
-	
-	//! True while the Remix dll is hooked: the path tracer needs real world
-	//! positions, so entities are handed over untransformed with w == 0.
-	[[nodiscard]] bool wantsWorldSpaceEntities() const override;
 	[[nodiscard]] const char * getGraphicsApiName() const override { return "DirectX 9"; }
-	
-	bool drawUnprojectedTL(Primitive primitive, const TexturedVertex * vertices, size_t nvertices,
-	                       const unsigned short * indices, size_t nindices);
 	
 	IDirect3D9 * m_d3d = nullptr;
 	IDirect3DDevice9 * m_device = nullptr;
@@ -218,26 +203,8 @@ private:
 	bool m_requirePow2Textures = false;
 	unsigned m_maxTextureSize = 4096;
 	std::vector<D3D9Texture *> m_liveTextures;
-	//! D3DCAPS9::MaxActiveLights, clamped. Every map light past this one is
-	//! simply absent from the traced scene. See applyRemixLights().
-	unsigned m_maxLights = 8;
 	RenderState m_appliedState;
 	bool m_appliedStateValid = false;
-	bool m_remixDummyThisScene = false;
-	
-	/*
-	 * Real vertex/index buffers for the world mesh under Remix.
-	 *
-	 * Everything else here draws with DrawPrimitiveUP. Remix registers the bound
-	 * textures from those (they show up in Categorize Textures) but its scene
-	 * stayed empty - no lights, capture wrote nothing, toggling ray tracing
-	 * changed no pixel. User-pointer draws are a separate path in DXVK, so the
-	 * suspicion is that they never reach the RTX geometry capture.
-	 */
-	IDirect3DVertexBuffer9 * m_remixVB = nullptr;
-	IDirect3DIndexBuffer9 * m_remixIB = nullptr;
-	unsigned int m_remixVBBytes = 0;
-	unsigned int m_remixIBBytes = 0;
 };
 
 #endif // ARX_HAVE_D3D9

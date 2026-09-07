@@ -103,9 +103,6 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/font/Font.h"
 #include "graphics/opengl/GLDebug.h"
 #include "Configure.h"
-#if ARX_HAVE_RTX_REMIX
-#include "graphics/remix/RemixScene.h"
-#endif
 #include "graphics/particle/ParticleEffects.h"
 #include "graphics/particle/ParticleManager.h"
 #include "graphics/particle/MagicFlare.h"
@@ -512,7 +509,6 @@ TextureContainer * enviro = nullptr;
 TextureContainer * ombrignon = nullptr;
 TextureContainer * arx_logo_tc = nullptr;
 
-
 static void LoadSysTextures() {
 	
 	MagicFlareLoadTextures();
@@ -624,9 +620,6 @@ static bool HandleGameFlowTransitions() {
 			TRANSITION_START = g_platformTime.frameStart();
 		}
 
-#if ARX_HAVE_RTX_REMIX
-		remix::notifyOverlayFrame();
-#endif
 		ARX_INTERFACE_ShowFISHTANK();
 		
 		PlatformDuration elapsed = g_platformTime.frameStart() - TRANSITION_START;
@@ -653,9 +646,6 @@ static bool HandleGameFlowTransitions() {
 			ARX_SOUND_PlayInterface(g_snd.PLAYER_HEART_BEAT);
 		}
 
-#if ARX_HAVE_RTX_REMIX
-		remix::notifyOverlayFrame();
-#endif
 		ARX_INTERFACE_ShowARKANE();
 		
 		PlatformDuration elapsed = g_platformTime.frameStart() - TRANSITION_START;
@@ -949,13 +939,6 @@ void ArxGame::shutdown() {
 	if(m_gameInitialized)
 		shutdownGame();
 	
-#if ARX_HAVE_RTX_REMIX
-	if(remix::isRemixDllHooked() || remix::isRemixPreviewActive()) {
-		LogInfo << "Clean shutdown";
-		remix::exitWithoutDestroyingHwnd(0);
-	}
-#endif
-	
 	Application::shutdown();
 	
 	LogInfo << "Clean shutdown";
@@ -965,12 +948,7 @@ void ArxGame::shutdownGame() {
 	
 	ARX_Menu_Resources_Release();
 	
-#if ARX_HAVE_RTX_REMIX
-	if(!remix::isRemixDllHooked() && !remix::isRemixPreviewActive())
-#endif
-	{
-		mainApp->getWindow()->hide();
-	}
+	mainApp->getWindow()->hide();
 	
 	Menu2_Close();
 	DanaeClearLevel();
@@ -1103,12 +1081,7 @@ void ArxGame::run() {
 		
 		platform::reapZombies();
 		
-#if ARX_HAVE_RTX_REMIX
-		const bool remixPlaying = remix::isRemixDllHooked() || remix::isRemixPreviewActive();
-#else
-		const bool remixPlaying = false;
-#endif
-		if(((m_MainWindow->isVisible() && !m_MainWindow->isMinimized()) || remixPlaying) && m_bReady) {
+		if(m_MainWindow->isVisible() && !m_MainWindow->isMinimized() && m_bReady) {
 			doFrame();
 			m_MainWindow->processEvents(/*waitForEvent = */false);
 		} else {
@@ -1697,7 +1670,6 @@ void ArxGame::updateLevel() {
 	g_miniMap.setActiveBackground(g_tiles);
 	g_miniMap.validatePlayerPos(g_currentArea, BLOCK_PLAYER_CONTROLS, g_playerBook.currentPage());
 
-
 	if(entities.player()->animlayer[0].cur_anim) {
 		ManageNONCombatModeAnimations();
 		
@@ -1822,9 +1794,6 @@ void ArxGame::renderLevel() {
 	
 	ARX_PROFILE_FUNC();
 	
-#if ARX_HAVE_RTX_REMIX
-	remix::notifyLevelRendered();
-#endif
 	
 	// A black frame during dialogue looks the same as a broken raster, so record
 	// where the camera actually is while the level is being drawn.
@@ -2080,9 +2049,6 @@ void ArxGame::render() {
 
 	LastMouseClick = EERIEMouseButton;
 	
-#if ARX_HAVE_RTX_REMIX
-	remix::tick();
-#endif
 	
 	gldebug::endFrame();
 }
