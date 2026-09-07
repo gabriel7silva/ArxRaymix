@@ -1,5 +1,5 @@
 /*
- * Arx Raymix — Streamline manual hook (DLSS / DLSS-RR, no silent fallback).
+ * Arx Raymix — Streamline manual hook (DLSS / DLSS-G / Reflex, no silent fallback).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -41,6 +41,9 @@
 	if(!s_##func) return sl::Result::eErrorNotInitialized;
 #include <sl_dlss.h>
 #include <sl_dlss_d.h>
+#include <sl_dlss_g.h>
+#include <sl_reflex.h>
+#include <sl_pcl.h>
 
 #endif
 
@@ -61,6 +64,7 @@ using PFun_slSetConstants = sl::Result(const sl::Constants &, const sl::FrameTok
 using PFun_slGetNewFrameToken = sl::Result(sl::FrameToken *&, const uint32_t *);
 using PFun_slGetFeatureFunction = sl::Result(sl::Feature, const char *, void *&);
 using PFun_slFreeResources = sl::Result(sl::Feature, const sl::ViewportHandle &);
+using PFun_slUpgradeInterface = sl::Result(void **);
 
 PFun_slInit * pslInit = nullptr;
 PFun_slShutdown * pslShutdown = nullptr;
@@ -72,6 +76,7 @@ PFun_slSetConstants * pslSetConstants = nullptr;
 PFun_slGetNewFrameToken * pslGetNewFrameToken = nullptr;
 PFun_slGetFeatureFunction * pslGetFeatureFunction = nullptr;
 PFun_slFreeResources * pslFreeResources = nullptr;
+PFun_slUpgradeInterface * pslUpgradeInterface = nullptr;
 
 const char * resultName(sl::Result r) {
 	switch(r) {
@@ -142,11 +147,17 @@ const char * kGbuffer = R"(
 cbuffer Cb : register(b0) {
 	float4x4 invViewProj;
 	float4x4 prevViewProj;
+	float4x4 view;
 	float2 renderSize;
 	float2 jitterNdc;
+	float3 cameraPos;
+	float hasMasks;
 };
 Texture2D colorTex : register(t0);
 Texture2D depthTex : register(t1);
+Texture2D albedoTex : register(t2);
+Texture2D waterTex : register(t3);
+Texture2D metalTex : register(t4);
 struct PSOut {
 	float2 mvec : SV_Target0;
 	float4 nrmR : SV_Target1;
@@ -159,6 +170,30 @@ float4 VSMain(uint id : SV_VertexID) : SV_Position {
 	float2 uv = float2((id << 1) & 2, id & 2);
 	return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
 }
+float3 reconstructN(float3 world, float2 uv) {
+	int2 pix = int2(uv * renderSize);
+	float zL = depthTex.Load(int3(pix + int2(-1, 0), 0)).r;
+	float zR = depthTex.Load(int3(pix + int2(1, 0), 0)).r;
+	float zU = depthTex.Load(int3(pix + int2(0, -1), 0)).r;
+	float zD = depthTex.Load(int3(pix + int2(0, 1), 0)).r;
+	float zC = depthTex.Load(int3(pix, 0)).r;
+	int2 dH = (abs(zL - zC) < abs(zR - zC)) ? int2(-1, 0) : int2(1, 0);
+	int2 dV = (abs(zU - zC) < abs(zD - zC)) ? int2(0, -1) : int2(0, 1);
+	float zH = depthTex.Load(int3(pix + dH, 0)).r;
+	float zV = depthTex.Load(int3(pix + dV, 0)).r;
+	float2 uvH = uv + float2(dH) / renderSize;
+	float2 uvV = uv + float2(dV) / renderSize;
+	float4 wH = mul(invViewProj, float4(uvH.x * 2.0 - 1.0 - jitterNdc.x,
+	                                    1.0 - uvH.y * 2.0 - jitterNdc.y, zH, 1.0));
+	float4 wV = mul(invViewProj, float4(uvV.x * 2.0 - 1.0 - jitterNdc.x,
+	                                    1.0 - uvV.y * 2.0 - jitterNdc.y, zV, 1.0));
+	float3 n = normalize(cross(wH.xyz / max(wH.w, 1e-4) - world,
+	                           wV.xyz / max(wV.w, 1e-4) - world));
+	if(dot(n, cameraPos - world) < 0.0) {
+		n = -n;
+	}
+	return n;
+}
 PSOut PSMain(float4 pos : SV_Position) {
 	int2 pix = int2(pos.xy);
 	float z = depthTex.Load(int3(pix, 0)).r;
@@ -167,27 +202,37 @@ PSOut PSMain(float4 pos : SV_Position) {
 	float ndcY = 1.0 - uv.y * 2.0 - jitterNdc.y;
 	float4 worldH = mul(invViewProj, float4(ndcX, ndcY, z, 1.0));
 	float3 world = worldH.xyz / max(worldH.w, 1e-4);
-	float4 prevH = mul(prevViewProj, float4(world, 1.0));
-	float2 prevNdc = prevH.xy / max(prevH.w, 1e-4);
-	float3 srgb = colorTex.Load(int3(pix, 0)).rgb;
-	float3 linearC = srgb * srgb;
-	int2 dR = int2(1, 0);
-	int2 dD = int2(0, 1);
-	float zR = depthTex.Load(int3(pix + dR, 0)).r;
-	float zD = depthTex.Load(int3(pix + dD, 0)).r;
-	float4 wR = mul(invViewProj, float4((uv.x + 1.0 / renderSize.x) * 2.0 - 1.0 - jitterNdc.x, ndcY, zR, 1.0));
-	float4 wD = mul(invViewProj, float4(ndcX, 1.0 - (uv.y + 1.0 / renderSize.y) * 2.0 - jitterNdc.y, zD, 1.0));
-	float3 n = normalize(cross(wR.xyz / max(wR.w, 1e-4) - world, wD.xyz / max(wD.w, 1e-4) - world));
+	float3 beauty = colorTex.Load(int3(pix, 0)).rgb;
+	float3 base = albedoTex.Load(int3(pix, 0)).rgb;
+	float water = 0.0;
+	float metal = 0.0;
+	if(hasMasks > 0.5) {
+		water = waterTex.Load(int3(pix, 0)).r;
+		metal = metalTex.Load(int3(pix, 0)).r;
+	}
+	float3 n = reconstructN(world, uv);
+	float3 nView = mul((float3x3)view, n);
+	float rough = 0.55;
+	float3 f0 = float3(0.04, 0.04, 0.04);
+	if(water > 0.5) {
+		rough = 0.08;
+		f0 = float3(0.04, 0.04, 0.04);
+	} else if(metal > 0.5) {
+		rough = 0.28;
+		f0 = float3(0.18, 0.18, 0.18);
+	}
 	PSOut o;
-	o.mvec = float2(ndcX, ndcY) - prevNdc;
-	o.nrmR = float4(n, 0.55);
-	o.albedo = float4(linearC, 1.0);
-	o.specA = float4(0.04, 0.04, 0.04, 1.0);
-	o.hdr = float4(linearC, 1.0);
-	o.hit = length(world);
+	o.mvec = float2(0, 0);
+	o.nrmR = float4(nView, rough);
+	o.albedo = float4(base, 1.0);
+	o.specA = float4(f0, 1.0);
+	o.hdr = float4(beauty, 1.0);
+	o.hit = length(cameraPos - world);
 	if(z <= 0.0 || z >= 0.99999) {
 		o.mvec = float2(0, 0);
-		o.nrmR = float4(0, 1, 0, 1);
+		o.nrmR = float4(0, 0, 1, 1);
+		o.albedo = float4(0, 0, 0, 1);
+		o.specA = float4(0, 0, 0, 1);
 		o.hit = 0.0;
 	}
 	return o;
@@ -202,7 +247,7 @@ float4 VSMain(uint id : SV_VertexID) : SV_Position {
 }
 float4 PSMain(float4 pos : SV_Position) : SV_Target {
 	float3 h = hdrTex.Load(int3(pos.xy, 0)).rgb;
-	return float4(sqrt(saturate(h)), 1);
+	return float4(saturate(h), 1);
 }
 )";
 
@@ -219,6 +264,7 @@ struct D3D12Streamline::Gpu {
 	ID3D12Resource * hdrIn = nullptr;
 	ID3D12Resource * hdrOut = nullptr;
 	ID3D12Resource * hit = nullptr;
+	ID3D12Resource * hudless = nullptr;
 	ID3D12DescriptorHeap * rtvHeap = nullptr;
 	ID3D12DescriptorHeap * srvHeap = nullptr;
 	ID3D12PipelineState * gbufferPso = nullptr;
@@ -241,6 +287,7 @@ struct D3D12Streamline::Gpu {
 		drop(hdrIn); hdrIn = nullptr;
 		drop(hdrOut); hdrOut = nullptr;
 		drop(hit); hit = nullptr;
+		drop(hudless); hudless = nullptr;
 		drop(rtvHeap); rtvHeap = nullptr;
 		drop(srvHeap); srvHeap = nullptr;
 		drop(gbufferPso); gbufferPso = nullptr;
@@ -290,8 +337,10 @@ bool D3D12Streamline::loadLibrary() {
 	pslGetNewFrameToken = reinterpret_cast<PFun_slGetNewFrameToken *>(proc("slGetNewFrameToken"));
 	pslGetFeatureFunction = reinterpret_cast<PFun_slGetFeatureFunction *>(proc("slGetFeatureFunction"));
 	pslFreeResources = reinterpret_cast<PFun_slFreeResources *>(proc("slFreeResources"));
+	pslUpgradeInterface = reinterpret_cast<PFun_slUpgradeInterface *>(proc("slUpgradeInterface"));
 	if(!pslInit || !pslShutdown || !pslSetD3DDevice || !pslIsFeatureSupported || !pslEvaluateFeature
-	   || !pslSetTagForFrame || !pslSetConstants || !pslGetNewFrameToken || !pslGetFeatureFunction) {
+	   || !pslSetTagForFrame || !pslSetConstants || !pslGetNewFrameToken || !pslGetFeatureFunction
+	   || !pslUpgradeInterface) {
 		LogError << "Streamline: sl.interposer.dll is missing exports";
 		FreeLibrary(static_cast<HMODULE>(m_dll));
 		m_dll = nullptr;
@@ -311,7 +360,10 @@ bool D3D12Streamline::init() {
 	if(!loadLibrary()) {
 		return false;
 	}
-	static sl::Feature features[] = { sl::kFeatureDLSS, sl::kFeatureDLSS_RR };
+	static sl::Feature features[] = {
+		sl::kFeatureDLSS, sl::kFeatureDLSS_RR, sl::kFeatureDLSS_G,
+		sl::kFeatureReflex, sl::kFeaturePCL
+	};
 	static wchar_t pluginDir[MAX_PATH] {};
 	GetModuleFileNameW(nullptr, pluginDir, MAX_PATH);
 	if(wchar_t * slash = wcsrchr(pluginDir, L'\\')) {
@@ -334,7 +386,7 @@ bool D3D12Streamline::init() {
 	             | sl::PreferenceFlags::eUseManualHooking
 	             | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
 	pref.featuresToLoad = features;
-	pref.numFeaturesToLoad = 2;
+	pref.numFeaturesToLoad = 5;
 	pref.engine = sl::EngineType::eCustom;
 	pref.engineVersion = "1.4";
 	pref.projectId = "a7b3c91e-4d2f-4e18-9c6a-0c4035c19df0";
@@ -346,6 +398,23 @@ bool D3D12Streamline::init() {
 	}
 	m_inited = true;
 	LogInfo << "Streamline: slInit ok (manual hook, plugins next to exe)";
+	return true;
+#endif
+}
+
+bool D3D12Streamline::upgradeInterface(void ** iface) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(iface);
+	return false;
+#else
+	if(!m_inited || !pslUpgradeInterface || !iface || !*iface) {
+		return false;
+	}
+	const sl::Result r = pslUpgradeInterface(iface);
+	if(r != sl::Result::eOk) {
+		LogError << "Streamline: slUpgradeInterface failed (" << resultName(r) << ")";
+		return false;
+	}
 	return true;
 #endif
 }
@@ -373,11 +442,17 @@ bool D3D12Streamline::setDevice(ID3D12Device * device, IDXGIAdapter1 * adapter) 
 	}
 	const sl::Result dlss = pslIsFeatureSupported(sl::kFeatureDLSS, info);
 	const sl::Result rr = pslIsFeatureSupported(sl::kFeatureDLSS_RR, info);
+	const sl::Result fg = pslIsFeatureSupported(sl::kFeatureDLSS_G, info);
+	const sl::Result reflex = pslIsFeatureSupported(sl::kFeatureReflex, info);
 	m_dlss = dlss == sl::Result::eOk;
 	m_rr = rr == sl::Result::eOk;
+	m_fg = fg == sl::Result::eOk;
+	m_reflex = reflex == sl::Result::eOk;
 	LogInfo << "Streamline: DLSS=" << (m_dlss ? "yes" : resultName(dlss))
-	        << " DLSS-RR=" << (m_rr ? "yes" : resultName(rr));
-	m_ready = m_dlss || m_rr;
+	        << " DLSS-RR=" << (m_rr ? "yes" : resultName(rr))
+	        << " DLSS-G=" << (m_fg ? "yes" : resultName(fg))
+	        << " Reflex=" << (m_reflex ? "yes" : resultName(reflex));
+	m_ready = m_dlss || m_rr || (m_fg && m_reflex);
 	if(!m_gpu) {
 		m_gpu = new Gpu();
 	}
@@ -395,6 +470,9 @@ void D3D12Streamline::shutdown() {
 		if(m_dlss) {
 			pslFreeResources(sl::kFeatureDLSS, vp);
 		}
+		if(m_fg) {
+			pslFreeResources(sl::kFeatureDLSS_G, vp);
+		}
 	}
 	releaseTargets();
 	delete m_gpu;
@@ -406,6 +484,14 @@ void D3D12Streamline::shutdown() {
 	m_ready = false;
 	m_dlss = false;
 	m_rr = false;
+	m_fg = false;
+	m_reflex = false;
+	m_fgOn = false;
+	m_reflexOn = false;
+	m_fgTagged = false;
+	m_loggedFg = false;
+	m_token = nullptr;
+	m_loggedRrSkip = false;
 	m_device = nullptr;
 	if(m_dll) {
 		FreeLibrary(static_cast<HMODULE>(m_dll));
@@ -421,6 +507,7 @@ void D3D12Streamline::shutdown() {
 	pslGetNewFrameToken = nullptr;
 	pslGetFeatureFunction = nullptr;
 	pslFreeResources = nullptr;
+	pslUpgradeInterface = nullptr;
 #endif
 }
 
@@ -449,13 +536,18 @@ int D3D12Streamline::resolveDlssMode(int setting, int outputHeight) {
 	ARX_UNUSED(outputHeight);
 	return 0;
 #else
-	ARX_UNUSED(outputHeight);
 	switch(setting) {
 		case 1: return int(sl::DLSSMode::eDLAA);
 		case 2: return int(sl::DLSSMode::eMaxQuality);
 		case 3: return int(sl::DLSSMode::eBalanced);
 		case 4: return int(sl::DLSSMode::eMaxPerformance);
-		case 5: return int(sl::DLSSMode::eUltraPerformance);
+		case 5:
+			// SDK Ultra is ~33%. At 1080p that is 360p — oil-paint on this art.
+			// Keep real Ultra at 1440p+ (~33% of 1440 is 480p; 4K is 720p).
+			if(outputHeight > 0 && outputHeight < 1440) {
+				return int(sl::DLSSMode::eMaxPerformance);
+			}
+			return int(sl::DLSSMode::eUltraPerformance);
 		default: return int(sl::DLSSMode::eOff);
 	}
 #endif
@@ -471,6 +563,9 @@ bool D3D12Streamline::queryOptimalSize(int slMode, int outputW, int outputH, int
 	ARX_UNUSED(slMode);
 	return false;
 #else
+	if(sl::DLSSMode(slMode) == sl::DLSSMode::eUltraPerformance && outputH < 1440) {
+		slMode = int(sl::DLSSMode::eMaxPerformance);
+	}
 	PFun_slDLSSGetOptimalSettings * getOpt = nullptr;
 	if(m_ready && pslGetFeatureFunction
 	   && pslGetFeatureFunction(sl::kFeatureDLSS, "slDLSSGetOptimalSettings",
@@ -551,7 +646,9 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	   || !makeTex(m_device, ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav,
 	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, &m_gpu->hdrOut)
 	   || !makeTex(m_device, w, h, DXGI_FORMAT_R16_FLOAT, rt,
-	               D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->hit)) {
+	               D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->hit)
+	   || !makeTex(m_device, ow, oh, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_NONE,
+	               D3D12_RESOURCE_STATE_COPY_DEST, &m_gpu->hudless)) {
 		LogError << "Streamline: G-buffer targets failed";
 		releaseTargets();
 		return false;
@@ -571,11 +668,11 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	
 	D3D12_DESCRIPTOR_RANGE ranges[2] {};
 	ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-	ranges[0].NumDescriptors = 2;
+	ranges[0].NumDescriptors = 5;
 	ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 	D3D12_ROOT_PARAMETER rp[2] {};
 	rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-	rp[0].Constants.Num32BitValues = 36;
+	rp[0].Constants.Num32BitValues = 56;
 	rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 	rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 	rp[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -744,7 +841,8 @@ bool D3D12Streamline::rasterGbuffers(const Frame & frame) {
 	ARX_UNUSED(frame);
 	return false;
 #else
-	if(!frame.list || !m_gpu || !m_gpu->gbufferPso) {
+	if(!frame.list || !m_gpu || !m_gpu->gbufferPso || !frame.color || !frame.depth
+	   || !frame.albedoSrc) {
 		return false;
 	}
 	D3D12_SHADER_RESOURCE_VIEW_DESC colorSrv {};
@@ -757,11 +855,24 @@ bool D3D12Streamline::rasterGbuffers(const Frame & frame) {
 	depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	depthSrv.Texture2D.MipLevels = 1;
+	D3D12_SHADER_RESOURCE_VIEW_DESC maskSrv {};
+	maskSrv.Format = DXGI_FORMAT_R8_UNORM;
+	maskSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	maskSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	maskSrv.Texture2D.MipLevels = 1;
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_gpu->srvHeap->GetCPUDescriptorHandleForHeapStart();
-	m_device->CreateShaderResourceView(frame.color, &colorSrv, cpu);
-	D3D12_CPU_DESCRIPTOR_HANDLE cpu1 = cpu;
-	cpu1.ptr += m_gpu->srvSize;
-	m_device->CreateShaderResourceView(frame.depth, &depthSrv, cpu1);
+	auto srvAt = [&](UINT i) {
+		D3D12_CPU_DESCRIPTOR_HANDLE h = cpu;
+		h.ptr += SIZE_T(i) * m_gpu->srvSize;
+		return h;
+	};
+	m_device->CreateShaderResourceView(frame.color, &colorSrv, srvAt(0));
+	m_device->CreateShaderResourceView(frame.depth, &depthSrv, srvAt(1));
+	m_device->CreateShaderResourceView(frame.albedoSrc, &colorSrv, srvAt(2));
+	ID3D12Resource * water = frame.waterMask ? frame.waterMask : frame.albedoSrc;
+	ID3D12Resource * metal = frame.metalMask ? frame.metalMask : frame.albedoSrc;
+	m_device->CreateShaderResourceView(water, frame.waterMask ? &maskSrv : &colorSrv, srvAt(3));
+	m_device->CreateShaderResourceView(metal, frame.metalMask ? &maskSrv : &colorSrv, srvAt(4));
 	
 	slTransition(frame.list, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET,
 	             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -788,14 +899,19 @@ bool D3D12Streamline::rasterGbuffers(const Frame & frame) {
 	frame.list->SetGraphicsRootDescriptorTable(1, m_gpu->srvHeap->GetGPUDescriptorHandleForHeapStart());
 	const glm::mat4x4 viewProj = frame.proj * frame.view;
 	const glm::mat4x4 inv = glm::inverse(viewProj);
-	float cb[36] {};
+	float cb[56] {};
 	std::memcpy(cb, glm::value_ptr(inv), 64);
 	std::memcpy(cb + 16, glm::value_ptr(m_prevViewProj), 64);
-	cb[32] = float((std::max)(frame.width, 1));
-	cb[33] = float((std::max)(frame.height, 1));
-	cb[34] = frame.jitterX * 2.f / float((std::max)(frame.width, 1));
-	cb[35] = -frame.jitterY * 2.f / float((std::max)(frame.height, 1));
-	frame.list->SetGraphicsRoot32BitConstants(0, 36, cb, 0);
+	std::memcpy(cb + 32, glm::value_ptr(frame.view), 64);
+	cb[48] = float((std::max)(frame.width, 1));
+	cb[49] = float((std::max)(frame.height, 1));
+	cb[50] = frame.jitterX * 2.f / float((std::max)(frame.width, 1));
+	cb[51] = -frame.jitterY * 2.f / float((std::max)(frame.height, 1));
+	cb[52] = frame.cameraPos.x;
+	cb[53] = frame.cameraPos.y;
+	cb[54] = frame.cameraPos.z;
+	cb[55] = (frame.waterMask && frame.metalMask) ? 1.f : 0.f;
+	frame.list->SetGraphicsRoot32BitConstants(0, 56, cb, 0);
 	frame.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	frame.list->DrawInstanced(3, 1, 0, 0);
 	
@@ -803,6 +919,21 @@ bool D3D12Streamline::rasterGbuffers(const Frame & frame) {
 	             D3D12_RESOURCE_STATE_RENDER_TARGET);
 	slTransition(frame.list, frame.depth, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
 	             D3D12_RESOURCE_STATE_DEPTH_WRITE);
+	return true;
+#endif
+}
+
+bool D3D12Streamline::clearMotionVectors(const Frame & frame) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(frame);
+	return false;
+#else
+	if(!frame.list || !m_gpu || !m_gpu->mvec || !m_gpu->rtvHeap) {
+		return false;
+	}
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_gpu->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	const float zero[4] = { 0.f, 0.f, 0.f, 0.f };
+	frame.list->ClearRenderTargetView(rtv, zero, 0, nullptr);
 	return true;
 #endif
 }
@@ -824,6 +955,9 @@ bool D3D12Streamline::setConstants(const Frame & frame, void * token) {
 	toSl(c.prevClipToClip, viewProj * glm::inverse(m_prevViewProj));
 	c.jitterOffset = sl::float2(frame.jitterX, frame.jitterY);
 	c.mvecScale = sl::float2(1.f, 1.f);
+	// Required when cameraMotionIncluded is false — default INVALID_FLOAT
+	// makes Streamline skip camera synthesis (blur + extra work).
+	c.motionVectorsInvalidValue = 1024.f;
 	c.cameraPinholeOffset = sl::float2(0.f, 0.f);
 	c.cameraPos = sl::float3(frame.cameraPos.x, frame.cameraPos.y, frame.cameraPos.z);
 	c.cameraRight = sl::float3(frame.view[0][0], frame.view[1][0], frame.view[2][0]);
@@ -836,7 +970,7 @@ bool D3D12Streamline::setConstants(const Frame & frame, void * token) {
 	const int aspectW = frame.outputWidth > 0 ? frame.outputWidth : frame.width;
 	c.cameraAspectRatio = float(aspectW) / float((std::max)(aspectH, 1));
 	c.depthInverted = sl::Boolean::eFalse;
-	c.cameraMotionIncluded = sl::Boolean::eTrue;
+	c.cameraMotionIncluded = sl::Boolean::eFalse;
 	c.motionVectors3D = sl::Boolean::eFalse;
 	c.reset = (m_firstFrame || frame.reset) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	c.orthographicProjection = sl::Boolean::eFalse;
@@ -870,9 +1004,13 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	opt.mode = sl::DLSSMode(frame.dlssMode > 0 ? frame.dlssMode : int(sl::DLSSMode::eDLAA));
 	opt.outputWidth = uint32_t(outW);
 	opt.outputHeight = uint32_t(outH);
-	opt.colorBuffersHDR = sl::Boolean::eTrue;
+	opt.colorBuffersHDR = sl::Boolean::eFalse;
 	opt.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
 	opt.dlaaPreset = sl::DLSSDPreset::ePresetD;
+	opt.qualityPreset = sl::DLSSDPreset::ePresetD;
+	opt.balancedPreset = sl::DLSSDPreset::ePresetD;
+	opt.performancePreset = sl::DLSSDPreset::ePresetD;
+	opt.ultraPerformancePreset = sl::DLSSDPreset::ePresetD;
 	toSl(opt.worldToCameraView, frame.view);
 	toSl(opt.cameraViewToWorld, glm::inverse(frame.view));
 	const sl::ViewportHandle vp(0);
@@ -881,7 +1019,7 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	}
 	sl::Extent inExt { 0, 0, uint32_t(frame.width), uint32_t(frame.height) };
 	sl::Extent outExt { 0, 0, uint32_t(outW), uint32_t(outH) };
-	sl::Resource colorIn { sl::ResourceType::eTex2d, m_gpu->hdrIn, D3D12_RESOURCE_STATE_RENDER_TARGET };
+	sl::Resource colorIn { sl::ResourceType::eTex2d, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource colorOut { sl::ResourceType::eTex2d, m_gpu->hdrOut, D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
 	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
@@ -930,15 +1068,24 @@ bool D3D12Streamline::evaluateDlss(const Frame & frame, void * token) {
 	opt.mode = sl::DLSSMode(frame.dlssMode > 0 ? frame.dlssMode : int(sl::DLSSMode::eDLAA));
 	opt.outputWidth = uint32_t(outW);
 	opt.outputHeight = uint32_t(outH);
-	opt.colorBuffersHDR = sl::Boolean::eTrue;
+	opt.colorBuffersHDR = sl::Boolean::eFalse;
+	opt.useAutoExposure = sl::Boolean::eFalse;
+	opt.preExposure = 1.f;
+	opt.exposureScale = 1.f;
+	// Preset L (Ultra Performance default) is the expensive transformer.
+	// Same K model for every mode so lowering the preset actually gets cheaper.
 	opt.dlaaPreset = sl::DLSSPreset::ePresetK;
+	opt.qualityPreset = sl::DLSSPreset::ePresetK;
+	opt.balancedPreset = sl::DLSSPreset::ePresetK;
+	opt.performancePreset = sl::DLSSPreset::ePresetK;
+	opt.ultraPerformancePreset = sl::DLSSPreset::ePresetK;
 	const sl::ViewportHandle vp(0);
 	if(setOptions(vp, opt) != sl::Result::eOk) {
 		return false;
 	}
 	sl::Extent inExt { 0, 0, uint32_t(frame.width), uint32_t(frame.height) };
 	sl::Extent outExt { 0, 0, uint32_t(outW), uint32_t(outH) };
-	sl::Resource colorIn { sl::ResourceType::eTex2d, m_gpu->hdrIn, D3D12_RESOURCE_STATE_RENDER_TARGET };
+	sl::Resource colorIn { sl::ResourceType::eTex2d, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource colorOut { sl::ResourceType::eTex2d, m_gpu->hdrOut, D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
 	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
@@ -1006,6 +1153,212 @@ bool D3D12Streamline::tonemapToBackbuffer(const Frame & frame) {
 #endif
 }
 
+void * D3D12Streamline::frameToken() {
+#if !ARX_HAVE_STREAMLINE
+	return nullptr;
+#else
+	if(m_token) {
+		return m_token;
+	}
+	sl::FrameToken * token = nullptr;
+	if(!pslGetNewFrameToken || pslGetNewFrameToken(token, nullptr) != sl::Result::eOk || !token) {
+		return nullptr;
+	}
+	m_token = token;
+	return m_token;
+#endif
+}
+
+void D3D12Streamline::setDlssg(bool on) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(on);
+#else
+	if(!m_fg || !pslGetFeatureFunction || on == m_fgOn) {
+		return;
+	}
+	PFun_slDLSSGSetOptions * set = nullptr;
+	if(pslGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions",
+	                         reinterpret_cast<void *&>(set)) != sl::Result::eOk || !set) {
+		return;
+	}
+	sl::DLSSGOptions opt {};
+	opt.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+	opt.numFramesToGenerate = 1;
+	opt.numBackBuffers = 2;
+	const sl::ViewportHandle vp(0);
+	if(set(vp, opt) != sl::Result::eOk) {
+		LogWarning << "Streamline: slDLSSGSetOptions failed";
+		return;
+	}
+	m_fgOn = on;
+	if(on && !m_loggedFg) {
+		LogInfo << "Streamline: DLSS-G on (2x, Reflex, HUD-less before HUD)";
+		m_loggedFg = true;
+	}
+	if(!on) {
+		LogInfo << "Streamline: DLSS-G off";
+		m_loggedFg = false;
+	}
+#endif
+}
+
+void D3D12Streamline::setReflex(bool on) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(on);
+#else
+	if(!m_reflex || !pslGetFeatureFunction || on == m_reflexOn) {
+		return;
+	}
+	PFun_slReflexSetOptions * set = nullptr;
+	if(pslGetFeatureFunction(sl::kFeatureReflex, "slReflexSetOptions",
+	                         reinterpret_cast<void *&>(set)) != sl::Result::eOk || !set) {
+		return;
+	}
+	sl::ReflexOptions opt {};
+	opt.mode = on ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
+	if(set(opt) != sl::Result::eOk) {
+		LogWarning << "Streamline: slReflexSetOptions failed";
+		return;
+	}
+	m_reflexOn = on;
+#endif
+}
+
+void D3D12Streamline::pclMarker(int marker) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(marker);
+#else
+	if(!m_token || !pslGetFeatureFunction) {
+		return;
+	}
+	PFun_slPCLSetMarker * set = nullptr;
+	if(pslGetFeatureFunction(sl::kFeaturePCL, "slPCLSetMarker",
+	                         reinterpret_cast<void *&>(set)) != sl::Result::eOk || !set) {
+		return;
+	}
+	set(sl::PCLMarker(marker), *static_cast<sl::FrameToken *>(m_token));
+#endif
+}
+
+bool D3D12Streamline::copyHudless(const Frame & frame) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(frame);
+	return false;
+#else
+	ID3D12Resource * src = frame.colorOut ? frame.colorOut : frame.color;
+	if(!frame.list || !src || !m_gpu || !m_gpu->hudless) {
+		return false;
+	}
+	slTransition(frame.list, src, D3D12_RESOURCE_STATE_RENDER_TARGET,
+	             D3D12_RESOURCE_STATE_COPY_SOURCE);
+	frame.list->CopyResource(m_gpu->hudless, src);
+	slTransition(frame.list, src, D3D12_RESOURCE_STATE_COPY_SOURCE,
+	             D3D12_RESOURCE_STATE_RENDER_TARGET);
+	return true;
+#endif
+}
+
+void D3D12Streamline::beginFrame() {
+#if ARX_HAVE_STREAMLINE
+	if(!m_ready || !supportsFg()) {
+		return;
+	}
+	if(!frameToken()) {
+		return;
+	}
+	setReflex(true);
+	PFun_slReflexSleep * sleep = nullptr;
+	if(pslGetFeatureFunction && pslGetFeatureFunction(sl::kFeatureReflex, "slReflexSleep",
+	                         reinterpret_cast<void *&>(sleep)) == sl::Result::eOk && sleep) {
+		sleep(*static_cast<sl::FrameToken *>(m_token));
+	}
+	pclMarker(int(sl::PCLMarker::eRenderSubmitStart));
+#endif
+}
+
+void D3D12Streamline::syncFrameGen(bool enabled) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(enabled);
+#else
+	if(!supportsFg()) {
+		return;
+	}
+	if(enabled) {
+		setReflex(true);
+		setDlssg(true);
+	} else {
+		setDlssg(false);
+		setReflex(false);
+	}
+#endif
+}
+
+void D3D12Streamline::prepareFrameGen(const Frame & frame) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(frame);
+#else
+	if(!supportsFg() || !frame.wantFg) {
+		return;
+	}
+	if(!frame.list || !frame.depth) {
+		return;
+	}
+	const int outW = frame.outputWidth > 0 ? frame.outputWidth : frame.width;
+	const int outH = frame.outputHeight > 0 ? frame.outputHeight : frame.height;
+	if(!ensureTargets(frame.width, frame.height, outW, outH)) {
+		return;
+	}
+	void * token = frameToken();
+	if(!token) {
+		return;
+	}
+	if(!frame.wantDlss) {
+		if(!clearMotionVectors(frame)) {
+			return;
+		}
+		if(!m_constantsSet && !setConstants(frame, token)) {
+			return;
+		}
+	}
+	if(!copyHudless(frame)) {
+		return;
+	}
+	sl::Extent inExt { 0, 0, uint32_t(frame.width), uint32_t(frame.height) };
+	sl::Extent outExt { 0, 0, uint32_t(outW), uint32_t(outH) };
+	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
+	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
+	sl::Resource hud { sl::ResourceType::eTex2d, m_gpu->hudless, D3D12_RESOURCE_STATE_COPY_DEST };
+	sl::ResourceTag tags[] = {
+		{ &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &inExt },
+		{ &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &inExt },
+		{ &hud, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &outExt },
+	};
+	const sl::ViewportHandle vp(0);
+	if(pslSetTagForFrame(*static_cast<sl::FrameToken *>(token), vp, tags, UINT(_countof(tags)),
+	                     frame.list) != sl::Result::eOk) {
+		LogWarning << "Streamline: DLSS-G tag failed";
+		return;
+	}
+	m_fgTagged = true;
+#endif
+}
+
+void D3D12Streamline::onPresent() {
+#if ARX_HAVE_STREAMLINE
+	pclMarker(int(sl::PCLMarker::eRenderSubmitEnd));
+	pclMarker(int(sl::PCLMarker::ePresentStart));
+#endif
+}
+
+void D3D12Streamline::afterPresent() {
+#if ARX_HAVE_STREAMLINE
+	pclMarker(int(sl::PCLMarker::ePresentEnd));
+	m_fgTagged = false;
+	m_token = nullptr;
+	m_constantsSet = false;
+#endif
+}
+
 bool D3D12Streamline::evaluate(const Frame & frame) {
 #if !ARX_HAVE_STREAMLINE
 	ARX_UNUSED(frame);
@@ -1019,23 +1372,39 @@ bool D3D12Streamline::evaluate(const Frame & frame) {
 	if(!ensureTargets(frame.width, frame.height, outW, outH)) {
 		return false;
 	}
-	if(!rasterGbuffers(frame)) {
+	if(!clearMotionVectors(frame)) {
 		return false;
 	}
-	sl::FrameToken * token = nullptr;
-	if(pslGetNewFrameToken(token, nullptr) != sl::Result::eOk || !token) {
+	void * token = frameToken();
+	if(!token) {
 		LogError << "Streamline: slGetNewFrameToken failed";
 		return false;
 	}
 	if(!setConstants(frame, token)) {
 		return false;
 	}
+	m_constantsSet = true;
 	bool ok = false;
 	const char * path = nullptr;
-	if(frame.wantRr && m_rr) {
-		ok = evaluateRr(frame, token);
-		path = "DLSS-RR";
-	} else if(frame.wantDlss && m_dlss) {
+	if(frame.wantRr && m_rr && !m_rrFailed) {
+		if(rasterGbuffers(frame) && evaluateRr(frame, token)) {
+			ok = true;
+			path = "DLSS-RR";
+			m_rrLive = true;
+		} else {
+			m_rrFailed = true;
+			m_rrLive = false;
+			if(!m_loggedRrSkip) {
+				LogWarning << "Streamline: DLSS-RR NGX create failed — homemade denoise stays on";
+				m_loggedRrSkip = true;
+			}
+		}
+	} else if(!frame.wantRr) {
+		m_rrLive = false;
+		m_rrFailed = false;
+		m_loggedRrSkip = false;
+	}
+	if(!ok && m_dlss && frame.wantDlss) {
 		ok = evaluateDlss(frame, token);
 		path = "DLSS";
 	}
@@ -1052,7 +1421,10 @@ bool D3D12Streamline::evaluate(const Frame & frame) {
 	tonemapToBackbuffer(frame);
 	if(!m_loggedOn || frame.reset) {
 		LogInfo << "Streamline: " << path << " evaluate ok " << frame.width << "x" << frame.height
-		        << " -> " << outW << "x" << outH;
+		        << " -> " << outW << "x" << outH
+		        << (std::strcmp(path, "DLSS-RR") == 0
+		            ? " (LDR, preset D, albedo=pre-DXR)"
+		            : " (LDR, preset K, jitter on)");
 		m_loggedOn = true;
 		m_loggedOff = false;
 	}

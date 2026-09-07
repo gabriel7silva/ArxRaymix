@@ -46,8 +46,12 @@ public:
 	
 	[[nodiscard]] bool supported() const { return m_supported; }
 	[[nodiscard]] bool ready() const { return m_ready; }
+	[[nodiscard]] ID3D12Resource * colorCopyResource() const { return m_colorCopy.Get(); }
+	[[nodiscard]] ID3D12Resource * waterMaskResource() const { return m_waterMask.Get(); }
+	[[nodiscard]] ID3D12Resource * metalMaskResource() const { return m_metalMask.Get(); }
 	
 	void beginWorldFrame();
+	void markReflectOnlyStart();
 	void clearRooms();
 	void addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
 	             const unsigned short * indices, size_t nindices);
@@ -65,7 +69,29 @@ public:
 	[[nodiscard]] size_t dynTriangleCount() const { return m_positions.size() / 3; }
 	
 	static constexpr size_t kMaxShadowLights = 16;
+	//! High (dxr_distance=2). Use distancePreset() for the menu slider.
 	static constexpr float kCasterDistance = 8000.f;
+	
+	//! 0 = Low, 1 = Medium, 2 = High, 3 = Ultra.
+	struct DistancePreset {
+		float caster;
+		int roomHops;
+		size_t maxRooms;
+		int lightHops;
+		float specTMax;
+		float giTMax;
+	};
+	
+	[[nodiscard]] static DistancePreset distancePreset(int level) {
+		static constexpr DistancePreset k[] = {
+			{ 1800.f,  2, 10, 2, 1200.f, 200.f },
+			{ 3200.f,  3, 20, 3, 2200.f, 300.f },
+			{ 5500.f,  4, 32, 4, 3500.f, 400.f },
+			{ 10000.f, 5, 48, 6, 6000.f, 550.f },
+		};
+		const int i = (level < 0) ? 0 : ((level > 3) ? 3 : level);
+		return k[i];
+	}
 	
 	struct Settings {
 		int aoQuality = 0;
@@ -76,6 +102,8 @@ public:
 		int shadowDenoise = 0;
 		int giDenoise = 0;
 		int contact = 0;
+		int distance = 2;
+		float range = 0.f;
 		bool skipTemporal = false;
 	};
 	
@@ -133,7 +161,8 @@ private:
 	bool ensureGeometryBuffers(ID3D12GraphicsCommandList * list);
 	bool buildAcceleration(ID3D12GraphicsCommandList * list);
 	void updateDescriptors();
-	void rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj);
+	void rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
+	                    ID3D12Resource * depth);
 	void addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
 	             const SMY_VERTEX * vertices, size_t nvertices,
 	             const unsigned short * indices, size_t nindices);
@@ -147,8 +176,10 @@ private:
 	ComPtr<ID3D12StateObject> m_rtState;
 	ComPtr<ID3D12PipelineState> m_compositePso;
 	ComPtr<ID3D12PipelineState> m_waterMaskPso;
+	ComPtr<ID3D12PipelineState> m_waterDepthPso;
 	ComPtr<ID3D12PipelineState> m_metalMaskPso;
 	ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
+	ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
 	std::vector<unsigned char> m_dxil;
 	ComPtr<ID3D12DescriptorHeap> m_heap;
 	ComPtr<ID3D12Resource> m_vertUpload;
@@ -160,6 +191,7 @@ private:
 	ComPtr<ID3D12Resource> m_metalUpload;
 	ComPtr<ID3D12Resource> m_viewCbuf;
 	ComPtr<ID3D12Resource> m_blas;
+	ComPtr<ID3D12Resource> m_playerBlas;
 	ComPtr<ID3D12Resource> m_roomBlas;
 	ComPtr<ID3D12Resource> m_waterBlas;
 	ComPtr<ID3D12Resource> m_tlas;
@@ -205,6 +237,7 @@ private:
 	bool m_waterVertsAreSrv = false;
 	bool m_roomsDirty = true;
 	bool m_maskIsSrv = false;
+	size_t m_reflectOnlyStart = SIZE_MAX;
 	
 };
 

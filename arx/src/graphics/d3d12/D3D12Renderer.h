@@ -111,7 +111,7 @@ public:
 	[[nodiscard]] const char * getGraphicsApiName() const override { return "DirectX 12"; }
 	
 	[[nodiscard]] float getMaxSupportedAnisotropy() const override { return 16.f; }
-	void setMaxAnisotropy(float value) override { m_anisotropy = value; }
+	void setMaxAnisotropy(float value) override;
 	
 	[[nodiscard]] AlphaCutoutAntialising getMaxSupportedAlphaCutoutAntialiasing() const override {
 		return NoAlphaCutoutAA;
@@ -134,6 +134,7 @@ public:
 	[[nodiscard]] bool supportsRayTracing() const override;
 	[[nodiscard]] bool supportsDlss() const override;
 	[[nodiscard]] bool supportsDlssRr() const override;
+	[[nodiscard]] bool supportsDlssG() const override;
 	[[nodiscard]] Vec2i internalRenderSize() const override;
 	[[nodiscard]] Vec2i queryDlssInternalSize(int cfgMode, int displayW, int displayH) const override;
 	[[nodiscard]] DlssDebugState dlssDebugState() const override;
@@ -155,6 +156,7 @@ public:
 	
 private:
 	void releaseDevice();
+	void createSamplers();
 	bool createPipeline();
 	bool createFrameResources();
 	void resizeSwapchain(int width, int height);

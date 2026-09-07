@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -103,11 +104,18 @@ cbuffer Params : register(b0) {
 	float specAlpha;
 	float contactTMax;
 	float giTemporalAlpha;
-	uint padSpec;
+	uint playerVertBase;
 };
 
 cbuffer ViewParams : register(b1) {
 	float4x4 viewProj;
+	// Not in the root cbuffer: 60 constants + 2 tables + CBV already fill
+	// the 64-DWORD root-signature cap. Extra floats there kill CreateRootSignature
+	// ("DXR pipeline failed — raster only").
+	float specTMax;
+	float giTMax;
+	float rtRange;
+	float padView;
 };
 
 // Only the cleared depth (1.0) is sky. Camera.cpp writes z = Q * (1 - near / w)
@@ -204,13 +212,26 @@ void RayGen() {
 	float ndcY = 1.0 - uv.y * 2.0;
 	float4 worldH = mul(invViewProj, float4(ndcX, ndcY, z, 1.0));
 	float3 pos = worldH.xyz / max(worldH.w, 1e-6);
+	float wC = projB / (z - projA);
+	if(rtRange > 8.0 && wC > rtRange) {
+		g_ao[pixel] = 1.0;
+		g_shadow[pixel] = 1.0;
+		g_depthOut[pixel] = z;
+		g_spec[pixel] = float4(0, 0, 0, 0);
+		if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
+			uint2 gp = pixel / 2;
+			if(gp.x < giWidth && gp.y < giHeight) {
+				g_gi[gp] = float4(0, 0, 0, 0);
+			}
+		}
+		return;
+	}
 	// Normal from depth. Per axis, take whichever neighbour is closer in linear
 	// depth (so a silhouette on one side does not skew the normal), and call the
 	// pixel a discontinuity when even that step is far bigger than a surface at a
 	// steep grazing angle could produce (measured in pixel footprints, not raw z:
 	// the old 0.04 raw-z test never fired, so decal / wall and bar / wall edges
 	// got normals tilted up to ~80 degrees and their rays started inside geometry).
-	float wC = projB / (z - projA);
 	float footprint = max(wC * pixelWorld, 0.05);
 	float zR = g_depth.Load(int3(int(pixel.x) + 1, int(pixel.y), 0)).r;
 	float zL = g_depth.Load(int3(max(int(pixel.x) - 1, 0), int(pixel.y), 0)).r;
@@ -427,7 +448,13 @@ void RayGen() {
 		float mm = g_metalMask.Load(int3(pixel, 0)).r;
 		if(wm > 0.5 && specRays > 0u) {
 			float zw = g_waterDepth.Load(int3(pixel, 0)).r;
-			if(zw > 0.0 && zw < SKY_Z) {
+			// Water quads span rooms. Raster water is depth-tested; the mask
+			// must be too. A leftover 1 behind a wall would reflect from the
+			// plane (grazing F≈1 → a bright water strip on the pillar).
+			if(zw > 0.0 && zw < SKY_Z && z + 0.001 < zw) {
+				wm = 0.0;
+			}
+			if(wm > 0.5 && zw > 0.0 && zw < SKY_Z) {
 				float4 wposH = mul(invViewProj, float4(ndcX, ndcY, zw, 1.0));
 				float3 wpos = wposH.xyz / max(wposH.w, 1e-6);
 				float zWR = g_waterDepth.Load(int3(int(pixel.x) + 1, int(pixel.y), 0)).r;
@@ -459,13 +486,13 @@ void RayGen() {
 					rd.Origin = wpos + nW * 6.0;
 					rd.Direction = R;
 					rd.TMin = 6.0;
-					rd.TMax = 4000.0;
+					rd.TMax = specTMax;
 					RayPayload rp;
 					rp.t = 1e7;
 					rp.n = float3(0, 0, 0);
 					TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-					         0x01, 0, 1, 0, rd, rp);
-					if(rp.t >= 4000.0) {
+					         0x05, 0, 1, 0, rd, rp);
+					if(rp.t >= specTMax) {
 						continue;
 					}
 					float3 hit = rd.Origin + rd.Direction * rp.t;
@@ -509,24 +536,26 @@ void RayGen() {
 		} else if(mm > 0.5 && metalRays > 0u) {
 			float3 V = normalize(cameraPos - pos);
 			float ndv = saturate(dot(n, V));
-			float F0 = 0.56;
+			// Dirty iron, not chrome. 0.56 replaced the plate albedo with 2-ray
+			// static (the elevator rope face).
+			float F0 = 0.18;
 			specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
 			uint nSpec = min(max(metalRays, 1u), 2u);
 			float3 acc = float3(0, 0, 0);
 			for(uint s = 0; s < nSpec; ++s) {
 				float3 R = reflect(-V, n);
-				R = normalize(R + hemisphereFixed(n, s, rot) * 0.22);
+				R = normalize(R + hemisphereFixed(n, s, rot) * 0.06);
 				RayDesc rd;
 				rd.Origin = pos + n * shBias;
 				rd.Direction = R;
 				rd.TMin = shBias;
-				rd.TMax = 2500.0;
+				rd.TMax = specTMax * 0.625;
 				RayPayload rp;
 				rp.t = 1e7;
 				rp.n = float3(0, 0, 0);
 				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-				         0x03, 0, 1, 0, rd, rp);
-				if(rp.t >= 2500.0) {
+				         0x07, 0, 1, 0, rd, rp);
+				if(rp.t >= specTMax * 0.625) {
 					continue;
 				}
 				float3 hit = rd.Origin + rd.Direction * rp.t;
@@ -534,20 +563,34 @@ void RayGen() {
 				if(dot(hn, hn) < 1e-6) {
 					hn = -rd.Direction;
 				}
+				float4 hc = mul(viewProj, float4(hit, 1.0));
 				float3 hitCol = float3(0, 0, 0);
-				for(uint i = 0; i < lightCount; ++i) {
-					float4 a = g_lights[i * 3 + 0];
-					float4 b = g_lights[i * 3 + 1];
-					float4 col = g_lights[i * 3 + 2];
-					float3 toL = a.xyz - hit;
-					float d = length(toL);
-					if(d < 1.0) {
-						continue;
+				if(hc.w > 1.0) {
+					float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
+					if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
+						int2 hp = int2(hu * float2(width, height));
+						float hz = g_depth.Load(int3(hp, 0)).r;
+						float hw = projB / max(hz - projA, 1e-4);
+						if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
+							hitCol = g_color.Load(int3(hp, 0)).rgb;
+						}
 					}
-					float ndotl = saturate(dot(hn, toL / d));
-					float span = max(b.y - b.x, 1e-3);
-					float fall = saturate((b.y - d) / span);
-					hitCol += col.rgb * min(a.w * fall * ndotl * b.w * 0.30, 0.55);
+				}
+				if(dot(hitCol, hitCol) < 1e-6) {
+					for(uint i = 0; i < lightCount; ++i) {
+						float4 a = g_lights[i * 3 + 0];
+						float4 b = g_lights[i * 3 + 1];
+						float4 col = g_lights[i * 3 + 2];
+						float3 toL = a.xyz - hit;
+						float d = length(toL);
+						if(d < 1.0) {
+							continue;
+						}
+						float ndotl = saturate(dot(hn, toL / d));
+						float span = max(b.y - b.x, 1e-3);
+						float fall = saturate((b.y - d) / span);
+						hitCol += col.rgb * min(a.w * fall * ndotl * b.w * 0.30, 0.55);
+					}
 				}
 				acc += hitCol;
 			}
@@ -577,13 +620,13 @@ void RayGen() {
 			bounce.Origin = pos + n * aoBias;
 			bounce.Direction = hemisphereFixed(n, h, rot + float(h >> 3) * 0.2618);
 			bounce.TMin = aoBias;
-			bounce.TMax = 800.0;
+			bounce.TMax = giTMax;
 			RayPayload bp;
-			bp.t = 801.0;
+			bp.t = giTMax + 1.0;
 			bp.n = float3(0, 0, 0);
 			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 			         0x01, 0, 1, 0, bounce, bp);
-			if(bp.t < 8.0 || bp.t >= 800.0) {
+			if(bp.t < 8.0 || bp.t >= giTMax) {
 				continue;
 			}
 			float3 hit = bounce.Origin + bounce.Direction * bp.t;
@@ -640,9 +683,10 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* att
 		v1 = g_waterVerts[prim * 3 + 1].xyz;
 		v2 = g_waterVerts[prim * 3 + 2].xyz;
 	} else {
-		v0 = g_verts[prim * 3 + 0].xyz;
-		v1 = g_verts[prim * 3 + 1].xyz;
-		v2 = g_verts[prim * 3 + 2].xyz;
+		uint base = (InstanceID() == 3) ? playerVertBase : 0u;
+		v0 = g_verts[base + prim * 3 + 0].xyz;
+		v1 = g_verts[base + prim * 3 + 1].xyz;
+		v2 = g_verts[base + prim * 3 + 2].xyz;
 	}
 	float3 n = normalize(cross(v1 - v0, v2 - v0));
 	if(dot(n, -WorldRayDirection()) < 0.0) {
@@ -756,7 +800,7 @@ float4 PSMain(VSOut i) : SV_Target {
 	c = c + bounce * (1.0 - c);
 	float water = waterMaskTex.Load(int3(pix, 0)).r;
 	float metal = metalMaskTex.Load(int3(pix, 0)).r;
-	float4 specS = specTex.Load(int3(pix, 0));
+	float4 specS = specTex.SampleLevel(samp, i.uv, 0);
 	if(specHalf != 0 && specS.a < 1e-4) {
 		specS = specTex.Load(int3(pix.x & ~1, pix.y & ~1, 0));
 	}
@@ -766,7 +810,8 @@ float4 PSMain(VSOut i) : SV_Target {
 	}
 	c = saturate(c) * max(ao * sh, 0.08);
 	if(metal > 0.5) {
-		c = lerp(c, specS.rgb, specS.a);
+		// Coat, not a replace: the elevator iron must keep its raster texture.
+		c = saturate(c * (1.0 - specS.a * 0.35) + specS.rgb * specS.a * 0.45);
 	}
 	return float4(saturate(c), 1);
 }
@@ -786,12 +831,11 @@ VSOut VSMain(float4 p : POSITION) {
 	o.pos = mul(viewProj, float4(p.xyz, 1));
 	return o;
 }
-struct PSOut { float mask : SV_Target0; float z : SV_Target1; };
-PSOut PSWater(VSOut i) {
-	PSOut o;
-	o.mask = 1;
-	o.z = i.pos.z;
-	return o;
+float PSWater(VSOut i) : SV_Target {
+	return 1;
+}
+float PSWaterZ(VSOut i) : SV_Target {
+	return i.pos.z;
 }
 float PSMetal(VSOut i) : SV_Target {
 	return 1;
@@ -987,10 +1031,13 @@ void D3D12Rtao::shutdown() {
 	m_metalUpload.reset();
 	m_roomBlas.reset();
 	m_waterBlas.reset();
+	m_playerBlas.reset();
 	m_heap.reset();
 	m_rtvHeap.reset();
+	m_dsvHeap.reset();
 	m_compositePso.reset();
 	m_waterMaskPso.reset();
+	m_waterDepthPso.reset();
 	m_metalMaskPso.reset();
 	m_rtState.reset();
 	m_compositeRoot.reset();
@@ -1065,6 +1112,13 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 	rtvHeap.NumDescriptors = 3;
 	if(FAILED(device->CreateDescriptorHeap(&rtvHeap, IID_PPV_ARGS(m_rtvHeap.put())))) {
 		LogError << "RTAO: mask RTV heap failed";
+		return true;
+	}
+	D3D12_DESCRIPTOR_HEAP_DESC dsvHeap {};
+	dsvHeap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+	dsvHeap.NumDescriptors = 1;
+	if(FAILED(device->CreateDescriptorHeap(&dsvHeap, IID_PPV_ARGS(m_dsvHeap.put())))) {
+		LogError << "RTAO: mask DSV heap failed";
 		return true;
 	}
 	
@@ -1181,11 +1235,17 @@ bool D3D12Rtao::createPipeline() {
 	ComPtr<ID3DBlob> blob;
 	ComPtr<ID3DBlob> err;
 	if(FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, blob.put(), err.put()))) {
-		LogError << "RTAO: RT root signature failed";
+		if(err && err->GetBufferPointer()) {
+			LogError << "RTAO: RT root signature failed — "
+			         << static_cast<const char *>(err->GetBufferPointer());
+		} else {
+			LogError << "RTAO: RT root signature failed";
+		}
 		return false;
 	}
 	if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 	                                        IID_PPV_ARGS(m_rtRoot.put())))) {
+		LogError << "RTAO: CreateRootSignature failed";
 		return false;
 	}
 	
@@ -1326,6 +1386,7 @@ bool D3D12Rtao::createMaskPipeline() {
 	D3D12_ROOT_SIGNATURE_DESC mrs {};
 	mrs.NumParameters = 1;
 	mrs.pParameters = &mp;
+	mrs.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 	ComPtr<ID3DBlob> blob;
 	ComPtr<ID3DBlob> err;
 	if(FAILED(D3D12SerializeRootSignature(&mrs, D3D_ROOT_SIGNATURE_VERSION_1, blob.put(), err.put()))) {
@@ -1338,8 +1399,20 @@ bool D3D12Rtao::createMaskPipeline() {
 	}
 	ComPtr<ID3DBlob> vs;
 	ComPtr<ID3DBlob> psW;
+	ComPtr<ID3DBlob> psZ;
 	ComPtr<ID3DBlob> psM;
 	ComPtr<ID3DBlob> cerr;
+	auto compile = [&](const char * entry, ComPtr<ID3DBlob> & out, const char * fail) {
+		cerr.reset();
+		if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
+		                     entry, "ps_5_0", 0, 0, out.put(), cerr.put()))) {
+			LogError << fail
+			         << (cerr && cerr->GetBufferPointer()
+			             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
+			return false;
+		}
+		return true;
+	};
 	if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
 	                     "VSMain", "vs_5_0", 0, 0, vs.put(), cerr.put()))) {
 		LogError << "RTAO: mask VS failed"
@@ -1347,63 +1420,66 @@ bool D3D12Rtao::createMaskPipeline() {
 		             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 		return false;
 	}
-	cerr.reset();
-	if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
-	                     "PSWater", "ps_5_0", 0, 0, psW.put(), cerr.put()))) {
-		LogError << "RTAO: water mask PS failed"
-		         << (cerr && cerr->GetBufferPointer()
-		             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
-		return false;
-	}
-	cerr.reset();
-	if(FAILED(D3DCompile(kMask, std::strlen(kMask), "rtao_mask", nullptr, nullptr,
-	                     "PSMetal", "ps_5_0", 0, 0, psM.put(), cerr.put()))) {
-		LogError << "RTAO: metal mask PS failed"
-		         << (cerr && cerr->GetBufferPointer()
-		             ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
+	if(!compile("PSWater", psW, "RTAO: water mask PS failed")
+	   || !compile("PSWaterZ", psZ, "RTAO: water depth PS failed")
+	   || !compile("PSMetal", psM, "RTAO: metal mask PS failed")) {
 		return false;
 	}
 	D3D12_INPUT_ELEMENT_DESC elem {};
 	elem.SemanticName = "POSITION";
 	elem.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	elem.InputSlot = 0;
+	elem.AlignedByteOffset = 0;
 	elem.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-	auto fill = [&](D3D12_GRAPHICS_PIPELINE_STATE_DESC & pd, ID3DBlob * ps, UINT nrt,
-	                DXGI_FORMAT f0, DXGI_FORMAT f1) {
+	elem.InstanceDataStepRate = 0;
+	auto fill = [&](D3D12_GRAPHICS_PIPELINE_STATE_DESC & pd, ID3DBlob * ps, DXGI_FORMAT format) {
 		pd = {};
 		pd.pRootSignature = m_maskRoot.Get();
 		pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
 		pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-		// Single-channel RTs (R8 / R32) reject COLOR_WRITE_ENABLE_ALL (0xf).
-		pd.BlendState.IndependentBlendEnable = TRUE;
+		// R8 / R32 reject COLOR_WRITE_ENABLE_ALL (0xf).
 		pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
-		pd.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED;
 		pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
 		pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 		pd.RasterizerState.DepthClipEnable = TRUE;
-		pd.DepthStencilState.DepthEnable = FALSE;
+		// Same pull-forward as RenderWater's depthOffset(8): water sits on the
+		// floor that wrote the scene depth and must still mark those pixels.
+		pd.RasterizerState.DepthBias = -8;
+		pd.RasterizerState.SlopeScaledDepthBias = -8.f;
+		pd.DepthStencilState.DepthEnable = TRUE;
+		pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+		pd.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
 		pd.SampleMask = 0xffffffff;
 		pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-		pd.NumRenderTargets = nrt;
-		pd.RTVFormats[0] = f0;
-		pd.RTVFormats[1] = f1;
+		pd.NumRenderTargets = 1;
+		pd.RTVFormats[0] = format;
+		pd.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
 		pd.SampleDesc.Count = 1;
 		pd.InputLayout.pInputElementDescs = &elem;
 		pd.InputLayout.NumElements = 1;
 	};
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC water {};
-	fill(water, psW.Get(), 2, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R32_FLOAT);
-	const HRESULT waterHr = m_device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(m_waterMaskPso.put()));
-	if(FAILED(waterHr)) {
-		LogError << "RTAO: water mask PSO failed (hr=" << long(waterHr) << ")";
+	fill(water, psW.Get(), DXGI_FORMAT_R8_UNORM);
+	HRESULT hrW = m_device->CreateGraphicsPipelineState(&water, IID_PPV_ARGS(m_waterMaskPso.put()));
+	if(FAILED(hrW)) {
+		LogError << "RTAO: water mask PSO failed (hr=" << long(hrW) << ")";
+		return false;
+	}
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC waterZ {};
+	fill(waterZ, psZ.Get(), DXGI_FORMAT_R32_FLOAT);
+	HRESULT hrZ = m_device->CreateGraphicsPipelineState(&waterZ, IID_PPV_ARGS(m_waterDepthPso.put()));
+	if(FAILED(hrZ)) {
+		LogError << "RTAO: water depth PSO failed (hr=" << long(hrZ) << ")";
 		return false;
 	}
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC metal {};
-	fill(metal, psM.Get(), 1, DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_UNKNOWN);
-	const HRESULT metalHr = m_device->CreateGraphicsPipelineState(&metal, IID_PPV_ARGS(m_metalMaskPso.put()));
-	if(FAILED(metalHr)) {
-		LogError << "RTAO: metal mask PSO failed (hr=" << long(metalHr) << ")";
+	fill(metal, psM.Get(), DXGI_FORMAT_R8_UNORM);
+	HRESULT hrM = m_device->CreateGraphicsPipelineState(&metal, IID_PPV_ARGS(m_metalMaskPso.put()));
+	if(FAILED(hrM)) {
+		LogError << "RTAO: metal mask PSO failed (hr=" << long(hrM) << ")";
 		return false;
 	}
+	LogInfo << "RTAO: mask pipeline ready";
 	return true;
 }
 
@@ -1729,6 +1805,11 @@ void D3D12Rtao::beginWorldFrame() {
 	m_positions.clear();
 	m_waterPositions.clear();
 	m_metalPositions.clear();
+	m_reflectOnlyStart = SIZE_MAX;
+}
+
+void D3D12Rtao::markReflectOnlyStart() {
+	m_reflectOnlyStart = m_positions.size();
 }
 
 void D3D12Rtao::clearRooms() {
@@ -1929,29 +2010,42 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		return false;
 	}
 	
-	auto fillGeo = [](D3D12_RAYTRACING_GEOMETRY_DESC & geo, ID3D12Resource * vb, size_t nverts) {
+	auto fillGeo = [](D3D12_RAYTRACING_GEOMETRY_DESC & geo, ID3D12Resource * vb,
+	                  size_t vertOffset, size_t nverts) {
 		geo = {};
 		geo.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
 		geo.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
 		geo.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
 		geo.Triangles.VertexCount = UINT(nverts);
-		geo.Triangles.VertexBuffer.StartAddress = vb->GetGPUVirtualAddress();
+		geo.Triangles.VertexBuffer.StartAddress = vb->GetGPUVirtualAddress()
+		                                          + vertOffset * sizeof(Pos);
 		geo.Triangles.VertexBuffer.StrideInBytes = sizeof(Pos);
 	};
 	
+	const size_t entityVertCount = (m_reflectOnlyStart == SIZE_MAX)
+		? m_positions.size() : m_reflectOnlyStart;
+	const size_t playerVertCount = (m_reflectOnlyStart == SIZE_MAX
+	                                || m_positions.size() <= m_reflectOnlyStart)
+		? 0 : (m_positions.size() - m_reflectOnlyStart);
+	const bool havePlayer = playerVertCount >= 3 && bool(m_vertDefault);
+	const bool haveEntity = entityVertCount >= 3 && bool(m_vertDefault);
+	
 	D3D12_RAYTRACING_GEOMETRY_DESC dynGeo {};
+	D3D12_RAYTRACING_GEOMETRY_DESC playerGeo {};
 	D3D12_RAYTRACING_GEOMETRY_DESC roomGeo {};
 	D3D12_RAYTRACING_GEOMETRY_DESC waterGeo {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS dynIn {};
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS playerIn {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS roomIn {};
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS waterIn {};
 	UINT64 scratchBytes = 0;
 	UINT64 dynBlasBytes = 0;
+	UINT64 playerBlasBytes = 0;
 	UINT64 roomBlasBytes = 0;
 	UINT64 waterBlasBytes = 0;
 	
-	if(haveDyn) {
-		fillGeo(dynGeo, m_vertDefault.Get(), m_positions.size());
+	if(haveEntity) {
+		fillGeo(dynGeo, m_vertDefault.Get(), 0, entityVertCount);
 		dynIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
 		dynIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
 		dynIn.NumDescs = 1;
@@ -1961,8 +2055,19 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		dynBlasBytes = info.ResultDataMaxSizeInBytes;
 		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
 	}
+	if(havePlayer) {
+		fillGeo(playerGeo, m_vertDefault.Get(), entityVertCount, playerVertCount);
+		playerIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+		playerIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+		playerIn.NumDescs = 1;
+		playerIn.pGeometryDescs = &playerGeo;
+		D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info {};
+		m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&playerIn, &info);
+		playerBlasBytes = info.ResultDataMaxSizeInBytes;
+		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
+	}
 	if(haveRooms && m_roomsDirty) {
-		fillGeo(roomGeo, m_roomDefault.Get(), m_roomPositions.size());
+		fillGeo(roomGeo, m_roomDefault.Get(), 0, m_roomPositions.size());
 		roomIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
 		roomIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
 		roomIn.NumDescs = 1;
@@ -1973,7 +2078,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
 	}
 	if(haveWater) {
-		fillGeo(waterGeo, m_waterDefault.Get(), m_waterPositions.size());
+		fillGeo(waterGeo, m_waterDefault.Get(), 0, m_waterPositions.size());
 		waterIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
 		waterIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
 		waterIn.NumDescs = 1;
@@ -1987,7 +2092,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS tlasIn {};
 	tlasIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
 	tlasIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
-	tlasIn.NumDescs = 3;
+	tlasIn.NumDescs = 4;
 	tlasIn.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
 	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO tlasInfo {};
 	m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&tlasIn, &tlasInfo);
@@ -2001,11 +2106,20 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 			return false;
 		}
 	}
-	if(haveDyn && (!m_blas || m_blas->GetDesc().Width < dynBlasBytes)) {
+	if(haveEntity && (!m_blas || m_blas->GetDesc().Width < dynBlasBytes)) {
 		m_blas.reset();
 		if(!createBuffer(m_device, dynBlasBytes, D3D12_HEAP_TYPE_DEFAULT,
 		                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
 		                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, m_blas.put())) {
+			list4->Release();
+			return false;
+		}
+	}
+	if(havePlayer && (!m_playerBlas || m_playerBlas->GetDesc().Width < playerBlasBytes)) {
+		m_playerBlas.reset();
+		if(!createBuffer(m_device, playerBlasBytes, D3D12_HEAP_TYPE_DEFAULT,
+		                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+		                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, m_playerBlas.put())) {
 			list4->Release();
 			return false;
 		}
@@ -2037,7 +2151,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 			return false;
 		}
 	}
-	const UINT64 instBytes = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * 3;
+	const UINT64 instBytes = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * 4;
 	if(!m_instances || m_instances->GetDesc().Width < instBytes) {
 		m_instances.reset();
 		if(!createBuffer(m_device, instBytes, D3D12_HEAP_TYPE_UPLOAD,
@@ -2057,13 +2171,21 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		uavBarrier(list, m_roomBlas.Get());
 		m_roomsDirty = false;
 	}
-	if(haveDyn) {
+	if(haveEntity) {
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC dynBlas {};
 		dynBlas.DestAccelerationStructureData = m_blas->GetGPUVirtualAddress();
 		dynBlas.Inputs = dynIn;
 		dynBlas.ScratchAccelerationStructureData = m_scratch->GetGPUVirtualAddress();
 		list4->BuildRaytracingAccelerationStructure(&dynBlas, 0, nullptr);
 		uavBarrier(list, m_blas.Get());
+	}
+	if(havePlayer) {
+		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC playerBlas {};
+		playerBlas.DestAccelerationStructureData = m_playerBlas->GetGPUVirtualAddress();
+		playerBlas.Inputs = playerIn;
+		playerBlas.ScratchAccelerationStructureData = m_scratch->GetGPUVirtualAddress();
+		list4->BuildRaytracingAccelerationStructure(&playerBlas, 0, nullptr);
+		uavBarrier(list, m_playerBlas.Get());
 	}
 	if(haveWater) {
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC waterBlas {};
@@ -2093,11 +2215,14 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	if(haveRooms && m_roomBlas) {
 		writeInst(m_roomBlas.Get(), 0, 0x1);
 	}
-	if(haveDyn && m_blas) {
+	if(haveEntity && m_blas) {
 		writeInst(m_blas.Get(), 1, 0x1);
 	}
 	if(haveWater && m_waterBlas) {
 		writeInst(m_waterBlas.Get(), 2, 0x2);
+	}
+	if(havePlayer && m_playerBlas) {
+		writeInst(m_playerBlas.Get(), 3, 0x4);
 	}
 	m_instances->Unmap(0, nullptr);
 	if(nInst == 0) {
@@ -2118,8 +2243,9 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	return true;
 }
 
-void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj) {
-	if(!list || !m_rtvHeap || !m_waterMaskPso || !m_metalMaskPso || !m_maskRoot) {
+void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
+                               ID3D12Resource * depth) {
+	if(!list || !m_rtvHeap || !m_waterMaskPso || !m_waterDepthPso || !m_metalMaskPso || !m_maskRoot) {
 		return;
 	}
 	if(m_maskIsSrv) {
@@ -2161,19 +2287,31 @@ void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4
 	cb.maskValue = 1.f;
 	list->SetGraphicsRoot32BitConstants(0, 20, &cb, 0);
 	list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	D3D12_CPU_DESCRIPTOR_HANDLE dsv {};
+	const D3D12_CPU_DESCRIPTOR_HANDLE * dsvPtr = nullptr;
+	if(depth && m_dsvHeap) {
+		D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc {};
+		dsvDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+		dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+		dsv = m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+		m_device->CreateDepthStencilView(depth, &dsvDesc, dsv);
+		dsvPtr = &dsv;
+	}
 	if(!m_waterPositions.empty() && m_waterUpload) {
-		D3D12_CPU_DESCRIPTOR_HANDLE rts[2] = { rtv0, rtv1 };
-		list->OMSetRenderTargets(2, rts, FALSE, nullptr);
-		list->SetPipelineState(m_waterMaskPso.Get());
 		D3D12_VERTEX_BUFFER_VIEW vb {};
 		vb.BufferLocation = m_waterUpload->GetGPUVirtualAddress();
 		vb.SizeInBytes = UINT(m_waterPositions.size() * sizeof(Pos));
 		vb.StrideInBytes = sizeof(Pos);
 		list->IASetVertexBuffers(0, 1, &vb);
+		list->OMSetRenderTargets(1, &rtv0, FALSE, dsvPtr);
+		list->SetPipelineState(m_waterMaskPso.Get());
+		list->DrawInstanced(UINT(m_waterPositions.size()), 1, 0, 0);
+		list->OMSetRenderTargets(1, &rtv1, FALSE, dsvPtr);
+		list->SetPipelineState(m_waterDepthPso.Get());
 		list->DrawInstanced(UINT(m_waterPositions.size()), 1, 0, 0);
 	}
 	if(!m_metalPositions.empty() && m_metalUpload) {
-		list->OMSetRenderTargets(1, &rtv2, FALSE, nullptr);
+		list->OMSetRenderTargets(1, &rtv2, FALSE, dsvPtr);
 		list->SetPipelineState(m_metalMaskPso.Get());
 		D3D12_VERTEX_BUFFER_VIEW vb {};
 		vb.BufferLocation = m_metalUpload->GetGPUVirtualAddress();
@@ -2229,7 +2367,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		return false;
 	}
 	const glm::mat4x4 viewProjEarly = proj * view;
-	rasterizeMasks(list, viewProjEarly);
+	rasterizeMasks(list, viewProjEarly, depth);
 	D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv {};
 	depthSrv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
 	depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -2309,7 +2447,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		float specAlpha;
 		float contactTMax;
 		float giTemporalAlpha;
-		UINT padSpec;
+		UINT playerVertBase;
 	} cb {};
 	static_assert(sizeof(cb) == kRootConstants * 4, "DXR root constants must match HLSL cbuffer");
 	std::memcpy(cb.invViewProj, glm::value_ptr(inv), sizeof(cb.invViewProj));
@@ -2354,7 +2492,8 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.specAlpha = m_histValid ? 0.10f : 0.f;
 	cb.contactTMax = 60.f;
 	cb.giTemporalAlpha = (m_histValid && !skipTemporal) ? giAlpha[giDenoise] : 0.f;
-	cb.padSpec = 0;
+	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
+	const DistancePreset dist = distancePreset(settings.distance);
 
 	ID3D12DescriptorHeap * heaps[] = { m_heap.Get() };
 	list->SetDescriptorHeaps(1, heaps);
@@ -2368,7 +2507,18 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	if(m_viewCbuf) {
 		void * mappedView = nullptr;
 		if(SUCCEEDED(m_viewCbuf->Map(0, nullptr, &mappedView)) && mappedView) {
-			std::memcpy(mappedView, glm::value_ptr(viewProj), 64);
+			struct ViewCbuf {
+				float viewProj[16];
+				float specTMax;
+				float giTMax;
+				float rtRange;
+				float pad;
+			} viewCb {};
+			std::memcpy(viewCb.viewProj, glm::value_ptr(viewProj), 64);
+			viewCb.specTMax = dist.specTMax;
+			viewCb.giTMax = dist.giTMax;
+			viewCb.rtRange = (settings.range > 8.f) ? settings.range : dist.caster;
+			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
 		}
 		list->SetComputeRootConstantBufferView(3, m_viewCbuf->GetGPUVirtualAddress());
@@ -2411,8 +2561,8 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 	list->SetGraphicsRootSignature(m_compositeRoot.Get());
 	list->SetPipelineState(m_compositePso.Get());
-	const int shadowRadius = (shadowDenoise > 0) ? 3 : 2;
-	const int aoBlur = 5;
+	const int shadowRadius = skipTemporal ? 0 : ((shadowDenoise > 0) ? 3 : 2);
+	const int aoBlur = skipTemporal ? 0 : 5;
 	const UINT compCb[4] = { UINT(shadowRadius), UINT(aoBlur), cb.specHalfRes, 0 };
 	list->SetGraphicsRoot32BitConstants(0, 4, compCb, 0);
 	D3D12_GPU_DESCRIPTOR_HANDLE color = gpu;

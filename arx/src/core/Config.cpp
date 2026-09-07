@@ -104,7 +104,8 @@ constexpr const int
 	dxrTransparency = 0,
 	dxrDlss = 0,
 	dxrRr = 0,
-	dxrFg = 0;
+	dxrFg = 0,
+	dxrDistance = 2;
 
 constexpr const bool
 	fullscreen = true,
@@ -253,6 +254,7 @@ constexpr const std::string_view
 	dxrDlss = "dxr_dlss",
 	dxrRr = "dxr_rr",
 	dxrFg = "dxr_fg",
+	dxrDistance = "dxr_distance",
 	dlssSchema = "dlss_schema";
 
 // Interface options
@@ -527,6 +529,7 @@ bool Config::save() {
 	writer.writeKey(Key::dxrDlss, video.dxrDlss);
 	writer.writeKey(Key::dxrRr, video.dxrRr);
 	writer.writeKey(Key::dxrFg, video.dxrFg);
+	writer.writeKey(Key::dxrDistance, video.dxrDistance);
 	writer.writeKey(Key::dlssSchema, 1);
 	
 	// interface
@@ -690,6 +693,7 @@ bool Config::init(const fs::path & file) {
 	}
 	video.dxrRr = reader.getKey(Section::Video, Key::dxrRr, Default::dxrRr) ? 1 : 0;
 	video.dxrFg = reader.getKey(Section::Video, Key::dxrFg, Default::dxrFg) ? 1 : 0;
+	video.dxrDistance = glm::clamp(reader.getKey(Section::Video, Key::dxrDistance, Default::dxrDistance), 0, 3);
 	if(reader.getKey(Section::Video, Key::dxrPreset)) {
 		video.dxrPreset = glm::clamp(reader.getKey(Section::Video, Key::dxrPreset, Default::dxrPreset), 0, 4);
 		if(video.dxrPreset <= 3) {

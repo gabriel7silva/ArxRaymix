@@ -47,10 +47,10 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/Color.h"
 #include "util/Flags.h"
 
-// Original 0.3 / 0.5 hid the far clip behind hardware fog. D3D12 has fog
-// off, so 0.5 * cdepth was a hard black wall through every doorway.
-const float fZFogStart = 0.55f;
-const float fZFogEnd = 0.95f;
+// Fade starts at 40 % of the render-distance far plane and is solid at 92 %,
+// so the clip is a wall of fog instead of another room hanging in empty space.
+const float fZFogStart = 0.40f;
+const float fZFogEnd = 0.92f;
 
 enum GMODFlag {
 	GMOD_DCOLOR = 1 << 0,

@@ -679,6 +679,7 @@ class VideoOptionsMenuPage final : public MenuPage {
 	TextWidget * m_applyButton;
 	CycleTextWidget * m_upscaler = nullptr;
 	CycleTextWidget * m_dlssMode = nullptr;
+	CycleTextWidget * m_frameGen = nullptr;
 	TextWidget * m_internalRes = nullptr;
 	bool m_fullscreen;
 	DisplayMode m_mode;
@@ -953,12 +954,29 @@ public:
 		}
 		
 		{
+			const bool fgOk = GRenderer && GRenderer->supportsDlssG();
 			std::string_view label = getLocalised("system_menus_options_video_frame_generation");
 			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
-			cb->addEntry(getLocalised("system_menus_options_video_frame_generation_unavailable"));
-			cb->setValue(0);
-			cb->setEnabled(false);
+			cb->valueChanged = [this](int pos, std::string_view /* string */) {
+				config.video.dxrFg = (pos > 0) ? 1 : 0;
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_video_frame_generation_off"));
+			cb->addEntry(getLocalised("system_menus_options_video_frame_generation_on"));
+			cb->setValue(config.video.dxrFg > 0 ? 1 : 0);
+			cb->setEnabled(fgOk);
+			if(!fgOk) {
+				config.video.dxrFg = 0;
+				cb->setValue(0);
+			}
+			m_frameGen = cb.get();
 			addCenter(std::move(cb));
+			if(!fgOk) {
+				auto txt = std::make_unique<TextWidget>(hFontControls,
+					getLocalised("system_menus_options_video_frame_generation_unavailable"));
+				txt->setEnabled(false);
+				addCenter(std::move(txt), false);
+			}
 		}
 		
 		updateDlssWidgets();
@@ -1094,6 +1112,11 @@ private:
 			m_dlssMode->setEnabled(on && GRenderer && GRenderer->supportsDlss());
 		}
 		updateInternalResLabel();
+		if(m_frameGen) {
+			const bool fgOk = GRenderer && GRenderer->supportsDlssG();
+			m_frameGen->setEnabled(fgOk);
+			m_frameGen->setValue((fgOk && config.video.dxrFg > 0) ? 1 : 0);
+		}
 	}
 	
 };
@@ -1134,7 +1157,7 @@ public:
 		}
 		
 		{
-			std::string_view label = getLocalised("system_menus_options_video_brouillard");
+			std::string_view label = getLocalised("system_menus_options_video_render_distance");
 			auto sld = std::make_unique<SliderWidget>(sliderSize(), hFontMenu, label);
 			sld->valueChanged = [](int value) {
 				ARXMenu_Options_Video_SetFogDistance(value);
@@ -1318,6 +1341,7 @@ public:
 			CycleTextWidget * transRefl = nullptr;
 			CycleTextWidget * trans = nullptr;
 			CycleTextWidget * debris = nullptr;
+			CycleTextWidget * distance = nullptr;
 			CycleTextWidget * rr = nullptr;
 		};
 		auto w = std::make_shared<Widgets>();
@@ -1341,6 +1365,7 @@ public:
 			enable(w->transRefl, dxr && !presetOff);
 			enable(w->trans, dxr && !presetOff);
 			enable(w->debris, dxr && !presetOff);
+			enable(w->distance, dxr && !presetOff);
 			enable(w->rr, rrOk && !presetOff);
 		};
 		
@@ -1377,6 +1402,9 @@ public:
 			}
 			if(w->debris) {
 				w->debris->setValue(config.video.dxrDebris);
+			}
+			if(w->distance) {
+				w->distance->setValue(config.video.dxrDistance);
 			}
 			if(w->rr) {
 				w->rr->setValue(config.video.dxrRr);
@@ -1443,6 +1471,23 @@ public:
 			cb->setValue(available ? config.video.dxrPreset : 0);
 			cb->setEnabled(available);
 			w->preset = cb.get();
+			addCenter(std::move(cb));
+		}
+		
+		{
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
+				getLocalised("system_menus_options_raytracing_distance"));
+			cb->valueChanged = [=](int pos, std::string_view /* string */) {
+				config.video.dxrDistance = pos;
+				syncEnabled();
+				config.save();
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_low"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_medium"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_high"));
+			cb->addEntry(getLocalised("system_menus_options_raytracing_ultra"));
+			cb->setValue(available ? config.video.dxrDistance : 0);
+			w->distance = cb.get();
 			addCenter(std::move(cb));
 		}
 		
@@ -1516,6 +1561,10 @@ public:
 			cb->setValue(config.video.dxrRr);
 			w->rr = cb.get();
 			addCenter(std::move(cb));
+			auto exp = std::make_unique<TextWidget>(hFontControls,
+				getLocalised("system_menus_options_raytracing_rr_experimental"));
+			exp->setEnabled(false);
+			addCenter(std::move(exp), false);
 		}
 		
 		if(!available) {

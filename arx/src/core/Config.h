@@ -138,6 +138,7 @@ public:
 		bool screenShake;
 		
 		int levelOfDetail;
+		//! Far-plane / view distance slider (0–10). Kept as `fog=` in cfg.ini.
 		float fogDistance;
 		bool antialiasing;
 		int maxAnisotropicFiltering;
@@ -176,6 +177,8 @@ public:
 		int dxrRr;
 		//! DLSS Frame Generation. 0 = Off, 1 = On (2x).
 		int dxrFg;
+		//! How far DXR collects / traces. 0 = Low, 1 = Medium, 2 = High, 3 = Ultra.
+		int dxrDistance;
 		
 	} video;
 	
