@@ -2678,14 +2678,8 @@ void D3D12Renderer::Clear(BufferFlags bufferFlags, Color clearColor, float clear
 	if(!beginRecording()) {
 		return;
 	}
-	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
-	if(usingSceneTargets()) {
-		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
-		dsv.ptr += m->dsvSize;
-	} else {
-		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
-	}
+	const D3D12_CPU_DESCRIPTOR_HANDLE rtv = currentRtv();
+	const D3D12_CPU_DESCRIPTOR_HANDLE dsv = currentDsv();
 	D3D12_RECT rects[8];
 	UINT n = 0;
 	if(nrects > 0 && rect) {
@@ -3209,18 +3203,30 @@ bool D3D12Renderer::usingSceneTargets() const {
 	return m && m->worldPass && m->sceneReady && m->sceneColor && m->sceneDepth;
 }
 
+D3D12_CPU_DESCRIPTOR_HANDLE D3D12Renderer::currentRtv() const {
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	if(usingSceneTargets()) {
+		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
+	} else {
+		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
+	}
+	return rtv;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE D3D12Renderer::currentDsv() const {
+	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
+	if(usingSceneTargets()) {
+		dsv.ptr += m->dsvSize;
+	}
+	return dsv;
+}
+
 void D3D12Renderer::bindPassTargets() {
 	if(!m->list || !m->backbuffers[m->frame]) {
 		return;
 	}
-	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	D3D12_CPU_DESCRIPTOR_HANDLE dsv = m->dsvHeap->GetCPUDescriptorHandleForHeapStart();
-	if(usingSceneTargets()) {
-		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
-		dsv.ptr += m->dsvSize;
-	} else {
-		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
-	}
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = currentRtv();
+	D3D12_CPU_DESCRIPTOR_HANDLE dsv = currentDsv();
 	m->list->OMSetRenderTargets(1, &rtv, FALSE, m->depth ? &dsv : nullptr);
 	const int pw = passWidth();
 	const int ph = passHeight();
@@ -3258,10 +3264,7 @@ void D3D12Renderer::blitSceneDepthToDisplay() {
 	}
 	transition(m->list.Get(), m->sceneDepth.Get(),
 	           D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-	bindPassTargets();
-	ID3D12DescriptorHeap * heaps[] = { m->srvHeap.Get(), m->samplerHeap.Get() };
-	m->list->SetDescriptorHeaps(2, heaps);
-	m->list->SetGraphicsRootSignature(m->root.Get());
+	restoreRasterBind();
 	m->list->SetPipelineState(m->depthBlitPso.Get());
 	D3D12_GPU_DESCRIPTOR_HANDLE srv = m->srvHeap->GetGPUDescriptorHandleForHeapStart();
 	srv.ptr += UINT64(m->sceneDepthSrv) * m->srvSize;
@@ -3687,12 +3690,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 		m_loggedReflOff = false;
 	}
 	
-	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m->rtvHeap->GetCPUDescriptorHandleForHeapStart();
-	if(usingSceneTargets()) {
-		rtv.ptr += SIZE_T(kFrameCount) * m->rtvSize;
-	} else {
-		rtv.ptr += SIZE_T(m->frame) * m->rtvSize;
-	}
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = currentRtv();
 	D3D12Rtao::Settings dxr {};
 	dxr.aoQuality = config.video.rtao;
 	dxr.shadowQuality = config.video.dxrShadows;
@@ -3710,6 +3708,10 @@ void D3D12Renderer::applyWorldRayEffects() {
 	if(rrLive) {
 		dxr.shadowDenoise = 0;
 		dxr.giDenoise = 0;
+	}
+	if(m->worldPass && m->sceneW > 0 && m->sceneH > 0) {
+		dxr.jitterNdcX = m->jitterX * 2.f / float(m->sceneW);
+		dxr.jitterNdcY = -m->jitterY * 2.f / float(m->sceneH);
 	}
 	ID3D12Resource * color = usingSceneTargets() ? m->sceneColor.Get() : m->backbuffers[m->frame].Get();
 	ID3D12Resource * depth = usingSceneTargets() ? m->sceneDepth.Get() : m->depth.Get();
