@@ -55,7 +55,7 @@ Work in progress, and the bars are meant literally.
 - **Direct3D 9 is a first-class fallback.** Same game, same HWND, separate backend under `arx/src/graphics/d3d9/`.
 - **Video Options picks the API.** Choose DirectX 9 or DirectX 12. The change is saved and applied on the next launch. The current session always shows which API is active.
 - **Separate launch scripts** for each backend. See [`scripts/README.md`](scripts/README.md).
-- **Português (Brasil)** is available in Options → Language for text and, when the speech files are imported, for audio.
+- **Português (Brasil)** covers the menus and UI in Options → Language. Dialogue still falls back to English until those keys are translated. Audio needs the imported WAV files.
 
 ### Hybrid renderer — path tracing is archived
 
