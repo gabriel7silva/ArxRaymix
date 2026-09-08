@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -19,6 +21,7 @@
 #include <vector>
 
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
 #ifdef interface
@@ -1930,6 +1933,130 @@ void D3D12Renderer::unregisterTexture(D3D12Texture * texture) {
 	                     m_liveTextures.end());
 }
 
+//! Diagnostics level from the ARX_D3D12_DEBUG environment variable.
+//! 0 = off (default), 1 = debug layer, 2 = debug layer + GPU-based validation.
+//! Device Removed Extended Data is always armed; it costs nothing until the device dies.
+static int arxD3D12DebugLevel() {
+	static const int level = [] {
+		const char * env = std::getenv("ARX_D3D12_DEBUG");
+		if(!env || !*env) {
+			return 0;
+		}
+		const int value = std::atoi(env);
+		return value < 0 ? 0 : (value > 2 ? 2 : value);
+	}();
+	return level;
+}
+
+static const char * arxD3D12BreadcrumbOpName(D3D12_AUTO_BREADCRUMB_OP op) {
+	switch(op) {
+		case D3D12_AUTO_BREADCRUMB_OP_SETMARKER: return "SetMarker";
+		case D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT: return "BeginEvent";
+		case D3D12_AUTO_BREADCRUMB_OP_ENDEVENT: return "EndEvent";
+		case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED: return "DrawInstanced";
+		case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED: return "DrawIndexedInstanced";
+		case D3D12_AUTO_BREADCRUMB_OP_DISPATCH: return "Dispatch";
+		case D3D12_AUTO_BREADCRUMB_OP_COPYTEXTUREREGION: return "CopyTextureRegion";
+		case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE: return "CopyResource";
+		case D3D12_AUTO_BREADCRUMB_OP_CLEARRENDERTARGETVIEW: return "ClearRenderTargetView";
+		case D3D12_AUTO_BREADCRUMB_OP_CLEARDEPTHSTENCILVIEW: return "ClearDepthStencilView";
+		case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER: return "ResourceBarrier";
+		case D3D12_AUTO_BREADCRUMB_OP_CLEARUNORDEREDACCESSVIEW: return "ClearUnorderedAccessView";
+		case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION: return "CopyBufferRegion";
+		case D3D12_AUTO_BREADCRUMB_OP_BEGINSUBMISSION: return "BeginSubmission";
+		case D3D12_AUTO_BREADCRUMB_OP_ENDSUBMISSION: return "EndSubmission";
+		case D3D12_AUTO_BREADCRUMB_OP_PRESENT: return "Present";
+		case D3D12_AUTO_BREADCRUMB_OP_BUILDRAYTRACINGACCELERATIONSTRUCTURE:
+			return "BuildRaytracingAccelerationStructure";
+		case D3D12_AUTO_BREADCRUMB_OP_DISPATCHRAYS: return "DispatchRays";
+		default: break;
+	}
+	return "other";
+}
+
+//! HRESULTs are only recognisable in hex; the log is the only place anyone will read them.
+static std::string arxD3D12Hex(std::uint64_t value) {
+	char buffer[24] {};
+	std::snprintf(buffer, sizeof(buffer), "0x%llx", static_cast<unsigned long long>(value));
+	return buffer;
+}
+
+//! Debug-layer messages, routed into arx.log so they survive without a debugger attached.
+static void CALLBACK arxD3D12MessageCallback(D3D12_MESSAGE_CATEGORY category,
+                                             D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id,
+                                             LPCSTR description, void * context) {
+	ARX_UNUSED(category);
+	ARX_UNUSED(context);
+	const char * text = description ? description : "(no description)";
+	switch(severity) {
+		case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+		case D3D12_MESSAGE_SEVERITY_ERROR:
+			LogError << "D3D12 validation [" << unsigned(id) << "]: " << text;
+			break;
+		case D3D12_MESSAGE_SEVERITY_WARNING:
+			LogWarning << "D3D12 validation [" << unsigned(id) << "]: " << text;
+			break;
+		default:
+			break; // info and message severities are noise for this purpose
+	}
+}
+
+//! Log what the GPU was doing when it died. Only says anything after a real device loss.
+static void arxD3D12DumpDred(ID3D12Device * device) {
+	if(!device) {
+		return;
+	}
+	DxPtr<ID3D12DeviceRemovedExtendedData> dred;
+	if(FAILED(device->QueryInterface(IID_PPV_ARGS(dred.put())))) {
+		LogWarning << "D3D12: DRED unavailable (needs Windows 10 1903+)";
+		return;
+	}
+	D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT crumbs {};
+	if(SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&crumbs))) {
+		int nodes = 0;
+		for(const D3D12_AUTO_BREADCRUMB_NODE * node = crumbs.pHeadAutoBreadcrumbNode;
+		    node && nodes < 8; node = node->pNext, ++nodes) {
+			const UINT done = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
+			const UINT total = node->BreadcrumbCount;
+			if(done == total) {
+				continue; // this list finished; it is not the one that hung
+			}
+			std::string where = "?";
+			if(node->pCommandListDebugNameA) {
+				where = node->pCommandListDebugNameA;
+			} else if(node->pCommandQueueDebugNameA) {
+				where = node->pCommandQueueDebugNameA;
+			}
+			const char * op = "?";
+			if(node->pCommandHistory && done < total) {
+				op = arxD3D12BreadcrumbOpName(node->pCommandHistory[done]);
+			}
+			LogError << "D3D12 DRED: list \"" << where << "\" stopped at op " << done
+			         << " of " << total << " (" << op << ")";
+			// The few operations either side of the failure point are what identifies it.
+			const UINT first = done > 3 ? done - 3 : 0;
+			const UINT last = (done + 3 < total) ? done + 3 : total;
+			for(UINT i = first; node->pCommandHistory && i < last; ++i) {
+				LogError << "D3D12 DRED:   [" << i << "] "
+				         << arxD3D12BreadcrumbOpName(node->pCommandHistory[i])
+				         << (i == done ? "  <-- died here" : "");
+			}
+		}
+		if(nodes == 0) {
+			LogError << "D3D12 DRED: no breadcrumb nodes";
+		}
+	}
+	D3D12_DRED_PAGE_FAULT_OUTPUT fault {};
+	if(SUCCEEDED(dred->GetPageFaultAllocationOutput(&fault)) && fault.PageFaultVA != 0) {
+		LogError << "D3D12 DRED: page fault at VA " << std::uint64_t(fault.PageFaultVA);
+		for(const D3D12_DRED_ALLOCATION_NODE * n = fault.pHeadRecentFreedAllocationNode; n;
+		    n = n->pNext) {
+			LogError << "D3D12 DRED:   recently freed: "
+			         << (n->ObjectNameA ? n->ObjectNameA : "(unnamed)");
+		}
+	}
+}
+
 void D3D12Renderer::markUnusable() {
 	if(!m) {
 		return;
@@ -1958,15 +2085,59 @@ void D3D12Renderer::retireCompleted() {
 	m->retire.resize(live);
 }
 
-void D3D12Renderer::waitFence(std::uint64_t value) {
+bool D3D12Renderer::waitFence(std::uint64_t value) {
 	if(!m || !m->fence || value == 0) {
-		return;
+		return true;
 	}
 	if(m->fence->GetCompletedValue() < value) {
+		// The event is auto-reset and a bounded wait can leave a registration behind, so an old
+		// signal must never be allowed to satisfy the next wait.
+		ResetEvent(m->fenceEvent);
 		m->fence->SetEventOnCompletion(value, m->fenceEvent);
-		WaitForSingleObject(m->fenceEvent, INFINITE);
+		// Never wait forever: a GPU hang or a removed device leaves this fence unsignalled, and an
+		// INFINITE wait turns that into a frozen window with nothing written to the log.
+		const DWORD sliceMs = 2000;
+		const int maxSlices = 10;
+		for(int slice = 0; slice < maxSlices; ++slice) {
+			if(WaitForSingleObject(m->fenceEvent, sliceMs) == WAIT_OBJECT_0) {
+				retireCompleted();
+				return true;
+			}
+			const HRESULT removed = m->device ? m->device->GetDeviceRemovedReason() : S_OK;
+			if(FAILED(removed)) {
+				LogError << "D3D12: device removed while waiting for fence " << value
+				         << " (reason " << arxD3D12Hex(removed) << ")";
+				arxD3D12DumpDred(m->device.Get());
+				markUnusable();
+				return false;
+			}
+			LogWarning << "D3D12: still waiting for fence " << value << " after "
+			           << ((slice + 1) * int(sliceMs / 1000)) << "s";
+		}
+		LogError << "D3D12: gave up waiting for fence " << value << " — treating as a GPU hang."
+		            " DRED below is empty unless the device was actually removed";
+		arxD3D12DumpDred(m->device.Get());
+		markUnusable();
+		return false;
 	}
 	retireCompleted();
+	return true;
+}
+
+//! Block until every command list submitted so far has finished executing.
+//!
+//! The ray tracing module owns no fence and no per-frame ring. Every frame it overwrites its
+//! upload buffers in place, rebuilds the acceleration structures and the shared scratch buffer
+//! over the previous frame's, and releases resources outright when any of them has to grow —
+//! ten such release points sit inside D3D12Rtao::apply. All of that is only correct while at
+//! most one frame is in flight, which used to be guaranteed by a device-wide flush after every
+//! Present. That flush is gone, so the guarantee is re-established here, for the ray tracing
+//! path only: a raster-only frame still keeps kFrameCount frames in flight.
+bool D3D12Renderer::waitForSubmittedWork() {
+	if(!m || !m->fence) {
+		return true;
+	}
+	return waitFence(m->fenceValue);
 }
 
 void D3D12Renderer::waitGpu() {
@@ -2363,8 +2534,36 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	}
 	m_sl->init();
 	
+	// Arm the diagnostics before the device exists — neither can be turned on afterwards.
+	{
+		DxPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
+		if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(dredSettings.put())))) {
+			dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+			dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+		}
+		const int debugLevel = arxD3D12DebugLevel();
+		if(debugLevel > 0) {
+			DxPtr<ID3D12Debug> debug;
+			if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(debug.put())))) {
+				debug->EnableDebugLayer();
+				LogInfo << "D3D12: debug layer enabled (ARX_D3D12_DEBUG=" << debugLevel << ")";
+				if(debugLevel >= 2) {
+					DxPtr<ID3D12Debug1> debug1;
+					if(SUCCEEDED(debug->QueryInterface(IID_PPV_ARGS(debug1.put())))) {
+						debug1->SetEnableGPUBasedValidation(TRUE);
+						LogInfo << "D3D12: GPU-based validation enabled — expect a large slowdown";
+					}
+				}
+			} else {
+				LogWarning << "D3D12: debug layer requested but unavailable"
+				              " (install the Graphics Tools optional feature)";
+			}
+		}
+	}
+
 	DxPtr<IDXGIFactory6> factory;
-	if(FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.put())))) {
+	if(FAILED(CreateDXGIFactory2(arxD3D12DebugLevel() > 0 ? DXGI_CREATE_FACTORY_DEBUG : 0u,
+	                             IID_PPV_ARGS(factory.put())))) {
 		LogError << "D3D12: CreateDXGIFactory2 failed";
 		return false;
 	}
@@ -2380,6 +2579,20 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	if(FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(m->device.put())))) {
 		LogError << "D3D12: D3D12CreateDevice failed";
 		return false;
+	}
+	if(arxD3D12DebugLevel() > 0) {
+		// Without this the debug layer only talks to an attached debugger, which nobody has when
+		// the bug reproduces on a player's machine. Route it into arx.log instead.
+		DxPtr<ID3D12InfoQueue1> infoQueue;
+		if(SUCCEEDED(m->device->QueryInterface(IID_PPV_ARGS(infoQueue.put())))) {
+			DWORD cookie = 0;
+			infoQueue->RegisterMessageCallback(arxD3D12MessageCallback,
+			                                   D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+			LogInfo << "D3D12: validation messages will be written to this log";
+		} else {
+			LogWarning << "D3D12: ID3D12InfoQueue1 unavailable — validation output goes to the"
+			              " debugger only";
+		}
 	}
 	
 	D3D12_COMMAND_QUEUE_DESC qd {};
@@ -3748,18 +3961,22 @@ void D3D12Renderer::showFrame() {
 		m_sl->onPresent();
 	}
 	const HRESULT presented = m->swapchain->Present(m_vsync == 0 ? 0u : 1u, 0);
-	if(FAILED(presented)) {
+	const bool presentFailed = FAILED(presented);
+	if(presentFailed) {
 		if(presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
 			const HRESULT reason = m->device ? m->device->GetDeviceRemovedReason() : presented;
-			LogError << "D3D12: device removed (" << unsigned(reason) << ")";
+			LogError << "D3D12: device removed (" << arxD3D12Hex(unsigned(reason)) << ")";
+			arxD3D12DumpDred(m->device.Get());
 			markUnusable();
-		} else {
-			LogError << "D3D12: Present failed";
+			m->recording = false;
+			return;
 		}
-		m->recording = false;
-		return;
+		// The command list was already submitted above, so the fence still has to be signalled and
+		// recorded below. Returning early here would leave every later wait comparing against a
+		// stale value, and the next frame would reset an allocator the GPU is still reading.
+		LogError << "D3D12: Present failed (" << arxD3D12Hex(unsigned(presented)) << ")";
 	}
-	if(m_sl) {
+	if(m_sl && !presentFailed) {
 		m_sl->afterPresent();
 	}
 	const UINT64 value = ++m->fenceValue;
