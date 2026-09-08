@@ -90,6 +90,13 @@ public:
 namespace {
 
 constexpr UINT kFrameCount = 2;
+// Game textures rest here rather than in PIXEL_SHADER_RESOURCE alone. A ray dispatch reads
+// through the non-pixel stage, and transitioning thousands of textures each frame to hand them
+// to the ray pass is not an option, so they carry both bits for their whole life. The two
+// transitions in uploadTextureData are the only places that name this state, and they have to
+// keep naming the same one: a barrier whose before-state does not match is a debug-layer error.
+constexpr D3D12_RESOURCE_STATES kTextureReadState =
+	D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 constexpr UINT kSrvHeapSize = 4096;
 constexpr UINT kUploadBytes = 16 * 1024 * 1024;
 constexpr float kNearW = 1.f;
@@ -2240,8 +2247,7 @@ bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, 
 		return false;
 	}
 	if(alreadyOnGpu) {
-		transition(m->list.Get(), dest, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-		           D3D12_RESOURCE_STATE_COPY_DEST);
+		transition(m->list.Get(), dest, kTextureReadState, D3D12_RESOURCE_STATE_COPY_DEST);
 	}
 	for(UINT mip = 0; mip < copyMips; ++mip) {
 		D3D12_TEXTURE_COPY_LOCATION dst {};
@@ -2254,7 +2260,7 @@ bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, 
 		src.PlacedFootprint = footprints[mip];
 		m->list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 	}
-	transition(m->list.Get(), dest, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(m->list.Get(), dest, D3D12_RESOURCE_STATE_COPY_DEST, kTextureReadState);
 	m->inflight.push_back(std::move(staging));
 	if(!wasRecording) {
 		m->list->Close();
