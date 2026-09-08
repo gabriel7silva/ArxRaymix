@@ -230,8 +230,11 @@ float2 rotate2(float2 p, float rot) {
 
 float3 diskOffsetFixed(float3 dir, uint s, float rad, float rot) {
 	float2 o[8] = {
-		float2(0.00, 1.00), float2(0.86, 0.50), float2(0.86, -0.50), float2(0.00, -1.00),
-		float2(-0.86, -0.50), float2(-0.86, 0.50), float2(0.44, 0.00), float2(-0.44, 0.00)
+		// Half-unit disk on purpose: rad is the light radius, so a full-unit ring would sample a
+		// source twice the intended size and widen every penumbra to match. Thin casters — leaves,
+		// bars, table legs — have a shadow no wider than the penumbra, so they wash out first.
+		float2(0.00, 0.50), float2(0.43, 0.25), float2(0.43, -0.25), float2(0.00, -0.50),
+		float2(-0.43, -0.25), float2(-0.43, 0.25), float2(0.22, 0.00), float2(-0.22, 0.00)
 	};
 	// Batches of 8: each further batch is rotated 22.5° and alternates a 0.72 ring
 	// so 16 samples are 16 distinct disk points, not the same 8 twice.
@@ -438,8 +441,13 @@ void RayGen() {
 			}
 			float3 ldir = toL / d;
 			float ndotl = saturate(dot(n, ldir));
-			float span = max(fallend - fallstart, 1e-3);
-			float fall = saturate((fallend - d) / span);
+			// Shadows reach further than the raster falloff, and the light selector in
+			// D3D12Renderer::fillShadowLights ranks candidates by this same fallend * 1.35.
+			// Drop the factor here and the selector keeps handing shadow slots to lights this
+			// loop then evaluates as attn == 0, which removes their shadow entirely.
+			float shadowEnd = fallend * 1.35;
+			float span = max(shadowEnd - fallstart, 1e-3);
+			float fall = saturate((shadowEnd - d) / span);
 			float attn = intensity * fall * ndotl * presence;
 			if(attn <= 0.0) {
 				continue;
