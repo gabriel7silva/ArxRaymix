@@ -95,6 +95,34 @@ constexpr UINT kFrameCount = 2;
 // to the ray pass is not an option, so they carry both bits for their whole life. The two
 // transitions in uploadTextureData are the only places that name this state, and they have to
 // keep naming the same one: a barrier whose before-state does not match is a debug-layer error.
+//! Descriptor index of a material's diffuse texture, or 0 for the 1x1 white fallback. Because
+//! the ray tracing block sits at the end of the heap, a texture's srvIndex is also its index
+//! in the bindless range, with nothing to add.
+//! Diffuse material of a face, or null when the face has none.
+const TextureContainer * faceTexture(const EERIE_3DOBJ * obj, const EERIE_FACE & face) {
+	if(!obj || !face.material || size_t(face.material) >= obj->materials.size()) {
+		return nullptr;
+	}
+	return obj->materials[face.material];
+}
+
+//! Copy a face's texture coordinates into the three vertices the ray tracing collector reads,
+//! scaled the way the raster path scales them: a texture stored larger than its image (the
+//! power-of-two padding) would otherwise sample shifted and shrunk.
+void setFaceUv(SMY_VERTEX (&verts)[3], const EERIE_FACE & face, const TextureContainer * tc) {
+	const Vec2f scale = tc ? tc->uv : Vec2f(1.f);
+	for(int i = 0; i < 3; ++i) {
+		verts[i].uv = Vec2f(face.u[i], face.v[i]) * scale;
+	}
+}
+
+unsigned srvOf(const TextureContainer * tc) {
+	if(!tc || !tc->m_pTexture) {
+		return 0u;
+	}
+	return static_cast<const D3D12Texture *>(tc->m_pTexture)->srvIndex();
+}
+
 constexpr D3D12_RESOURCE_STATES kTextureReadState =
 	D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 constexpr UINT kSrvHeapSize = 4096;
@@ -563,10 +591,17 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 			if(fartherThan(ep.center, g_camera->m_pos, casterDist)) {
 				continue;
 			}
+			// The padding scale matters for textures stored larger than their image, exactly as
+			// the raster path applies it.
+			const Vec2f uvScale = ep.tex ? ep.tex->uv : Vec2f(1.f);
+			const unsigned roomTex = srvOf(ep.tex);
 			verts[0].p = ep.v[0].p;
 			verts[1].p = ep.v[1].p;
 			verts[2].p = ep.v[2].p;
-			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+			verts[0].uv = ep.v[0].uv * uvScale;
+			verts[1].uv = ep.v[1].uv * uvScale;
+			verts[2].uv = ep.v[2].uv * uvScale;
+			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex);
 			if(collectMetal && (ep.type & POLY_METAL)) {
 				rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 			}
@@ -574,7 +609,10 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 				verts[0].p = ep.v[3].p;
 				verts[1].p = ep.v[2].p;
 				verts[2].p = ep.v[1].p;
-				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+				verts[0].uv = ep.v[3].uv * uvScale;
+				verts[1].uv = ep.v[2].uv * uvScale;
+				verts[2].uv = ep.v[1].uv * uvScale;
+				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex);
 				if(collectMetal && (ep.type & POLY_METAL)) {
 					rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 				}
@@ -627,10 +665,12 @@ void addObjectFaces(D3D12Rtao * rtao, const EERIE_3DOBJ * obj, bool includeAlpha
 		if(!ok) {
 			continue;
 		}
+		const TextureContainer * faceTc = faceTexture(obj, face);
 		verts[0].p = p[0];
 		verts[1].p = p[1];
 		verts[2].p = p[2];
-		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+		setFaceUv(verts, face, faceTc);
+		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
 		if(collectMetal) {
 			const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
 				? obj->materials[face.material] : nullptr;
@@ -694,10 +734,12 @@ void addLinkedCasters(D3D12Rtao * rtao, const Entity & entity, bool includeAlpha
 			if(!ok) {
 				continue;
 			}
+			const TextureContainer * faceTc = faceTexture(link.obj, face);
 			verts[0].p = p[0];
 			verts[1].p = p[1];
 			verts[2].p = p[2];
-			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+			setFaceUv(verts, face, faceTc);
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
 		}
 	}
 }
@@ -802,15 +844,17 @@ void collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 			if(!ok) {
 				continue;
 			}
+			const TextureContainer * faceTc = faceTexture(obj, face);
 			verts[0].p = p[0];
 			verts[1].p = p[1];
 			verts[2].p = p[2];
+			setFaceUv(verts, face, faceTc);
 			for(const Vec3f & v : p) {
 				mix(v.x);
 				mix(v.y);
 				mix(v.z);
 			}
-			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
 			if(collectMetal) {
 				const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
 					? obj->materials[face.material] : nullptr;

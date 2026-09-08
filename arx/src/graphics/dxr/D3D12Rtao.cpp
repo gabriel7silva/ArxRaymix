@@ -2144,10 +2144,16 @@ void D3D12Rtao::clearRooms() {
 	m_roomsDirty = true;
 }
 
+//! SMY_VERTEX3 carries three UV sets for lightmap blending; the ray pass only wants the
+//! diffuse one.
+static Vec2f diffuseUv(const SMY_VERTEX & v) { return v.uv; }
+static Vec2f diffuseUv(const SMY_VERTEX3 & v) { return v.uv[0]; }
+
 template <typename Vertex>
-void D3D12Rtao::addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
+void D3D12Rtao::addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, size_t cap,
+                        Renderer::Primitive primitive,
                         const Vertex * vertices, size_t nvertices,
-                        const unsigned short * indices, size_t nindices) {
+                        const unsigned short * indices, size_t nindices, unsigned texIndex) {
 	if(!m_supported || !vertices || nvertices == 0) {
 		return;
 	}
@@ -2175,21 +2181,31 @@ void D3D12Rtao::addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive 
 		if(glm::dot(nrm, nrm) < 1e-4f) {
 			return;
 		}
+		// The three early returns above skip a triangle entirely. The attribute has to be pushed
+		// here, with the positions, or every later PrimitiveIndex points at the wrong triangle.
 		dst.push_back({ pa.x, pa.y, pa.z, 1.f });
 		dst.push_back({ pb.x, pb.y, pb.z, 1.f });
 		dst.push_back({ pc.x, pc.y, pc.z, 1.f });
+		if(attr) {
+			const Vec2f ua = diffuseUv(vertices[a]);
+			const Vec2f ub = diffuseUv(vertices[b]);
+			const Vec2f uc = diffuseUv(vertices[c]);
+			attr->push_back({ ua.x, ua.y, ub.x, ub.y, uc.x, uc.y, texIndex, 0u });
+		}
 	});
 }
 
 void D3D12Rtao::addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                        const unsigned short * indices, size_t nindices) {
-	addTris(m_roomPositions, kMaxRoomTriangles, primitive, vertices, nvertices, indices, nindices);
+                        const unsigned short * indices, size_t nindices, unsigned texIndex) {
+	addTris(m_roomPositions, &m_roomTriAttr, kMaxRoomTriangles, primitive, vertices, nvertices,
+	        indices, nindices, texIndex);
 	m_roomsDirty = true;
 }
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                         const unsigned short * indices, size_t nindices) {
-	addTris(m_positions, kMaxDynTriangles, primitive, vertices, nvertices, indices, nindices);
+                         const unsigned short * indices, size_t nindices, unsigned texIndex) {
+	addTris(m_positions, &m_triAttr, kMaxDynTriangles, primitive, vertices, nvertices,
+	        indices, nindices, texIndex);
 }
 
 void D3D12Rtao::addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c) {
@@ -2218,23 +2234,29 @@ void D3D12Rtao::addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c) {
 
 void D3D12Rtao::addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
                          const unsigned short * indices, size_t nindices) {
-	addTris(m_metalPositions, kMaxMetalTriangles, primitive, vertices, nvertices, indices, nindices);
+	// Mask geometry never enters a BLAS and has no material lookup.
+	addTris(m_metalPositions, nullptr, kMaxMetalTriangles, primitive, vertices, nvertices,
+	        indices, nindices, 0u);
 }
 
 void D3D12Rtao::addRoomMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
                              const unsigned short * indices, size_t nindices) {
-	addTris(m_roomMetalPositions, kMaxMetalTriangles, primitive, vertices, nvertices, indices, nindices);
+	addTris(m_roomMetalPositions, nullptr, kMaxMetalTriangles, primitive, vertices, nvertices,
+	        indices, nindices, 0u);
 }
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-                         const unsigned short * indices, size_t nindices) {
-	addTris(m_positions, kMaxDynTriangles, primitive, vertices, nvertices, indices, nindices);
+                         const unsigned short * indices, size_t nindices, unsigned texIndex) {
+	addTris(m_positions, &m_triAttr, kMaxDynTriangles, primitive, vertices, nvertices,
+	        indices, nindices, texIndex);
 }
 
-template void D3D12Rtao::addTris<SMY_VERTEX>(std::vector<Pos> &, size_t, Renderer::Primitive,
-                                             const SMY_VERTEX *, size_t, const unsigned short *, size_t);
-template void D3D12Rtao::addTris<SMY_VERTEX3>(std::vector<Pos> &, size_t, Renderer::Primitive,
-                                              const SMY_VERTEX3 *, size_t, const unsigned short *, size_t);
+template void D3D12Rtao::addTris<SMY_VERTEX>(std::vector<Pos> &, std::vector<TriAttr> *, size_t,
+                                            Renderer::Primitive, const SMY_VERTEX *, size_t,
+                                            const unsigned short *, size_t, unsigned);
+template void D3D12Rtao::addTris<SMY_VERTEX3>(std::vector<Pos> &, std::vector<TriAttr> *, size_t,
+                                            Renderer::Primitive, const SMY_VERTEX3 *, size_t,
+                                            const unsigned short *, size_t, unsigned);
 
 bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 	if(!m_device || (m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty())) {

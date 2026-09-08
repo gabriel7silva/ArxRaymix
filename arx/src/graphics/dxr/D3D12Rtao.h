@@ -69,12 +69,14 @@ public:
 	void beginWorldFrame();
 	void markReflectOnlyStart();
 	void clearRooms();
+	//! texIndex is the caller's descriptor index for the face's texture, 0 for the white
+	//! fallback. It is stored per triangle so a hit can find its material.
 	void addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	             const unsigned short * indices, size_t nindices);
+	             const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
 	void addWorld(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	              const unsigned short * indices, size_t nindices);
+	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
 	void addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-	              const unsigned short * indices, size_t nindices);
+	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
 	void addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	void addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
 	              const unsigned short * indices, size_t nindices);
@@ -194,9 +196,12 @@ private:
 	void rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
 	                    ID3D12Resource * depth, float jitterNdcX, float jitterNdcY);
 	template <typename Vertex>
-	void addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
-	             const Vertex * vertices, size_t nvertices,
-	             const unsigned short * indices, size_t nindices);
+	//! attr may be null for geometry that carries no material (the mask buffers). When it is
+	//! not, one entry is pushed for every triangle pushed into dst, in the same block, because
+	//! the hit shader finds an attribute by PrimitiveIndex.
+	void addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, size_t cap,
+	             Renderer::Primitive primitive, const Vertex * vertices, size_t nvertices,
+	             const unsigned short * indices, size_t nindices, unsigned texIndex);
 	void addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	
 	ID3D12Device * m_device = nullptr;
