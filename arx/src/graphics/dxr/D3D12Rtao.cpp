@@ -123,6 +123,11 @@ static constexpr float waterFacing[] = { 0.f, 0.18f, 0.30f, 0.45f };
 // numbers were once kept small to hide. Albedo averages well under one, so the levels move up
 // to compensate; they are a look now, not a disguise.
 static constexpr float reflectFill[] = { 0.f, 0.70f, 0.95f, 1.25f };
+// How reflective metal looks head-on. 0.18 is dirty iron and was the only setting; the higher
+// levels take it towards a mirror. The cost of a mirror here is honesty about the sample count:
+// metal traces one or two rays, so the more of the raster texture the reflection replaces, the
+// more of that sparse sampling shows. Low stays where it always was.
+static constexpr float metalFacing[] = { 0.f, 0.18f, 0.35f, 0.60f };
 static constexpr float shadowAlpha[] = { kTemporalAlphaLow, kTemporalAlphaHigh };
 static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
 static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
@@ -133,6 +138,7 @@ static_assert(std::size(transRays) == kMaxRtQuality + 1);
 static_assert(std::size(metalRayCount) == kMaxRtQuality + 1);
 static_assert(std::size(waterFacing) == kMaxRtQuality + 1);
 static_assert(std::size(reflectFill) == kMaxRtQuality + 1);
+static_assert(std::size(metalFacing) == kMaxRtQuality + 1);
 static_assert(std::size(shadowAlpha) == kMaxShadowDenoise + 1);
 static_assert(std::size(giAlpha) == kMaxGiDenoise + 1);
 static_assert(aoRayCount[0] == 0u && shadowRays[0] == 0u && giRayCount[0] == 0u
@@ -197,7 +203,7 @@ struct DxrViewCbuf {
 	float waterFacing;
 	float waterFill;
 	float metalFill;
-	float pad0;
+	float metalFacingF0;
 	float pad1;
 };
 static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
@@ -312,7 +318,7 @@ cbuffer ViewParams : register(b1) {
 	float waterFacing;
 	float waterFill;
 	float metalFill;
-	float padView0;
+	float metalFacingF0;
 	float padView1;
 };
 
@@ -834,9 +840,10 @@ void RayGen() {
 		} else if(mm > 0.5 && metalRays > 0u) {
 			float3 V = normalize(cameraPos - pos);
 			float ndv = saturate(dot(n, V));
-			// Dirty iron, not chrome. 0.56 replaced the plate albedo with 2-ray
-			// static (the elevator rope face).
-			float F0 = 0.18;
+			// Dirty iron at Low, closer to a mirror at High. Raising this replaces more of the
+			// plate's own texture with the reflection, which also shows more of the one or two
+			// rays behind it — the reason it was pinned at 0.18 before there was a dial.
+			float F0 = metalFacingF0;
 			specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
 			uint nSpec = min(max(metalRays, 1u), 2u);
 			float4 acc = float4(0, 0, 0, 0);
@@ -1127,8 +1134,11 @@ float4 PSMain(VSOut i) : SV_Target {
 	}
 	c = saturate(c) * max(ao * sh, 0.08);
 	if(metal > 0.5) {
-		// Coat, not a replace: the elevator iron must keep its raster texture.
-		c = saturate(c * (1.0 - specS.a * 0.35) + specS.rgb * specS.a * 0.45);
+		// How much of the plate's own texture survives is left to specS.a, which already carries
+		// the quality-scaled Fresnel. At Low that alpha is small and this stays a coat, as it
+		// always was; at High it is large and the reflection takes over, which is what a mirror
+		// is. Fixed factors of 0.35 and 0.45 capped it below a mirror no matter the setting.
+		c = saturate(c * (1.0 - specS.a * 0.85) + specS.rgb * specS.a * 0.95);
 	}
 	return float4(saturate(c), 1);
 }
@@ -3038,6 +3048,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 			viewCb.waterFacing = waterFacing[transRefl];
 			viewCb.waterFill = reflectFill[transRefl];
 			viewCb.metalFill = reflectFill[metalRefl];
+			viewCb.metalFacingF0 = metalFacing[metalRefl];
 			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
 		}
