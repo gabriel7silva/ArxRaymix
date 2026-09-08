@@ -56,7 +56,7 @@ static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
 // Size of the Params (b0) constant buffer. It used to be a count of root constants; those cost a
 // DWORD each and filled 60 of the root signature's 64, which is why every later value had to be
 // smuggled into ViewParams (b1). It is a root CBV now, so the size is only a size.
-//! ARX_DXR_DEBUG: 0 off, 1 instance id, 2 hit normal, 3 hit distance. Read once. A ray pass
+//! ARX_DXR_DEBUG: 0 off, 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo. A ray pass
 //! cannot print, so the reflection surface doubles as the readout.
 UINT arxDxrDebugView() {
 	static const UINT view = [] {
@@ -65,7 +65,7 @@ UINT arxDxrDebugView() {
 			return 0;
 		}
 		const int value = std::atoi(env);
-		return (value < 0 || value > 3) ? 0 : value;
+		return (value < 0 || value > 4) ? 0 : value;
 	}();
 	return view;
 }
@@ -225,6 +225,11 @@ struct TriAttr {
 };
 StructuredBuffer<TriAttr> g_dynAttr : register(t15);
 StructuredBuffer<TriAttr> g_roomAttr : register(t16);
+// Every game texture, indexed by the descriptor index the renderer assigned it. space1 keeps
+// it clear of the pass's own t registers. Index 0 is a 1x1 white texture, so a face with no
+// material needs no branch.
+Texture2D<float4> g_textures[] : register(t0, space1);
+SamplerState g_matSamp : register(s0);
 RWTexture2D<float> g_ao : register(u0);
 RWTexture2D<float> g_shadow : register(u1);
 RWTexture2D<float4> g_gi : register(u2);
@@ -261,7 +266,7 @@ cbuffer Params : register(b0) {
 	float contactTMax;
 	float giTemporalAlpha;
 	uint playerVertBase;
-	// 0 = off. 1 = instance id, 2 = hit normal, 3 = hit distance. Replaces the reflection with
+	// 0 = off. 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo. Replaces the reflection with
 	// the raw value so the ray pass can be inspected on screen; it cannot be printed from a
 	// hit shader.
 	uint debugView;
@@ -298,6 +303,9 @@ struct RayPayload {
 	// Which instance was hit: 0 room, 1 entity, 2 water, 3 player. Only read by the debug
 	// views today, but it is what a material lookup will need to pick its vertex buffer.
 	uint inst;
+	// Surface colour at the hit, sampled from the real texture. Free: the shader config already
+	// reserves 32 bytes and the payload used 20.
+	float3 albedo;
 };
 
 // Interleaved gradient noise: a per-pixel rotation that is fixed in screen space
@@ -379,6 +387,11 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 		if(debugView == 3u) {
 			float d = saturate(rp.t / max(tmax, 1.0));
 			return float4(d, d, d, 1.0);
+		}
+		if(debugView == 4u) {
+			// The whole point of the exercise: the real surface colour at the hit, including
+			// geometry the screen never shows.
+			return float4(rp.albedo, 1.0);
 		}
 	}
 	float3 hit = rd.Origin + rd.Direction * rp.t;
@@ -873,7 +886,7 @@ void RayGen() {
 }
 
 [shader("closesthit")]
-void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* attr */) {
+void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) {
 	p.t = RayTCurrent();
 	uint prim = PrimitiveIndex();
 	float3 v0, v1, v2;
@@ -897,6 +910,29 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* att
 	}
 	p.n = n;
 	p.inst = InstanceID();
+	// Barycentrics give the point inside the triangle; the attribute buffer is picked by the
+	// same InstanceID branch as the vertices above. InstanceIndex would slide whenever one of
+	// the four categories is absent, InstanceID is written explicitly per instance.
+	float3 bc = float3(1.0 - attr.barycentrics.x - attr.barycentrics.y,
+	                   attr.barycentrics.x, attr.barycentrics.y);
+	TriAttr a;
+	if(InstanceID() == 0u) {
+		a = g_roomAttr[prim];
+	} else if(InstanceID() == 2u) {
+		// Water has no material of its own; white keeps it out of the way.
+		p.albedo = float3(1, 1, 1);
+		return;
+	} else {
+		// The player's BLAS starts partway into the shared dynamic buffer and its
+		// PrimitiveIndex restarts at zero, so shift by where that geometry begins.
+		uint attrBase = (InstanceID() == 3u) ? (playerVertBase / 3u) : 0u;
+		a = g_dynAttr[attrBase + prim];
+	}
+	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
+	// SampleLevel, not Sample: a hit shader has no quad derivatives. A fixed level for now;
+	// a ray-cone LOD belongs with the rest of the filtering work.
+	p.albedo = g_textures[NonUniformResourceIndex(a.tex)]
+	           .SampleLevel(g_matSamp, uv, 2.0).rgb;
 }
 
 [shader("miss")]
@@ -904,6 +940,7 @@ void Miss(inout RayPayload p) {
 	p.t = 1e7;
 	p.n = 0.xxx;
 	p.inst = 0xffffffffu;
+	p.albedo = 0.xxx;
 }
 )";
 
@@ -1332,6 +1369,16 @@ bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
 		return true;
 	}
 	LogInfo << "RaytracingTier=" << int(opt.RaytracingTier);
+	// The bindless texture range needs Resource Binding Tier 2. Every DXR-capable GPU reports
+	// Tier 3 in practice, but the project only ever asked about ray tracing, so say it out loud.
+	D3D12_FEATURE_DATA_D3D12_OPTIONS base {};
+	if(SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &base, sizeof(base)))) {
+		LogInfo << "ResourceBindingTier=" << int(base.ResourceBindingTier);
+		if(base.ResourceBindingTier < D3D12_RESOURCE_BINDING_TIER_2) {
+			LogError << "RTAO: Resource Binding Tier 2 required for material sampling — raster only";
+			return true;
+		}
+	}
 	
 	if(FAILED(device->QueryInterface(IID_PPV_ARGS(m_device5.put())))) {
 		LogInfo << "RaytracingTier=NOT_SUPPORTED (Device5 QI failed)";
@@ -1339,6 +1386,16 @@ bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
 	}
 	
 	m_supported = true;
+	// The heap belongs to the renderer. A ray dispatch and a raster draw cannot bind different
+	// CBV_SRV_UAV heaps, and the hit shader has to reach the game's textures, so this module
+	// works inside a reserved block of the renderer's heap instead of owning one.
+	if(!sharedHeap) {
+		LogError << "RTAO: no shared descriptor heap";
+		return true;
+	}
+	m_heap = sharedHeap;
+	m_rtaoBase = baseIndex;
+	// createPipeline sizes the bindless range from m_rtaoBase, so this has to come first.
 	m_descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	m_rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	
@@ -1351,15 +1408,6 @@ bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
 		LogWarning << "RTAO: mask pipeline failed — reflections off, AO/shadows/GI still on";
 	}
 	
-	// The heap belongs to the renderer. A ray dispatch and a raster draw cannot bind different
-	// CBV_SRV_UAV heaps, and the hit shader has to reach the game's textures, so this module
-	// works inside a reserved block of the renderer's heap instead of owning one.
-	if(!sharedHeap) {
-		LogError << "RTAO: no shared descriptor heap";
-		return true;
-	}
-	m_heap = sharedHeap;
-	m_rtaoBase = baseIndex;
 	if(!createBuffer(device, UINT64(kMaxShadowLights * sizeof(GpuLight)), D3D12_HEAP_TYPE_UPLOAD,
 	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, m_lights.put())) {
 		LogError << "RTAO: light buffer failed";
@@ -1493,7 +1541,15 @@ bool D3D12Rtao::createPipeline() {
 	uav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 	uav.NumDescriptors = kRtUavCount;
 	uav.BaseShaderRegister = 0;
-	D3D12_ROOT_PARAMETER params[4] {};
+	// Every descriptor before this module's reserved block is a game texture, addressed by the
+	// index the renderer already handed each one. Bounded rather than unbounded so the debug
+	// layer can validate an out-of-range index instead of letting it read whatever is there.
+	D3D12_DESCRIPTOR_RANGE bindless {};
+	bindless.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	bindless.NumDescriptors = m_rtaoBase;
+	bindless.BaseShaderRegister = 0;
+	bindless.RegisterSpace = 1;
+	D3D12_ROOT_PARAMETER params[5] {};
 	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	params[0].Descriptor.ShaderRegister = 0;
 	params[0].Descriptor.RegisterSpace = 0;
@@ -1509,9 +1565,25 @@ bool D3D12Rtao::createPipeline() {
 	params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	params[3].Descriptor.ShaderRegister = 1;
 	params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	params[4].DescriptorTable.NumDescriptorRanges = 1;
+	params[4].DescriptorTable.pDescriptorRanges = &bindless;
+	params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	// Sampling in a hit shader needs a sampler and there is no sampler heap bound here. A
+	// static sampler costs no DWORDs. WRAP, not the composite's CLAMP: game UVs tile.
+	D3D12_STATIC_SAMPLER_DESC matSamp {};
+	matSamp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	matSamp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	matSamp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	matSamp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	matSamp.MaxLOD = D3D12_FLOAT32_MAX;
+	matSamp.ShaderRegister = 0;
+	matSamp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	D3D12_ROOT_SIGNATURE_DESC rs {};
-	rs.NumParameters = 4;
+	rs.NumParameters = 5;
 	rs.pParameters = params;
+	rs.NumStaticSamplers = 1;
+	rs.pStaticSamplers = &matSamp;
 	ComPtr<ID3DBlob> blob;
 	ComPtr<ID3DBlob> err;
 	if(FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, blob.put(), err.put()))) {
@@ -2881,6 +2953,10 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	D3D12_GPU_DESCRIPTOR_HANDLE uav = gpu;
 	uav.ptr += SIZE_T(kRtUavBase) * m_descriptorSize;
 	list->SetComputeRootDescriptorTable(2, uav);
+	// Anchored at the start of the heap, not at this module's block: a texture's srvIndex is
+	// then its index in g_textures with nothing to add. A table declared and left unbound is
+	// undefined behaviour, so this and the root signature go together or not at all.
+	list->SetComputeRootDescriptorTable(4, m_heap->GetGPUDescriptorHandleForHeapStart());
 	if(m_viewCbuf) {
 		void * mappedView = nullptr;
 		if(SUCCEEDED(m_viewCbuf->Map(0, nullptr, &mappedView)) && mappedView) {
