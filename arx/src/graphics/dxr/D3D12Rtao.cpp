@@ -806,7 +806,9 @@ void RayGen() {
 			specRgb = acc.rgb;
 			specF *= acc.a;
 		}
-		if(specF > 0.0 && specAlpha > 0.0 && specHistOk) {
+		// A diagnostic has to show this frame's value. Blending it with the history smears the
+		// reading across a dozen frames and makes a correct sample look like a broken one.
+		if(specF > 0.0 && specAlpha > 0.0 && specHistOk && debugView == 0u) {
 			int2 hp = specHalfRes ? (specHistPix & int2(~1, ~1)) : specHistPix;
 			float4 prevS = g_specPrev.Load(int3(hp, 0));
 			if(prevS.a >= 1e-4) {
