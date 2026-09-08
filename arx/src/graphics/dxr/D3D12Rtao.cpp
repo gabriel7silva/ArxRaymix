@@ -2898,6 +2898,22 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, kMaxGiDenoise));
 	const int contact = settings.contact ? 1 : 0;
 	const bool skipTemporal = settings.skipTemporal;
+	// Ray Reconstruction takes over both the accumulation and the spatial blur, so toggling it
+	// swaps denoisers mid-flight. Log the swap and the history state: a reflection that fades in
+	// after the toggle is history rebuilding, and without this line that is indistinguishable
+	// from the pass having failed.
+	{
+		static int loggedSkip = -1;
+		static int loggedHist = -1;
+		const int skipNow = skipTemporal ? 1 : 0;
+		const int histNow = m_histValid ? 1 : 0;
+		if(skipNow != loggedSkip || histNow != loggedHist) {
+			LogInfo << "DXR denoise: skipTemporal=" << skipNow << " histValid=" << histNow
+			        << " (0 history means the reflection restarts from a single frame)";
+			loggedSkip = skipNow;
+			loggedHist = histNow;
+		}
+	}
 	if(aoQuality <= 0 && shadowQuality <= 0 && giQuality <= 0 && transRefl <= 0 && metalRefl <= 0
 	   && contact <= 0) {
 		return false;

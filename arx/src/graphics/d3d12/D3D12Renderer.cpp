@@ -1641,6 +1641,9 @@ struct D3D12Renderer::Impl {
 	UINT srvSize = 0;
 	UINT sampSize = 0;
 	UINT nextSrv = 1;
+	//! A descriptor index was recycled, so the texture ids baked into the room geometry are
+	//! stale. Consumed by the room cache guard in applyWorldRayEffects.
+	bool roomsNeedRebuild = false;
 	std::vector<unsigned> freeSrv;
 	UINT uploadOffset = 0;
 	UINT uploadLimit = 0;
@@ -1957,11 +1960,14 @@ void D3D12Renderer::freeSrv(unsigned index) {
 	// The room geometry stores this index per triangle and is only re-uploaded when the room
 	// cache is rebuilt, so it can outlive the texture by many frames. Once the index is back in
 	// the pool the next texture takes it, and a reflected wall would quietly wear that texture
-	// instead of its own. Rebuilding the cache is cheap next to being wrong, and this only
-	// happens when a texture is actually destroyed.
-	if(m_rtao) {
-		m_rtao->clearRooms();
-	}
+	// instead of its own.
+	//
+	// Ask for a rebuild rather than clearing the geometry here. clearRooms() empties the room
+	// positions and the room metal, and only collectRoomCasters refills them — which runs behind
+	// a guard that fires when the camera moves far enough or the room changes. Clearing outside
+	// that guard left the ray pass with no room geometry at all until the player walked far
+	// enough to trip it, which read as reflections vanishing and returning seconds later.
+	m->roomsNeedRebuild = true;
 }
 
 void D3D12Renderer::createTextureSrv(ID3D12Resource * resource, unsigned index) {
@@ -3698,6 +3704,9 @@ void D3D12Renderer::beginSceneUpscale() {
 		m->prevDlssActive = 0;
 		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
 			// resize() releases the ray tracing targets outright; the previous frame read them.
+			// It also throws away the temporal history, so anything accumulated restarts.
+			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
+			        << " — temporal history restarts";
 			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
@@ -3716,6 +3725,9 @@ void D3D12Renderer::beginSceneUpscale() {
 	if(slMode <= 0) {
 		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
 			// resize() releases the ray tracing targets outright; the previous frame read them.
+			// It also throws away the temporal history, so anything accumulated restarts.
+			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
+			        << " — temporal history restarts";
 			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
@@ -3730,6 +3742,9 @@ void D3D12Renderer::beginSceneUpscale() {
 		m->dlssMode = wantRr ? D3D12Streamline::resolveDlssMode(1, m_height) : 0;
 		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
 			// resize() releases the ray tracing targets outright; the previous frame read them.
+			// It also throws away the temporal history, so anything accumulated restarts.
+			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
+			        << " — temporal history restarts";
 			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
@@ -3748,6 +3763,8 @@ void D3D12Renderer::beginSceneUpscale() {
 	m->jitterX = halton(m->jitterFrame, 2) - 0.5f;
 	m->jitterY = halton(m->jitterFrame, 3) - 0.5f;
 	if(m_rtao && m_rtao->needsResize(rw, rh)) {
+		LogInfo << "DXR targets rebuilt at " << rw << "x" << rh
+		        << " — temporal history restarts";
 		waitForSubmittedWork();
 		m_rtao->resize(rw, rh);
 	}
@@ -3920,7 +3937,9 @@ void D3D12Renderer::applyWorldRayEffects() {
 	   || s_roomMetal != int(collectMetal)
 	   || s_roomDist != config.video.dxrDistance
 	   || std::abs(s_roomCaster - casterDist) > 50.f
-	   || s_lightHash != g_shadowLightSetHash) {
+	   || s_lightHash != g_shadowLightSetHash
+	   || m->roomsNeedRebuild) {
+		m->roomsNeedRebuild = false;
 		m_rtao->clearRooms();
 		collectRoomCasters(m_rtao, casterDist, lights, nlights, includeAlpha, includeTrans,
 		                   collectMetal, dist.roomHops, dist.maxRooms);
