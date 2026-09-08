@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <string>
@@ -50,7 +51,21 @@ static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
 // Size of the Params (b0) constant buffer. It used to be a count of root constants; those cost a
 // DWORD each and filled 60 of the root signature's 64, which is why every later value had to be
 // smuggled into ViewParams (b1). It is a root CBV now, so the size is only a size.
-constexpr UINT kParamsBytes = 240;
+//! ARX_DXR_DEBUG: 0 off, 1 instance id, 2 hit normal, 3 hit distance. Read once. A ray pass
+//! cannot print, so the reflection surface doubles as the readout.
+UINT arxDxrDebugView() {
+	static const UINT view = [] {
+		const char * env = std::getenv("ARX_DXR_DEBUG");
+		if(!env || !*env) {
+			return 0;
+		}
+		const int value = std::atoi(env);
+		return (value < 0 || value > 3) ? 0 : value;
+	}();
+	return view;
+}
+
+constexpr UINT kParamsBytes = 256;
 // A root CBV is read by the GPU when the dispatch runs, not copied into the command list when it
 // is recorded, so one slot would be overwritten while an earlier frame still reads it. The
 // renderer keeps kFrameCount frames in flight and waits only on the frame before that.
@@ -128,6 +143,13 @@ struct DxrConstants {
 	float contactTMax;
 	float giTemporalAlpha;
 	UINT playerVertBase;
+	// Diagnostics. Added in a group of four so sizeof stays a multiple of 16 and prevViewProj
+	// keeps its float4 boundary — INV-01 applies to a root CBV exactly as it did to root
+	// constants. Zero in every normal run.
+	UINT debugView;
+	UINT dbgPad0;
+	UINT dbgPad1;
+	UINT dbgPad2;
 };
 static_assert(sizeof(DxrConstants) == kParamsBytes, "Params (b0) must match the HLSL cbuffer");
 static_assert(sizeof(DxrConstants) % 16 == 0,
@@ -223,6 +245,13 @@ cbuffer Params : register(b0) {
 	float contactTMax;
 	float giTemporalAlpha;
 	uint playerVertBase;
+	// 0 = off. 1 = instance id, 2 = hit normal, 3 = hit distance. Replaces the reflection with
+	// the raw value so the ray pass can be inspected on screen; it cannot be printed from a
+	// hit shader.
+	uint debugView;
+	uint dbgPad0;
+	uint dbgPad1;
+	uint dbgPad2;
 };
 
 cbuffer ViewParams : register(b1) {
@@ -250,6 +279,9 @@ static const float SKY_Z = 1.0;
 struct RayPayload {
 	float t;
 	float3 n;
+	// Which instance was hit: 0 room, 1 entity, 2 water, 3 player. Only read by the debug
+	// views today, but it is what a material lookup will need to pick its vertex buffer.
+	uint inst;
 };
 
 // Interleaved gradient noise: a per-pixel rotation that is fixed in screen space
@@ -312,6 +344,26 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	if(rp.t >= tmax) {
 		// Nothing within range: the reflection genuinely shows nothing here.
 		return float4(0, 0, 0, 0);
+	}
+	if(debugView != 0u) {
+		// The reflection is the only surface in this pass that can carry a picture out, so the
+		// diagnostics ride on it. Full confidence so the composite draws it flat.
+		if(debugView == 1u) {
+			// room red, entity green, water blue, player yellow
+			float3 c = float3(0.5, 0.5, 0.5);
+			if(rp.inst == 0u) { c = float3(1, 0, 0); }
+			else if(rp.inst == 1u) { c = float3(0, 1, 0); }
+			else if(rp.inst == 2u) { c = float3(0, 0, 1); }
+			else if(rp.inst == 3u) { c = float3(1, 1, 0); }
+			return float4(c, 1.0);
+		}
+		if(debugView == 2u) {
+			return float4(rp.n * 0.5 + 0.5, 1.0);
+		}
+		if(debugView == 3u) {
+			float d = saturate(rp.t / max(tmax, 1.0));
+			return float4(d, d, d, 1.0);
+		}
 	}
 	float3 hit = rd.Origin + rd.Direction * rp.t;
 	float3 hn = rp.n;
@@ -828,12 +880,14 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* att
 		n = -n;
 	}
 	p.n = n;
+	p.inst = InstanceID();
 }
 
 [shader("miss")]
 void Miss(inout RayPayload p) {
 	p.t = 1e7;
 	p.n = 0.xxx;
+	p.inst = 0xffffffffu;
 }
 )";
 
@@ -2145,6 +2199,24 @@ bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 	if(!m_device || (m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty())) {
 		return false;
 	}
+	// Geometry census, logged only when it moves. Per-triangle attributes will be pushed alongside
+	// these positions, and the counts have to stay in lockstep: a triangle whose attribute was
+	// dropped shifts every later PrimitiveIndex, so the reflection samples a neighbour's texture.
+	// That failure is invisible without a number to compare against, hence the line.
+	if(arxDxrDebugView() != 0) {
+		static size_t loggedDyn = SIZE_MAX;
+		static size_t loggedRoom = SIZE_MAX;
+		const size_t dyn = m_positions.size() / 3;
+		const size_t room = m_roomPositions.size() / 3;
+		if(dyn != loggedDyn || room != loggedRoom) {
+			LogInfo << "DXR geometry dyn=" << dyn << " room=" << room
+			        << " water=" << (m_waterPositions.size() / 3)
+			        << " metal=" << (m_metalPositions.size() / 3)
+			        << " roomMetal=" << (m_roomMetalPositions.size() / 3);
+			loggedDyn = dyn;
+			loggedRoom = room;
+		}
+	}
 	auto upload = [&](const std::vector<Pos> & src, ComPtr<ID3D12Resource> & up,
 	                  ComPtr<ID3D12Resource> & def, bool & srvFlag) -> bool {
 		if(src.empty()) {
@@ -2709,6 +2781,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.contactTMax = 60.f;
 	cb.giTemporalAlpha = (m_histValid && !skipTemporal) ? giAlpha[giDenoise] : 0.f;
 	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
+	cb.debugView = arxDxrDebugView();
 	const DistancePreset dist = distancePreset(settings.distance);
 
 	ID3D12DescriptorHeap * heaps[] = { m_heap };
