@@ -58,6 +58,16 @@ static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
 // smuggled into ViewParams (b1). It is a root CBV now, so the size is only a size.
 //! ARX_DXR_DEBUG: 0 off, 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo. A ray pass
 //! cannot print, so the reflection surface doubles as the readout.
+//! ARX_DXR_FIRSTHIT=1 restores the old any-hit reflection traversal. An escape hatch for a
+//! machine where the extra traversal costs too much, without a rebuild.
+bool arxDxrFirstHit() {
+	static const bool on = [] {
+		const char * env = std::getenv("ARX_DXR_FIRSTHIT");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	return on;
+}
+
 UINT arxDxrDebugView() {
 	static const UINT view = [] {
 		const char * env = std::getenv("ARX_DXR_DEBUG");
@@ -152,7 +162,7 @@ struct DxrConstants {
 	// keeps its float4 boundary — INV-01 applies to a root CBV exactly as it did to root
 	// constants. Zero in every normal run.
 	UINT debugView;
-	UINT dbgPad0;
+	UINT specClosest;
 	UINT dbgPad1;
 	UINT dbgPad2;
 };
@@ -270,7 +280,9 @@ cbuffer Params : register(b0) {
 	// the raw value so the ray pass can be inspected on screen; it cannot be printed from a
 	// hit shader.
 	uint debugView;
-	uint dbgPad0;
+	// 1 = reflections take the nearest hit. 0 = any hit, which is what the pass did before a
+	// hit carried a material and the distinction stopped being free.
+	uint specClosest;
 	uint dbgPad1;
 	uint dbgPad2;
 };
@@ -363,8 +375,19 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	RayPayload rp;
 	rp.t = 1e7;
 	rp.n = float3(0, 0, 0);
-	TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-	         mask, 0, 1, 0, rd, rp);
+	// ACCEPT_FIRST_HIT ends the search at whatever the traversal reaches first, which is not
+	// the nearest surface. For a visibility ray that is correct and free; for a reflection it
+	// means the picture can come from a wall behind the one being looked at, and it flickers
+	// as the camera turns and the traversal order changes. Now that the hit carries a
+	// material, the wrong hit brings the wrong texture with it.
+	//
+	// Deliberately not CULL_BACK_FACING_TRIANGLES, which would pay for part of the extra
+	// traversal: this world has POLY_DOUBLESIDED geometry that would drop out of reflections.
+	if(specClosest != 0u) {
+		TraceRay(g_scene, RAY_FLAG_NONE, mask, 0, 1, 0, rd, rp);
+	} else {
+		TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, mask, 0, 1, 0, rd, rp);
+	}
 	if(rp.t >= tmax) {
 		// Nothing within range: the reflection genuinely shows nothing here.
 		return float4(0, 0, 0, 0);
@@ -839,6 +862,9 @@ void RayGen() {
 			RayPayload bp;
 			bp.t = giTMax + 1.0;
 			bp.n = float3(0, 0, 0);
+			// Same caveat as the reflection ray: this treats the first hit as the nearest surface
+			// when computing the bounce. Left as it is — bounce light is diffuse and low
+			// frequency, so the error hides, and a second full traversal per ray is not worth it.
 			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 			         0x01, 0, 1, 0, bounce, bp);
 			if(bp.t < 8.0 || bp.t >= giTMax) {
@@ -2937,6 +2963,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.giTemporalAlpha = (m_histValid && !skipTemporal) ? giAlpha[giDenoise] : 0.f;
 	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
 	cb.debugView = arxDxrDebugView();
+	cb.specClosest = arxDxrFirstHit() ? 0u : 1u;
 	const DistancePreset dist = distancePreset(settings.distance);
 
 	ID3D12DescriptorHeap * heaps[] = { m_heap };

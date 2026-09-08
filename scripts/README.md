@@ -25,6 +25,10 @@ Optional arguments: `-DataDir '<path to Arx Fatalis>'`, `-LoadLevel <n>`, `-Conf
 print: 1 which instance was hit (room red, entity green, water blue, player yellow), 2 the hit
 normal, 3 the hit distance, 4 the texture sampled at the hit. Look at water or metal.
 
+`ARX_DXR_FIRSTHIT=1` puts reflection rays back on any-hit traversal instead of nearest-hit.
+Nearest is correct and costs a full traversal per ray; this is the escape hatch if that is too
+slow on a given machine.
+
 Plausible load sweep (loads levels, does not play them):
 
 ```powershell
