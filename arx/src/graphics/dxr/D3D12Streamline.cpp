@@ -1190,7 +1190,15 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	opt.mode = sl::DLSSMode(frame.dlssMode > 0 ? frame.dlssMode : int(sl::DLSSMode::eDLAA));
 	opt.outputWidth = uint32_t(outW);
 	opt.outputHeight = uint32_t(outH);
-	opt.colorBuffersHDR = sl::Boolean::eFalse;
+	// Ray Reconstruction refuses to create otherwise: sl.log says "HDR Color required" and NGX
+	// returns InvalidParameter. The SDK's own default is eTrue and its guide calls it mandatory,
+	// because the denoiser works in linear radiance. Plain DLSS below is different and keeps
+	// eFalse legitimately.
+	//
+	// Caveat worth knowing: the scene colour handed to it is R8G8B8A8_UNORM, so RR reads eight
+	// bits of tone-mapped output as linear radiance. It runs, but a linear fp16 scene colour is
+	// what it actually wants.
+	opt.colorBuffersHDR = sl::Boolean::eTrue;
 	opt.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
 	opt.dlaaPreset = sl::DLSSDPreset::ePresetD;
 	opt.qualityPreset = sl::DLSSDPreset::ePresetD;
@@ -1210,14 +1218,23 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
 	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource nrm { sl::ResourceType::eTex2d, m_gpu->nrm, D3D12_RESOURCE_STATE_RENDER_TARGET };
-	// colorCopy is lit raster, not unlit albedo. Hit is primary depth, not
-	// reflection t. Both optional RR guides — omit rather than lie.
+	sl::Resource albedo { sl::ResourceType::eTex2d, m_gpu->albedo,
+	                      D3D12_RESOURCE_STATE_RENDER_TARGET };
+	sl::Resource specA { sl::ResourceType::eTex2d, m_gpu->specA,
+	                     D3D12_RESOURCE_STATE_RENDER_TARGET };
+	// Albedo and specular albedo are required, not optional: the plugin rejects an evaluate
+	// without them. What we can hand it is lit raster rather than unlit albedo, which is an
+	// approximation — but the choice is an approximate albedo or no Ray Reconstruction at all.
+	// Specular hit distance genuinely is optional, and the G-buffer writes a constant zero
+	// there, so tagging it would be telling the denoiser something false.
 	sl::ResourceTag tags[] = {
 		{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
 		{ &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &outExt },
 		{ &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &inExt },
 		{ &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
 		{ &nrm, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
+		{ &albedo, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
+		{ &specA, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
 	};
 	auto * ft = static_cast<sl::FrameToken *>(token);
 	if(pslSetTagForFrame(*ft, vp, tags, UINT(_countof(tags)), frame.list) != sl::Result::eOk) {
@@ -1685,7 +1702,7 @@ bool D3D12Streamline::evaluate(const Frame & frame) {
 		LogInfo << "Streamline: " << path << " evaluate ok " << frame.width << "x" << frame.height
 		        << " -> " << outW << "x" << outH
 		        << (std::strcmp(path, "DLSS-RR") == 0
-		            ? " (LDR, preset D, no albedo tag)"
+		            ? " (HDR flag, preset D, albedo=lit raster)"
 		            : " (LDR, preset K, jitter on)");
 		m_loggedOn = true;
 		m_loggedOff = false;
