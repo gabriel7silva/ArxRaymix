@@ -21,6 +21,10 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 
 Optional arguments: `-DataDir '<path to Arx Fatalis>'`, `-LoadLevel <n>`, `-Config RelWithDebInfo`.
 
+`-DxrDebug <1-4>` replaces the ray traced reflection with a raw value, because a ray pass cannot
+print: 1 which instance was hit (room red, entity green, water blue, player yellow), 2 the hit
+normal, 3 the hit distance, 4 the texture sampled at the hit. Look at water or metal.
+
 Plausible load sweep (loads levels, does not play them):
 
 ```powershell
