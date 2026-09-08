@@ -254,7 +254,11 @@ PSOut PSMain(float4 pos : SV_Position) {
 const char * kLinearize = R"(
 Texture2D srcTex : register(t0);
 float3 srgbToLinear(float3 c) {
-	return select(c <= 0.04045, c / 12.92, pow(max(c + 0.055, 1e-5) / 1.055, 2.4));
+	// step and lerp, not select: these are compiled by FXC as ps_5_0, which predates HLSL 2021.
+	// See INV-03 — the wrong dialect here makes the whole pass fail to build and vanish.
+	float3 lo = c / 12.92;
+	float3 hi = pow(max(c + 0.055, 1e-5) / 1.055, 2.4);
+	return lerp(hi, lo, step(c, 0.04045));
 }
 float4 VSMain(uint id : SV_VertexID) : SV_Position {
 	float2 uv = float2((id << 1) & 2, id & 2);
@@ -270,7 +274,9 @@ cbuffer Cb : register(b0) { uint encodeGamma; uint pad0; uint pad1; uint pad2; }
 Texture2D hdrTex : register(t0);
 float3 linearToSrgb(float3 c) {
 	c = max(c, 0.0);
-	return select(c <= 0.0031308, c * 12.92, 1.055 * pow(c, 1.0 / 2.4) - 0.055);
+	float3 lo = c * 12.92;
+	float3 hi = 1.055 * pow(max(c, 1e-8), 1.0 / 2.4) - 0.055;
+	return lerp(hi, lo, step(c, 0.0031308));
 }
 float4 VSMain(uint id : SV_VertexID) : SV_Position {
 	float2 uv = float2((id << 1) & 2, id & 2);
@@ -750,8 +756,12 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		return true;
 	}
 	releaseTargets();
-	auto fail = [&]() -> bool {
-		LogError << "Streamline: G-buffer targets failed";
+	// Name the resource. "targets failed" on its own turns every allocation in this function into
+	// a suspect, and the failure latches until the next resize, so it is not easy to catch twice.
+	auto fail = [&](const char * what) -> bool {
+		LogError << "Streamline: target creation failed: " << what
+		         << " (" << inputW << "x" << inputH << " -> " << outputW << "x" << outputH
+		         << ", needed=" << needed << ")";
 		releaseTargets();
 		m_targetsFailed = true;
 		return false;
@@ -762,7 +772,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	rtv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	rtv.NumDescriptors = 8;
 	if(FAILED(m_device->CreateDescriptorHeap(&rtv, IID_PPV_ARGS(&m_gpu->rtvHeap)))) {
-		return fail();
+		return fail("target setup");
 	}
 	D3D12_DESCRIPTOR_HEAP_DESC srv {};
 	srv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -772,7 +782,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	srv.NumDescriptors = 10;
 	srv.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	if(FAILED(m_device->CreateDescriptorHeap(&srv, IID_PPV_ARGS(&m_gpu->srvHeap)))) {
-		return fail();
+		return fail("target setup");
 	}
 	const UINT w = UINT(inputW);
 	const UINT h = UINT(inputH);
@@ -785,7 +795,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	const bool needHdrOut = (needed & kTargetHdrOut) != 0;
 	const bool needHudless = (needed & kTargetHudless) != 0;
 	if(!makeTex(m_device, w, h, DXGI_FORMAT_R16G16_FLOAT, rt, D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->mvec)) {
-		return fail();
+		return fail("mvec");
 	}
 	if(needGbuffer
 	   && (!makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
@@ -796,23 +806,23 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	                   D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->specA)
 	       || !makeTex(m_device, w, h, DXGI_FORMAT_R16_FLOAT, rt,
 	                   D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->hit))) {
-		return fail();
+		return fail("gbuffer");
 	}
 	if(needHdrOut
 	   && !makeTex(m_device, ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav,
 	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, &m_gpu->hdrOut)) {
-		return fail();
+		return fail("hdrOut");
 	}
 	// Input resolution, not output: this is what Ray Reconstruction reads, before it upscales.
 	if(needHdrOut
 	   && !makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
 	               D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->linearIn)) {
-		return fail();
+		return fail("linearIn");
 	}
 	if(needHudless
 	   && !makeTex(m_device, ow, oh, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_NONE,
 	               D3D12_RESOURCE_STATE_COPY_DEST, &m_gpu->hudless)) {
-		return fail();
+		return fail("target setup");
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE r0 = m_gpu->rtvHeap->GetCPUDescriptorHandleForHeapStart();
 	auto rtvAt = [&](UINT i) {
@@ -872,13 +882,13 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	if(needGbuffer) {
 		if(FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
 			dropBlob(err);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(err);
 		if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 		                                        IID_PPV_ARGS(&m_gpu->gbufferRoot)))) {
 			dropBlob(blob);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(blob);
 		if(FAILED(D3DCompile(kGbuffer, std::strlen(kGbuffer), "sl_gbuffer", nullptr, nullptr,
@@ -886,7 +896,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: G-buffer VS failed"
 			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(cerr);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(cerr);
 		if(FAILED(D3DCompile(kGbuffer, std::strlen(kGbuffer), "sl_gbuffer", nullptr, nullptr,
@@ -895,7 +905,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(vs);
 			dropBlob(cerr);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(cerr);
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC pd {};
@@ -926,7 +936,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: G-buffer PSO failed";
 			dropBlob(vs);
 			dropBlob(ps);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(vs);
 		dropBlob(ps);
@@ -952,26 +962,30 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		trs.pParameters = tparams;
 		if(FAILED(D3D12SerializeRootSignature(&trs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
 			dropBlob(err);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(err);
 		if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 		                                        IID_PPV_ARGS(&m_gpu->tonemapRoot)))) {
 			dropBlob(blob);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(blob);
 		if(FAILED(D3DCompile(kTonemap, std::strlen(kTonemap), "sl_tonemap", nullptr, nullptr,
 		                     "VSMain", "vs_5_0", 0, 0, &vs, &cerr))) {
+			LogError << "Streamline: tonemap VS failed: "
+			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(cerr);
-			return fail();
+			return fail("tonemap VS");
 		}
 		dropBlob(cerr);
 		if(FAILED(D3DCompile(kTonemap, std::strlen(kTonemap), "sl_tonemap", nullptr, nullptr,
 		                     "PSMain", "ps_5_0", 0, 0, &ps, &cerr))) {
+			LogError << "Streamline: tonemap PS failed: "
+			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(vs);
 			dropBlob(cerr);
-			return fail();
+			return fail("tonemap PS");
 		}
 		dropBlob(cerr);
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC td {};
@@ -1018,7 +1032,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: tonemap PSO failed";
 			dropBlob(vs);
 			dropBlob(ps);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(vs);
 		dropBlob(ps);
@@ -1040,26 +1054,28 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		brs.pParameters = bp;
 		if(FAILED(D3D12SerializeRootSignature(&brs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
 			dropBlob(err);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(err);
 		if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 		                                        IID_PPV_ARGS(&m_gpu->blitRoot)))) {
 			dropBlob(blob);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(blob);
 		if(FAILED(D3DCompile(kBlit, std::strlen(kBlit), "sl_blit", nullptr, nullptr,
 		                     "VSMain", "vs_5_0", 0, 0, &vs, &cerr))) {
 			dropBlob(cerr);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(cerr);
 		if(FAILED(D3DCompile(kBlit, std::strlen(kBlit), "sl_blit", nullptr, nullptr,
 		                     "PSMain", "ps_5_0", 0, 0, &ps, &cerr))) {
+			LogError << "Streamline: tonemap PS failed: "
+			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(vs);
 			dropBlob(cerr);
-			return fail();
+			return fail("tonemap PS");
 		}
 		dropBlob(cerr);
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC bd = td;
@@ -1070,7 +1086,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: blit PSO failed";
 			dropBlob(vs);
 			dropBlob(ps);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(vs);
 		dropBlob(ps);
