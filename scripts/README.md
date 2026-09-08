@@ -29,6 +29,9 @@ normal, 3 the hit distance, 4 the texture sampled at the hit. Look at water or m
 Nearest is correct and costs a full traversal per ray; this is the escape hatch if that is too
 slow on a given machine.
 
+`ARX_DXR_NO_TEXREFL=1` stops off-screen reflected hits from using their own texture and goes
+back to the light-only approximation.
+
 Plausible load sweep (loads levels, does not play them):
 
 ```powershell

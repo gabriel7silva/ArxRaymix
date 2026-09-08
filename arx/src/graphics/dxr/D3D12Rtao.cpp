@@ -60,6 +60,16 @@ static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
 //! cannot print, so the reflection surface doubles as the readout.
 //! ARX_DXR_FIRSTHIT=1 restores the old any-hit reflection traversal. An escape hatch for a
 //! machine where the extra traversal costs too much, without a rebuild.
+//! ARX_DXR_NO_TEXREFL=1 goes back to reflecting a light-only guess for off-screen hits. This
+//! is the switch for the one change in the series that alters how the game looks.
+bool arxDxrNoTexReflect() {
+	static const bool off = [] {
+		const char * env = std::getenv("ARX_DXR_NO_TEXREFL");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	return off;
+}
+
 bool arxDxrFirstHit() {
 	static const bool on = [] {
 		const char * env = std::getenv("ARX_DXR_FIRSTHIT");
@@ -108,11 +118,11 @@ static constexpr UINT metalRayCount[] = { 0u, 1u, 2u, 2u };
 // no reflection at all on an indoor pool seen from above, so the levels trade physical accuracy
 // for a visible effect. Grazing angles still reach 1.0 at every level.
 static constexpr float waterFacing[] = { 0.f, 0.18f, 0.30f, 0.45f };
-// Brightness of the light-only guess used when a reflected hit is off screen and has no colour to
-// sample. It carries no albedo, so it can only ever be a tinted blob; the shader now also fades
-// the reflection down wherever this is all it had, and these numbers stay modest for the same
-// reason. Raising them is what turned the missing data into a white shape sliding over the water.
-static constexpr float reflectFill[] = { 0.f, 0.45f, 0.60f, 0.80f };
+// Brightness of the light reaching an off-screen hit. That light is now multiplied by the
+// surface's own albedo, so it lands as a material rather than as the untextured blob these
+// numbers were once kept small to hide. Albedo averages well under one, so the levels move up
+// to compensate; they are a look now, not a disguise.
+static constexpr float reflectFill[] = { 0.f, 0.70f, 0.95f, 1.25f };
 static constexpr float shadowAlpha[] = { kTemporalAlphaLow, kTemporalAlphaHigh };
 static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
 static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
@@ -163,7 +173,7 @@ struct DxrConstants {
 	// constants. Zero in every normal run.
 	UINT debugView;
 	UINT specClosest;
-	UINT dbgPad1;
+	UINT texReflect;
 	UINT dbgPad2;
 };
 static_assert(sizeof(DxrConstants) == kParamsBytes, "Params (b0) must match the HLSL cbuffer");
@@ -283,7 +293,8 @@ cbuffer Params : register(b0) {
 	// 1 = reflections take the nearest hit. 0 = any hit, which is what the pass did before a
 	// hit carried a material and the distinction stopped being free.
 	uint specClosest;
-	uint dbgPad1;
+	// 1 = an off-screen hit reflects its own material. 0 = the light-only guess of E8.
+	uint texReflect;
 	uint dbgPad2;
 };
 
@@ -453,6 +464,16 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 			float span = max(b.y - b.x, 1e-3);
 			float fall = saturate((b.y - d) / span);
 			hitCol += col.rgb * min(a.w * fall * ndotl * b.w * lightScale, lightCap);
+		}
+		if(texReflect != 0u) {
+			// This sum is light arriving at the surface. Reflecting it on its own was never
+			// "missing colour", it was colour with no material — the untextured shape that slid
+			// over the water. Multiplied by the albedo sampled at the hit it becomes a surface,
+			// which is the whole point of carrying materials into the ray pass.
+			hitCol *= rp.albedo;
+			// Trusted far more than the untextured guess was, because it now says something true
+			// about the surface rather than approximating one.
+			return float4(hitCol, 0.85);
 		}
 		// kFallbackTrust: how much of a reflection to draw when all we have is a light-only
 		// guess with no surface colour. Keep it low; this is the term that used to paint a
@@ -2964,6 +2985,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
 	cb.debugView = arxDxrDebugView();
 	cb.specClosest = arxDxrFirstHit() ? 0u : 1u;
+	cb.texReflect = arxDxrNoTexReflect() ? 0u : 1u;
 	const DistancePreset dist = distancePreset(settings.distance);
 
 	ID3D12DescriptorHeap * heaps[] = { m_heap };
