@@ -64,6 +64,15 @@ static constexpr UINT shadowRays[] = { 0u, 2u, 8u, 16u };
 static constexpr UINT giRayCount[] = { 0u, 4u, 8u, 16u };
 static constexpr UINT transRays[] = { 0u, 1u, 1u, 2u };
 static constexpr UINT metalRayCount[] = { 0u, 1u, 2u, 2u };
+// How reflective water looks head-on, per quality level. Physical water is 0.04, which reads as
+// no reflection at all on an indoor pool seen from above, so the levels trade physical accuracy
+// for a visible effect. Grazing angles still reach 1.0 at every level.
+static constexpr float waterFacing[] = { 0.f, 0.18f, 0.30f, 0.45f };
+// Brightness of the light-only guess used when a reflected hit is off screen and has no colour to
+// sample. It carries no albedo, so it can only ever be a tinted blob; the shader now also fades
+// the reflection down wherever this is all it had, and these numbers stay modest for the same
+// reason. Raising them is what turned the missing data into a white shape sliding over the water.
+static constexpr float reflectFill[] = { 0.f, 0.45f, 0.60f, 0.80f };
 static constexpr float shadowAlpha[] = { kTemporalAlphaLow, kTemporalAlphaHigh };
 static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
 static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
@@ -72,6 +81,8 @@ static_assert(std::size(shadowRays) == kMaxRtQuality + 1);
 static_assert(std::size(giRayCount) == kMaxRtQuality + 1);
 static_assert(std::size(transRays) == kMaxRtQuality + 1);
 static_assert(std::size(metalRayCount) == kMaxRtQuality + 1);
+static_assert(std::size(waterFacing) == kMaxRtQuality + 1);
+static_assert(std::size(reflectFill) == kMaxRtQuality + 1);
 static_assert(std::size(shadowAlpha) == kMaxShadowDenoise + 1);
 static_assert(std::size(giAlpha) == kMaxGiDenoise + 1);
 static_assert(aoRayCount[0] == 0u && shadowRays[0] == 0u && giRayCount[0] == 0u
@@ -124,10 +135,17 @@ struct DxrViewCbuf {
 	float specTMax;
 	float giTMax;
 	float rtRange;
-	float pad;
+	float waterFacing;
+	float waterFill;
+	float metalFill;
+	float pad0;
+	float pad1;
 };
 static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
 static_assert(offsetof(DxrViewCbuf, specTMax) == 64);
+static_assert(offsetof(DxrViewCbuf, waterFill) == 80,
+              "ViewParams must stay float4-aligned to match the HLSL cbuffer");
+static_assert(sizeof(DxrViewCbuf) == 96);
 
 glm::mat4x4 jitteredProjection(const glm::mat4x4 & proj, float jitterNdcX, float jitterNdcY) {
 	glm::mat4x4 jp = proj;
@@ -203,7 +221,13 @@ cbuffer ViewParams : register(b1) {
 	float specTMax;
 	float giTMax;
 	float rtRange;
-	float padView;
+	// Reflection strength per quality level, so Off / Low / Medium / High actually look
+	// different instead of only changing the ray count.
+	float waterFacing;
+	float waterFill;
+	float metalFill;
+	float padView0;
+	float padView1;
 };
 
 // Cleared D24_UNORM depth is exactly 1.0 (INV-04). A value just below 1.0 is a
@@ -256,7 +280,11 @@ float3 hemisphereFixed(float3 n, uint s, float rot) {
 	return normalize(t * l.x + b * l.y + n * l.z);
 }
 
-float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uint mask,
+// Returns rgb plus a confidence in .a: 1 when the hit was resolved from the colour buffer,
+// low when only the light-only fallback was available. The caller fades the reflection by that
+// confidence, because an untextured milky blob where the geometry is off screen reads far worse
+// than no reflection at all.
+float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uint mask,
                           float lightScale, float lightCap) {
 	RayDesc rd;
 	rd.Origin = origin;
@@ -269,7 +297,8 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 	         mask, 0, 1, 0, rd, rp);
 	if(rp.t >= tmax) {
-		return float3(0, 0, 0);
+		// Nothing within range: the reflection genuinely shows nothing here.
+		return float4(0, 0, 0, 0);
 	}
 	float3 hit = rd.Origin + rd.Direction * rp.t;
 	float3 hn = rp.n;
@@ -278,6 +307,7 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	}
 	float4 hc = mul(viewProj, float4(hit, 1.0));
 	float3 hitCol = float3(0, 0, 0);
+	float resolved = 0.0;
 	if(hc.w > 1.0) {
 		float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
 		if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
@@ -287,6 +317,7 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 				float hw = projB / min(hz - projA, -1e-4);
 				if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
 					hitCol = g_color.Load(int3(hp, 0)).rgb;
+					resolved = 1.0;
 				}
 			}
 		}
@@ -306,8 +337,13 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 			float fall = saturate((b.y - d) / span);
 			hitCol += col.rgb * min(a.w * fall * ndotl * b.w * lightScale, lightCap);
 		}
+		// kFallbackTrust: how much of a reflection to draw when all we have is a light-only
+		// guess with no surface colour. Keep it low; this is the term that used to paint a
+		// white shape that slid across the water as the camera turned.
+		const float kFallbackTrust = 0.30;
+		return float4(hitCol, kFallbackTrust);
 	}
-	return hitCol;
+	return float4(hitCol, resolved);
 }
 
 
@@ -415,7 +451,14 @@ void RayGen() {
 				occ += 1.0 - aop.t / radius;
 			}
 		}
-		aoCur = max(1.0 - occ / float(aoRays), 0.45);
+		// The ray set above is a proper cosine hemisphere (14° to 75° off the normal), not the
+		// 25° cone this used to sample. That is the correct distribution, but inside a closed
+		// stone room almost every pixel then occludes past the 0.45 floor, so ambient occlusion
+		// turns into a flat darkening with no gradient — and a flat darkening is exactly what
+		// stops ray traced shadows from reading. Scale the occlusion so the floor is reached
+		// only by geometry that really is enclosed, and the gradient survives.
+		const float kAoStrength = 0.6;
+		aoCur = max(1.0 - occ / float(aoRays) * kAoStrength, 0.45);
 	}
 
 	float shCur = 1.0;
@@ -569,6 +612,14 @@ void RayGen() {
 
 	float3 specRgb = float3(0, 0, 0);
 	float specF = 0.0;
+	// Metal reflects from the primary surface, so the shared history reprojection above is right
+	// for it. Water does not: its reflection is computed on the water plane while pos, and every
+	// pixel derived from it, is the pool bottom seen through the water. Reprojecting the water
+	// reflection by the bottom's position drags the history sideways by the depth between the two
+	// every time the camera turns, and at specAlpha 0.10 that error survives dozens of frames —
+	// the smear that reads as ghosting. Water overwrites these below with its own reprojection.
+	bool specHistOk = histOk;
+	int2 specHistPix = histPix;
 	const bool doSpec = (specRays + metalRays) > 0u
 		&& (specHalfRes == 0u || ((pixel.x | pixel.y) & 1u) == 0u);
 	if(doSpec) {
@@ -585,6 +636,24 @@ void RayGen() {
 			if(wm > 0.5 && zw > 0.0 && zw < SKY_Z) {
 				float4 wposH = mul(invViewProj, float4(ndcX, ndcY, zw, 1.0));
 				float3 wpos = wposH.xyz / max(wposH.w, 1e-6);
+				// Reproject the reflection history by the water plane itself, not by the bottom.
+				specHistOk = false;
+				float4 wpc = mul(prevViewProj, float4(wpos, 1.0));
+				if(wpc.w > 1.0) {
+					float2 wpn = wpc.xy / wpc.w;
+					float2 wuv = float2(wpn.x * 0.5 + 0.5, 0.5 - wpn.y * 0.5);
+					if(wuv.x > 0.0 && wuv.x < 1.0 && wuv.y > 0.0 && wuv.y < 1.0) {
+						int2 wp = int2(wuv * float2(width, height));
+						// Only reuse history from a pixel that was also water at a matching
+						// depth; otherwise the reflection inherits the shore or the bottom.
+						float zwPrev = g_waterDepth.Load(int3(wp, 0)).r;
+						if(zwPrev > 0.0 && zwPrev < SKY_Z
+						   && abs(projB / min(zwPrev - projA, -1e-4) - wpc.w) < max(0.05 * wpc.w, 12.0)) {
+							specHistPix = wp;
+							specHistOk = true;
+						}
+					}
+				}
 				float zWR = g_waterDepth.Load(int3(int(pixel.x) + 1, int(pixel.y), 0)).r;
 				float zWD = g_waterDepth.Load(int3(int(pixel.x), int(pixel.y) + 1, 0)).r;
 				float3 nW = n;
@@ -601,18 +670,28 @@ void RayGen() {
 				}
 				float3 V = normalize(cameraPos - wpos);
 				float ndv = saturate(dot(nW, V));
+				// Physically water reflects about 4 % head-on, which on an indoor pool seen from
+				// above reads as no reflection at all — the whole effect only showed at grazing
+				// angles. Keep the Fresnel curve, but lift its head-on end so the reflection is
+				// visible from the angle players actually look at water. waterFacing comes from
+				// the Transparent reflections setting: 0.04 would be physical, 1.0 a mirror.
 				float F0 = 0.04;
-				specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+				float fresnel = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+				specF = saturate(lerp(waterFacing, 1.0, fresnel));
 				uint nSpec = min(max(specRays, 1u), 2u);
-				float3 acc = float3(0, 0, 0);
+				float4 acc = float4(0, 0, 0, 0);
 				for(uint s = 0; s < nSpec; ++s) {
 					float3 R = reflect(-V, nW);
 					if(s > 0u) {
 						R = normalize(R + hemisphereFixed(nW, s, rot) * 0.04);
 					}
-					acc += shadeReflectionHit(wpos + nW * 6.0, R, 6.0, specTMax, 0x05, 0.35, 0.6);
+					acc += shadeReflectionHit(wpos + nW * 6.0, R, 6.0, specTMax, 0x05,
+					                          0.35 * waterFill, 0.6 * waterFill);
 				}
-				specRgb = acc / float(nSpec);
+				acc /= float(nSpec);
+				specRgb = acc.rgb;
+				// Fade the whole reflection by how much of it was real data.
+				specF *= acc.a;
 			}
 		} else if(mm > 0.5 && metalRays > 0u) {
 			float3 V = normalize(cameraPos - pos);
@@ -622,16 +701,19 @@ void RayGen() {
 			float F0 = 0.18;
 			specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
 			uint nSpec = min(max(metalRays, 1u), 2u);
-			float3 acc = float3(0, 0, 0);
+			float4 acc = float4(0, 0, 0, 0);
 			for(uint s = 0; s < nSpec; ++s) {
 				float3 R = reflect(-V, n);
 				R = normalize(R + hemisphereFixed(n, s, rot) * 0.06);
-				acc += shadeReflectionHit(pos + n * shBias, R, shBias, specTMax * 0.625, 0x07, 0.30, 0.55);
+				acc += shadeReflectionHit(pos + n * shBias, R, shBias, specTMax * 0.625, 0x07,
+					                          0.30 * metalFill, 0.55 * metalFill);
 			}
-			specRgb = acc / float(nSpec);
+			acc /= float(nSpec);
+			specRgb = acc.rgb;
+			specF *= acc.a;
 		}
-		if(specF > 0.0 && specAlpha > 0.0 && histOk) {
-			int2 hp = specHalfRes ? (histPix & int2(~1, ~1)) : histPix;
+		if(specF > 0.0 && specAlpha > 0.0 && specHistOk) {
+			int2 hp = specHalfRes ? (specHistPix & int2(~1, ~1)) : specHistPix;
 			float4 prevS = g_specPrev.Load(int3(hp, 0));
 			if(prevS.a >= 1e-4) {
 				specRgb = lerp(prevS.rgb, specRgb, specAlpha);
@@ -678,12 +760,22 @@ void RayGen() {
 				float4 col = g_lights[i * 3 + 2];
 				float3 toL = a.xyz - hit;
 				float d = max(length(toL), 1.0);
+				// A bounce point sitting almost on a torch reports a near-maximum fill and floods
+				// the umbra with that torch's colour. Bounce light is what escapes the direct
+				// falloff, not a second copy of it — and this sum is added before the shadow
+				// multiply, so anything spilled here lands squarely in the shadow. Ramp the
+				// contribution in over the first 40 units instead of trusting the falloff at
+				// point-blank range.
+				float nearFade = saturate((d - 8.0) / 32.0);
+				if(nearFade <= 0.0) {
+					continue;
+				}
 				float ndotl = saturate(dot(hn, toL / d));
 				float span = max(b.y - b.x, 1e-3);
 				float fall = saturate((b.y - d) / span);
 				// Bounce carries the light's hue; grey bounce read as a white haze
 				// on the ceiling above the torch.
-				fill += col.rgb * min(a.w * fall * ndotl * b.w * 0.20, 0.25);
+				fill += col.rgb * min(a.w * fall * ndotl * b.w * 0.20, 0.25) * nearFade;
 			}
 			// Per-ray clamp, then average over rays *launched*: dividing by the
 			// rays that hit let one lucky ray next to a lamp light the whole texel
@@ -822,7 +914,11 @@ float4 PSMain(VSOut i) : SV_Target {
 	// Strength tuned by the user ("triplica os efeitos"): AO up to 55 % dark,
 	// umbra keeps 10 % of the light, GI up to about +0.33 on lit stone.
 	// AO is low frequency: a wider blur than the shadow's hides the dither.
-	float ao = lerp(1.0, bilateral(aoTex, pix, aoRadius, zCenter), 1.0);
+	// Second dial for ambient occlusion, on the presentation side: 1.0 applies the buffer as
+	// traced, 0.0 removes it entirely. Kept at 1.0 because the strength is set where the rays are
+	// accumulated; turn it down here to weaken ambient occlusion without touching the history.
+	const float kAoComposite = 1.0;
+	float ao = lerp(1.0, bilateral(aoTex, pix, aoRadius, zCenter), kAoComposite);
 	float sh = lerp(0.10, 1.0, bilateral(shadowTex, pix, shadowRadius, zCenter));
 	// Bounce light scaled by the surface's own raster color (plus a small floor
 	// for the darkest stone) so it reads as light on the material, not grey haze.
@@ -2564,7 +2660,11 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.specHalfRes = (transRefl == 1) ? 1u : 0u;
 	cb.contactOn = (contact && shadowQuality > 0) ? 1u : 0u;
 	cb.metalRays = metalRayCount[metalRefl];
-	cb.specAlpha = (m_histValid && !skipTemporal) ? 0.10f : 0.f;
+	// 0.10 kept 90 % of last frame's reflection, so any reprojection error took dozens of frames
+	// to wash out and read as a smear trailing the camera. 0.16 leans back towards steadying the
+	// 1-2 ray reflection now that water reprojects against its own surface and the trail is gone;
+	// lower it further only if the smear comes back, raise it if the sparkle does.
+	cb.specAlpha = (m_histValid && !skipTemporal) ? 0.16f : 0.f;
 	cb.contactTMax = 60.f;
 	cb.giTemporalAlpha = (m_histValid && !skipTemporal) ? giAlpha[giDenoise] : 0.f;
 	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
@@ -2587,6 +2687,9 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 			viewCb.specTMax = dist.specTMax;
 			viewCb.giTMax = dist.giTMax;
 			viewCb.rtRange = (settings.range > 8.f) ? settings.range : dist.caster;
+			viewCb.waterFacing = waterFacing[transRefl];
+			viewCb.waterFill = reflectFill[transRefl];
+			viewCb.metalFill = reflectFill[metalRefl];
 			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
 		}
