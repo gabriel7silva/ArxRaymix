@@ -25,6 +25,7 @@ Start here if something is already wrong.
 | Shadows pop in or out in one frame while walking | [INV-10](#inv-10) |
 | A quality level reads as Off in the menu but the effect is on, or the reverse | [INV-11](#inv-11) |
 | Hit geometry is lit or shaped wrongly, but only for one category of object | [INV-08](#inv-08) |
+| A reflection shows a plausible but wrong texture | [INV-16](#inv-16), [INV-17](#inv-17) |
 
 ## Build-time and layout invariants
 
@@ -36,10 +37,15 @@ Start here if something is already wrong.
 
 **Mechanism** HLSL starts a `float4x4` at the next four-float boundary. C++ starts it at the next four-byte offset. Any run of scalars before the matrix whose count is not a multiple of four shifts every later field by one to three slots. The `static_assert` compares the *total* size, so shifting fields inside a struct of unchanged size passes it.
 
+This rule survived `Params` becoming a root CBV instead of 60 root constants. Float4 row alignment
+is a rule of HLSL cbuffer packing, not of the root parameter type, so `pad0` and `pad1` still earn
+their place and the offset asserts still hold. A second assert now requires the struct to end on a
+complete float4 row as well, which root constants never needed.
+
 **Detect** *none — silent.* Count the scalars before each matrix in both declarations and confirm the count is a multiple of four.
 
 ```
-grep -n "float4x4\|pad0\|pad1\|kRootConstants" arx/src/graphics/dxr/D3D12Rtao.cpp
+grep -n "float4x4\|pad0\|pad1\|kParamsBytes" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
 ### <a id="inv-02"></a>INV-02 — The descriptor heap is one equation, not five constants
@@ -50,6 +56,12 @@ grep -n "float4x4\|pad0\|pad1\|kRootConstants" arx/src/graphics/dxr/D3D12Rtao.cp
 
 **Mechanism** the constants are five projections of a single layout. Shader resources occupy the low slots, unordered access views follow them, the composite's resources follow those, and the heap has to be at least as large as the end of the last range. Each range is also declared once in a root signature and once as a register in HLSL, and those must agree.
 
+The ray pass no longer owns a heap. It works inside a block at the **end** of the renderer's
+`srvHeap`, because only one CBV_SRV_UAV heap can be bound and the hit shader has to reach the
+game's textures through it. Putting the block at the end is what keeps a texture's `srvIndex`
+equal to its index in the bindless range, with nothing to add in the shader, and what keeps a
+texture index from ever landing on one of this module's own views.
+
 The relationships, which stay true no matter what the numbers become:
 
 ```
@@ -57,19 +69,75 @@ highest literal SRV slot used in updateDescriptors  <  kRtSrvCount
 kRtUavBase      == kRtSrvCount
 kCompositeBase  == kRtUavBase + kRtUavCount
 kHeapCount      >= kCompositeBase + (composite SRV range size)
+kHeapCount      == D3D12Rtao::kHeapDescriptors        (held by a static_assert)
+kRtaoSrvBase    == kSrvHeapSize - kHeapDescriptors    (the block, at the end)
+allocateSrv fails at nextSrv >= kRtaoSrvBase, not at kSrvHeapSize
+bindless range NumDescriptors == kRtaoSrvBase, in space1
 ```
 
-And a fourth leg no arithmetic can check: each resource's HLSL register must equal its offset within its own range. The ray library's `t` registers count from the start of the shader-resource range, its `u` registers from the start of the unordered range, and the composite's `t` registers from `kCompositeBase`.
+Grow `kHeapCount` and the texture ceiling shrinks by the same amount. It is still one equation.
+
+And a fourth leg no arithmetic can check: each resource's HLSL register must equal its offset
+within its own range. What changed is where the base lives. The ranges are still declared from
+zero; the base is applied at the **bind**, so the SRV table is bound at `heapStart + kRtaoSrvBase`,
+the UAV table at `+ kRtUavBase`, the composite at `+ kCompositeBase`, and the bindless table at
+`heapStart` itself — offset zero, so `g_textures[srvIndex]` needs no arithmetic. The same base is
+folded once into the CPU handle in `updateDescriptors`, which is why the twenty `slot(i)` calls
+read as if the module still owned a heap of its own.
 
 **Detect** *none in game.* Enable the Direct3D 12 debug layer and look for descriptor range or heap bounds warnings.
 
 ```
 grep -n "kRtSrvCount\|kRtUavBase\|kRtUavCount\|kCompositeBase\|kHeapCount" arx/src/graphics/dxr/D3D12Rtao.cpp
+grep -n "kRtaoSrvBase\|kSrvHeapSize\|kHeapDescriptors" arx/src/graphics/d3d12/D3D12Renderer.cpp
 grep -n "slot(" arx/src/graphics/dxr/D3D12Rtao.cpp
 grep -n ": register(" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
-Adding one shader resource is six edits, all or nothing. The recipe is in [WHERE-TO-EDIT.md](WHERE-TO-EDIT.md#add-a-shader-resource).
+Adding one shader resource is eight edits, all or nothing. The recipe is in [WHERE-TO-EDIT.md](WHERE-TO-EDIT.md#add-a-shader-resource).
+
+### <a id="inv-16"></a>INV-16 — A triangle's attribute is pushed in the same block as its positions
+
+**Break it by** pushing a `TriAttr` outside the block that pushes the three `Pos` entries in
+`D3D12Rtao::addTris`, or adding a fourth early return above it that skips one but not the other.
+
+**Symptom** reflections wear the wrong texture. Not a smear or a glitch — a plausible, wrong
+material, on some surfaces and not others. There is no error and no log line.
+
+**Mechanism** the hit shader finds a triangle's material with `PrimitiveIndex()`, which counts
+triangles in the position buffer. The attribute buffer is a parallel array, so one missing entry
+shifts every triangle after it by one. `addTris` has three early returns above the push — the
+triangle cap, an unresolvable index, and a degenerate triangle — and each is a chance to leave
+lockstep.
+
+**Detect** run `scripts/run-d3d12.ps1 -DxrDebug 1` and read the `DXR geometry` census in
+`runtime/user/arx.log`. `attrDyn` must equal `dyn` and `attrRoom` must equal `room`; a mismatch
+logs a warning of its own. The log is not grepped here because it only exists after a run.
+
+```
+grep -n "attr->push_back\|dst.push_back" arx/src/graphics/dxr/D3D12Rtao.cpp
+```
+
+### <a id="inv-17"></a>INV-17 — A texture index stored in geometry outlives the texture
+
+**Break it by** returning a descriptor index to the free pool while geometry still refers to it,
+without invalidating that geometry.
+
+**Symptom** after a texture is destroyed mid-level, a reflected wall wears whatever texture next
+took the freed slot. Silent, and it looks like a plausible material rather than an error.
+
+**Mechanism** room geometry stores one `srvIndex` per triangle and is only re-uploaded when the
+room cache rebuilds, which can be many frames or never. `freeSrv` returns the index to the pool
+and `allocateSrv` hands it to the next texture. The null descriptor written in the reserved block
+protects against reading a dead descriptor; it does nothing about a slot that has been reoccupied.
+`freeSrv` therefore invalidates the room cache. Rebuilding is cheap next to being wrong, and it
+only happens when a texture is actually destroyed.
+
+**Detect** *none in game.*
+
+```
+grep -n "freeSrv\|clearRooms" arx/src/graphics/d3d12/D3D12Renderer.cpp
+```
 
 ### <a id="inv-03"></a>INV-03 — The composite shader and the ray library are compiled by different compilers
 

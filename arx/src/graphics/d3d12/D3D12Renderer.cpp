@@ -1954,6 +1954,14 @@ void D3D12Renderer::freeSrv(unsigned index) {
 		return;
 	}
 	m->freeSrv.push_back(index);
+	// The room geometry stores this index per triangle and is only re-uploaded when the room
+	// cache is rebuilt, so it can outlive the texture by many frames. Once the index is back in
+	// the pool the next texture takes it, and a reflected wall would quietly wear that texture
+	// instead of its own. Rebuilding the cache is cheap next to being wrong, and this only
+	// happens when a texture is actually destroyed.
+	if(m_rtao) {
+		m_rtao->clearRooms();
+	}
 }
 
 void D3D12Renderer::createTextureSrv(ID3D12Resource * resource, unsigned index) {

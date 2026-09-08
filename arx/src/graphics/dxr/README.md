@@ -73,7 +73,7 @@ Log: `Streamline: slInit ok`, `Ray tracing: DXR=… DLSS=… DLSS-RR=… DLSS-G=
 
 **Options → Render → Render distance** (`fog=` 0–10) is the far plane. Slider 0 is ~1600 (one cell + fog wall); 10 is 28000. D3D12 world pixels fade into the zone fog colour from 40 % to 92 % of that distance. Fog is applied whenever `render3D().fog()` is on — it must not depend on the DLSS `worldPass` flag. HUD stays unfogged.
 
-`Params` (`b0`) is a root CBV, ringed over `kParamsSlots` because the GPU reads it at dispatch time. That leaves the DXR root signature at 6 of its 64 DWORDs; it used to be full at 64, which is why reflection / GI `TMax` from `dxr_distance` sits in the `ViewParams` CBV and stays there. Overrunning the cap still fails `CreateRootSignature` (`RTAO: DXR pipeline failed — raster only`).
+Reflections sample the real texture at the hit: every triangle carries its UVs and its texture's descriptor index in a parallel `TriAttr` buffer, and the hit shader reads them through a bindless range covering the whole texture window of the renderer's heap. Water is the exception and carries no material, which only shows when metal reflects water. `Params` (`b0`) is a root CBV, ringed over `kParamsSlots` because the GPU reads it at dispatch time. That leaves the DXR root signature at 6 of its 64 DWORDs; it used to be full at 64, which is why reflection / GI `TMax` from `dxr_distance` sits in the `ViewParams` CBV and stays there. Overrunning the cap still fails `CreateRootSignature` (`RTAO: DXR pipeline failed — raster only`).
 
 ### Phase 6 — Path-traced indirect (**archived**)
 

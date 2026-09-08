@@ -968,8 +968,12 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) 
 	if(InstanceID() == 0u) {
 		a = g_roomAttr[prim];
 	} else if(InstanceID() == 2u) {
-		// Water has no material of its own; white keeps it out of the way.
-		p.albedo = float3(1, 1, 1);
+		// Water carries no material. Giving it one would mean a third attribute buffer, a third
+		// SRV and moving the heap constants again, all for the one case that reaches here: a metal
+		// surface reflecting a water surface, since the metal ray's mask includes water and the
+		// water ray's does not. A dim neutral rather than white, so it reads as dark water rather
+		// than as a highlight on the metal.
+		p.albedo = float3(0.18, 0.20, 0.20);
 		return;
 	} else {
 		// The player's BLAS starts partway into the shared dynamic buffer and its
@@ -978,10 +982,25 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) 
 		a = g_dynAttr[attrBase + prim];
 	}
 	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
-	// SampleLevel, not Sample: a hit shader has no quad derivatives. A fixed level for now;
-	// a ray-cone LOD belongs with the rest of the filtering work.
+	// Ray-cone mip selection. A hit shader has no quad derivatives, so the level has to be
+	// derived: compare how much texture the triangle carries per unit of world area with how
+	// much world area this ray covers by the time it arrives. A fixed level aliased on distant
+	// surfaces and thrashed the cache with incoherent rays; picking the level the footprint
+	// deserves is what makes texture fetches affordable here.
+	uint texW, texH;
+	g_textures[NonUniformResourceIndex(a.tex)].GetDimensions(texW, texH);
+	float2 duv1 = a.uv1 - a.uv0;
+	float2 duv2 = a.uv2 - a.uv0;
+	float texArea = abs(duv1.x * duv2.y - duv1.y * duv2.x) * float(texW) * float(texH);
+	float worldArea = length(cross(v1 - v0, v2 - v0));
+	// footprint: the world-space width of the pixel this ray started from, at the hit distance.
+	float footprint = max(RayTCurrent() * pixelWorld, 1e-4);
+	float lod = 0.0;
+	if(texArea > 1e-9 && worldArea > 1e-9) {
+		lod = 0.5 * log2(texArea / worldArea) + log2(footprint);
+	}
 	p.albedo = g_textures[NonUniformResourceIndex(a.tex)]
-	           .SampleLevel(g_matSamp, uv, 2.0).rgb;
+	           .SampleLevel(g_matSamp, uv, clamp(lod, 0.0, 12.0)).rgb;
 }
 
 [shader("miss")]
