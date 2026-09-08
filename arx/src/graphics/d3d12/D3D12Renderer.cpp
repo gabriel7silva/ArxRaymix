@@ -98,6 +98,12 @@ constexpr UINT kFrameCount = 2;
 constexpr D3D12_RESOURCE_STATES kTextureReadState =
 	D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 constexpr UINT kSrvHeapSize = 4096;
+// The ray tracing module works inside this same heap, because only one CBV_SRV_UAV heap can be
+// bound and its hit shader has to reach the game's textures. Its block sits at the END so that
+// every texture keeps the index it already had: a texture's srvIndex is its bindless index,
+// with no offset to apply in the shader, and no texture index can ever land on an RTAO
+// descriptor and be read as the wrong type.
+constexpr UINT kRtaoSrvBase = kSrvHeapSize - D3D12Rtao::kHeapDescriptors;
 constexpr UINT kUploadBytes = 16 * 1024 * 1024;
 constexpr float kNearW = 1.f;
 constexpr float kTLClipPad = 64.f;
@@ -1890,7 +1896,9 @@ unsigned D3D12Renderer::allocateSrv() {
 		m->freeSrv.pop_back();
 		return index;
 	}
-	if(m->nextSrv >= kSrvHeapSize) {
+	if(m->nextSrv >= kRtaoSrvBase) {
+		// Stopping at the reserved block, not at the end of the heap: handing out a descriptor
+		// inside it would let a texture overwrite one of the ray pass's own views.
 		LogError << "D3D12: SRV heap exhausted";
 		return 0;
 	}
@@ -2640,7 +2648,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	
 	delete m_rtao;
 	m_rtao = new D3D12Rtao();
-	m_rtao->init(m->device.Get());
+	m_rtao->init(m->device.Get(), m->srvHeap.Get(), kRtaoSrvBase);
 	m_rtao->resize(width, height);
 	if(m_sl) {
 		m_sl->setDevice(m->device.Get(), adapter.Get());

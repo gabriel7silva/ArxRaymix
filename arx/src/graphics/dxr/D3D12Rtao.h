@@ -40,7 +40,13 @@ public:
 	D3D12Rtao(const D3D12Rtao &) = delete;
 	D3D12Rtao & operator=(const D3D12Rtao &) = delete;
 	
-	bool init(ID3D12Device * device);
+	//! The ray pass and the raster share one CBV_SRV_UAV heap, because only one can be bound at
+	//! a time and the hit shader has to reach the game's textures through it. The renderer owns
+	//! the heap and lends this module a reserved block of kHeapDescriptors at baseIndex.
+	bool init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap, unsigned baseIndex);
+
+	//! Descriptors this module needs inside the shared heap.
+	static constexpr unsigned kHeapDescriptors = 28;
 	void shutdown();
 	void resize(int width, int height);
 	//! True when resize() would actually release and recreate the targets. Lets the caller pay for
@@ -196,7 +202,10 @@ private:
 	ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
 	ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
 	std::vector<unsigned char> m_dxil;
-	ComPtr<ID3D12DescriptorHeap> m_heap;
+	//! Not owned: the renderer's CBV_SRV_UAV heap. Cleared in shutdown.
+	ID3D12DescriptorHeap * m_heap = nullptr;
+	//! First descriptor of this module's reserved block inside that heap.
+	unsigned m_rtaoBase = 0;
 	ComPtr<ID3D12Resource> m_vertUpload;
 	ComPtr<ID3D12Resource> m_vertDefault;
 	ComPtr<ID3D12Resource> m_roomUpload;

@@ -45,6 +45,8 @@ constexpr UINT kRtUavCount = 5;
 constexpr UINT kCompositeBase = 20;
 constexpr UINT kCompositeSrvCount = 8;
 constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
+static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
+              "INV-02: the block the renderer reserves must match what this file lays out");
 // Size of the Params (b0) constant buffer. It used to be a count of root constants; those cost a
 // DWORD each and filled 60 of the root signature's 64, which is why every later value had to be
 // smuggled into ViewParams (b1). It is a root CBV now, so the size is only a size.
@@ -1212,7 +1214,8 @@ void D3D12Rtao::shutdown() {
 	m_roomBlas.reset();
 	m_waterBlas.reset();
 	m_playerBlas.reset();
-	m_heap.reset();
+	m_heap = nullptr; // not ours to release
+	m_rtaoBase = 0;
 	m_rtvHeap.reset();
 	m_dsvHeap.reset();
 	m_compositePso.reset();
@@ -1239,7 +1242,8 @@ void D3D12Rtao::shutdown() {
 	m_failedH = 0;
 }
 
-bool D3D12Rtao::init(ID3D12Device * device) {
+bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
+                     unsigned baseIndex) {
 	shutdown();
 	m_device = device;
 	if(!device) {
@@ -1273,14 +1277,15 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 		LogWarning << "RTAO: mask pipeline failed — reflections off, AO/shadows/GI still on";
 	}
 	
-	D3D12_DESCRIPTOR_HEAP_DESC heap {};
-	heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	heap.NumDescriptors = kHeapCount;
-	heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	if(FAILED(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(m_heap.put())))) {
-		LogError << "RTAO: descriptor heap failed";
+	// The heap belongs to the renderer. A ray dispatch and a raster draw cannot bind different
+	// CBV_SRV_UAV heaps, and the hit shader has to reach the game's textures, so this module
+	// works inside a reserved block of the renderer's heap instead of owning one.
+	if(!sharedHeap) {
+		LogError << "RTAO: no shared descriptor heap";
 		return true;
 	}
+	m_heap = sharedHeap;
+	m_rtaoBase = baseIndex;
 	if(!createBuffer(device, UINT64(kMaxShadowLights * sizeof(GpuLight)), D3D12_HEAP_TYPE_UPLOAD,
 	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, m_lights.put())) {
 		LogError << "RTAO: light buffer failed";
@@ -1877,7 +1882,10 @@ void D3D12Rtao::updateDescriptors() {
 	if(!m_device || !m_heap) {
 		return;
 	}
+	// Every slot(i) below is relative to this module's reserved block, so the base is folded in
+	// here once instead of at each of the twenty call sites.
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_heap->GetCPUDescriptorHandleForHeapStart();
+	cpu.ptr += SIZE_T(m_rtaoBase) * m_descriptorSize;
 	auto slot = [&](UINT i) {
 		D3D12_CPU_DESCRIPTOR_HANDLE h = cpu;
 		h.ptr += SIZE_T(i) * m_descriptorSize;
@@ -2614,11 +2622,14 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	depthSrv.Texture2D.MipLevels = 1;
-	D3D12_CPU_DESCRIPTOR_HANDLE depthCpu = m_heap->GetCPUDescriptorHandleForHeapStart();
-	depthCpu.ptr += SIZE_T(3) * m_descriptorSize;
+	// These two write into the reserved block like slot() does, so they carry the same base.
+	const SIZE_T heapStart = m_heap->GetCPUDescriptorHandleForHeapStart().ptr
+	                         + SIZE_T(m_rtaoBase) * m_descriptorSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE depthCpu { heapStart + SIZE_T(3) * m_descriptorSize };
 	m_device->CreateShaderResourceView(depth, &depthSrv, depthCpu);
-	D3D12_CPU_DESCRIPTOR_HANDLE depthPs = m_heap->GetCPUDescriptorHandleForHeapStart();
-	depthPs.ptr += SIZE_T(kCompositeBase + 3) * m_descriptorSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE depthPs {
+		heapStart + SIZE_T(kCompositeBase + 3) * m_descriptorSize
+	};
 	m_device->CreateShaderResourceView(depth, &depthSrv, depthPs);
 	transition(list, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE,
 	           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -2700,7 +2711,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
 	const DistancePreset dist = distancePreset(settings.distance);
 
-	ID3D12DescriptorHeap * heaps[] = { m_heap.Get() };
+	ID3D12DescriptorHeap * heaps[] = { m_heap };
 	list->SetDescriptorHeaps(1, heaps);
 	list->SetComputeRootSignature(m_rtRoot.Get());
 	if(m_paramsMapped) {
@@ -2711,6 +2722,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		                                          + m_paramsSlot * kParamsStride);
 	}
 	D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_heap->GetGPUDescriptorHandleForHeapStart();
+	gpu.ptr += SIZE_T(m_rtaoBase) * m_descriptorSize;
 	list->SetComputeRootDescriptorTable(1, gpu);
 	D3D12_GPU_DESCRIPTOR_HANDLE uav = gpu;
 	uav.ptr += SIZE_T(kRtUavBase) * m_descriptorSize;
