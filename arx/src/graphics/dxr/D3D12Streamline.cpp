@@ -245,14 +245,50 @@ PSOut PSMain(float4 pos : SV_Position) {
 }
 )";
 
+// sRGB transfer, both directions. The raster writes gamma-encoded colour, which is what the art
+// was authored in and what the game has always displayed. Ray Reconstruction is the one consumer
+// that needs linear radiance instead, so the conversion happens on its path and is undone on the
+// way out. Nothing else in the renderer changes colour space.
+// Gamma scene colour to linear fp16, for Ray Reconstruction only. Eight bits of gamma carry more
+// detail in the darks than eight bits of linear would, so nothing is lost going up to float here.
+const char * kLinearize = R"(
+Texture2D srcTex : register(t0);
+float3 srgbToLinear(float3 c) {
+	// step and lerp, not select: these are compiled by FXC as ps_5_0, which predates HLSL 2021.
+	// See INV-03 — the wrong dialect here makes the whole pass fail to build and vanish.
+	float3 lo = c / 12.92;
+	float3 hi = pow(max(c + 0.055, 1e-5) / 1.055, 2.4);
+	return lerp(hi, lo, step(c, 0.04045));
+}
+float4 VSMain(uint id : SV_VertexID) : SV_Position {
+	float2 uv = float2((id << 1) & 2, id & 2);
+	return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 PSMain(float4 pos : SV_Position) : SV_Target {
+	return float4(srgbToLinear(saturate(srcTex.Load(int3(pos.xy, 0)).rgb)), 1);
+}
+)";
+
 const char * kTonemap = R"(
+cbuffer Cb : register(b0) { uint encodeGamma; uint pad0; uint pad1; uint pad2; };
 Texture2D hdrTex : register(t0);
+float3 linearToSrgb(float3 c) {
+	c = max(c, 0.0);
+	float3 lo = c * 12.92;
+	float3 hi = 1.055 * pow(max(c, 1e-8), 1.0 / 2.4) - 0.055;
+	return lerp(hi, lo, step(c, 0.0031308));
+}
 float4 VSMain(uint id : SV_VertexID) : SV_Position {
 	float2 uv = float2((id << 1) & 2, id & 2);
 	return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
 }
 float4 PSMain(float4 pos : SV_Position) : SV_Target {
 	float3 h = hdrTex.Load(int3(pos.xy, 0)).rgb;
+	// Only the Ray Reconstruction path hands over linear data. Encoding unconditionally would
+	// gamma the plain DLSS output a second time and wash the whole image out.
+	if(encodeGamma != 0u) {
+		h = linearToSrgb(h);
+	}
 	return float4(saturate(h), 1);
 }
 )";
@@ -282,12 +318,15 @@ struct D3D12Streamline::Gpu {
 	ID3D12Resource * albedo = nullptr;
 	ID3D12Resource * specA = nullptr;
 	ID3D12Resource * hdrOut = nullptr;
+	// Scene colour converted to linear, the only buffer in this file that is not gamma-encoded.
+	ID3D12Resource * linearIn = nullptr;
 	ID3D12Resource * hit = nullptr;
 	ID3D12Resource * hudless = nullptr;
 	ID3D12DescriptorHeap * rtvHeap = nullptr;
 	ID3D12DescriptorHeap * srvHeap = nullptr;
 	ID3D12PipelineState * gbufferPso = nullptr;
 	ID3D12PipelineState * tonemapPso = nullptr;
+	ID3D12PipelineState * linearPso = nullptr;
 	ID3D12PipelineState * blitPso = nullptr;
 	ID3D12RootSignature * gbufferRoot = nullptr;
 	ID3D12RootSignature * tonemapRoot = nullptr;
@@ -306,12 +345,14 @@ struct D3D12Streamline::Gpu {
 		drop(albedo); albedo = nullptr;
 		drop(specA); specA = nullptr;
 		drop(hdrOut); hdrOut = nullptr;
+		drop(linearIn); linearIn = nullptr;
 		drop(hit); hit = nullptr;
 		drop(hudless); hudless = nullptr;
 		drop(rtvHeap); rtvHeap = nullptr;
 		drop(srvHeap); srvHeap = nullptr;
 		drop(gbufferPso); gbufferPso = nullptr;
 		drop(tonemapPso); tonemapPso = nullptr;
+		drop(linearPso); linearPso = nullptr;
 		drop(blitPso); blitPso = nullptr;
 		drop(gbufferRoot); gbufferRoot = nullptr;
 		drop(tonemapRoot); tonemapRoot = nullptr;
@@ -715,8 +756,12 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		return true;
 	}
 	releaseTargets();
-	auto fail = [&]() -> bool {
-		LogError << "Streamline: G-buffer targets failed";
+	// Name the resource. "targets failed" on its own turns every allocation in this function into
+	// a suspect, and the failure latches until the next resize, so it is not easy to catch twice.
+	auto fail = [&](const char * what) -> bool {
+		LogError << "Streamline: target creation failed: " << what
+		         << " (" << inputW << "x" << inputH << " -> " << outputW << "x" << outputH
+		         << ", needed=" << needed << ")";
 		releaseTargets();
 		m_targetsFailed = true;
 		return false;
@@ -727,14 +772,17 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	rtv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	rtv.NumDescriptors = 8;
 	if(FAILED(m_device->CreateDescriptorHeap(&rtv, IID_PPV_ARGS(&m_gpu->rtvHeap)))) {
-		return fail();
+		return fail("target setup");
 	}
 	D3D12_DESCRIPTOR_HEAP_DESC srv {};
 	srv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	srv.NumDescriptors = 8;
+	// 0-5 G-buffer, 6 blit, 7 tonemap, 8 the linearise pass. The tonemap used to sit on 5 and
+	// collide with the G-buffer's water depth, which resolved at execution to whichever was
+	// written last.
+	srv.NumDescriptors = 10;
 	srv.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	if(FAILED(m_device->CreateDescriptorHeap(&srv, IID_PPV_ARGS(&m_gpu->srvHeap)))) {
-		return fail();
+		return fail("target setup");
 	}
 	const UINT w = UINT(inputW);
 	const UINT h = UINT(inputH);
@@ -747,7 +795,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	const bool needHdrOut = (needed & kTargetHdrOut) != 0;
 	const bool needHudless = (needed & kTargetHudless) != 0;
 	if(!makeTex(m_device, w, h, DXGI_FORMAT_R16G16_FLOAT, rt, D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->mvec)) {
-		return fail();
+		return fail("mvec");
 	}
 	if(needGbuffer
 	   && (!makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
@@ -758,17 +806,23 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	                   D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->specA)
 	       || !makeTex(m_device, w, h, DXGI_FORMAT_R16_FLOAT, rt,
 	                   D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->hit))) {
-		return fail();
+		return fail("gbuffer");
 	}
 	if(needHdrOut
 	   && !makeTex(m_device, ow, oh, DXGI_FORMAT_R16G16B16A16_FLOAT, uav,
 	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, &m_gpu->hdrOut)) {
-		return fail();
+		return fail("hdrOut");
+	}
+	// Input resolution, not output: this is what Ray Reconstruction reads, before it upscales.
+	if(needHdrOut
+	   && !makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
+	               D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->linearIn)) {
+		return fail("linearIn");
 	}
 	if(needHudless
 	   && !makeTex(m_device, ow, oh, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_NONE,
 	               D3D12_RESOURCE_STATE_COPY_DEST, &m_gpu->hudless)) {
-		return fail();
+		return fail("target setup");
 	}
 	D3D12_CPU_DESCRIPTOR_HANDLE r0 = m_gpu->rtvHeap->GetCPUDescriptorHandleForHeapStart();
 	auto rtvAt = [&](UINT i) {
@@ -828,13 +882,13 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	if(needGbuffer) {
 		if(FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
 			dropBlob(err);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(err);
 		if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 		                                        IID_PPV_ARGS(&m_gpu->gbufferRoot)))) {
 			dropBlob(blob);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(blob);
 		if(FAILED(D3DCompile(kGbuffer, std::strlen(kGbuffer), "sl_gbuffer", nullptr, nullptr,
@@ -842,7 +896,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: G-buffer VS failed"
 			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(cerr);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(cerr);
 		if(FAILED(D3DCompile(kGbuffer, std::strlen(kGbuffer), "sl_gbuffer", nullptr, nullptr,
@@ -851,7 +905,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(vs);
 			dropBlob(cerr);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(cerr);
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC pd {};
@@ -882,7 +936,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: G-buffer PSO failed";
 			dropBlob(vs);
 			dropBlob(ps);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(vs);
 		dropBlob(ps);
@@ -898,31 +952,40 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		tp.DescriptorTable.NumDescriptorRanges = 1;
 		tp.DescriptorTable.pDescriptorRanges = &tr;
 		tp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+		D3D12_ROOT_PARAMETER tparams[2] {};
+		tparams[0] = tp;
+		tparams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		tparams[1].Constants.Num32BitValues = 4;
+		tparams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 		D3D12_ROOT_SIGNATURE_DESC trs {};
-		trs.NumParameters = 1;
-		trs.pParameters = &tp;
+		trs.NumParameters = 2;
+		trs.pParameters = tparams;
 		if(FAILED(D3D12SerializeRootSignature(&trs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
 			dropBlob(err);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(err);
 		if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 		                                        IID_PPV_ARGS(&m_gpu->tonemapRoot)))) {
 			dropBlob(blob);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(blob);
 		if(FAILED(D3DCompile(kTonemap, std::strlen(kTonemap), "sl_tonemap", nullptr, nullptr,
 		                     "VSMain", "vs_5_0", 0, 0, &vs, &cerr))) {
+			LogError << "Streamline: tonemap VS failed: "
+			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(cerr);
-			return fail();
+			return fail("tonemap VS");
 		}
 		dropBlob(cerr);
 		if(FAILED(D3DCompile(kTonemap, std::strlen(kTonemap), "sl_tonemap", nullptr, nullptr,
 		                     "PSMain", "ps_5_0", 0, 0, &ps, &cerr))) {
+			LogError << "Streamline: tonemap PS failed: "
+			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(vs);
 			dropBlob(cerr);
-			return fail();
+			return fail("tonemap PS");
 		}
 		dropBlob(cerr);
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC td {};
@@ -939,11 +1002,37 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		td.NumRenderTargets = 1;
 		td.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
 		td.SampleDesc.Count = 1;
+		{
+			// Same root signature and same full-screen triangle; only the pixel shader and the
+			// target format differ.
+			ID3DBlob * lvs = nullptr;
+			ID3DBlob * lps = nullptr;
+			if(SUCCEEDED(D3DCompile(kLinearize, std::strlen(kLinearize), "sl_linearize", nullptr,
+			                        nullptr, "VSMain", "vs_5_0", 0, 0, &lvs, &cerr))) {
+				dropBlob(cerr);
+				if(SUCCEEDED(D3DCompile(kLinearize, std::strlen(kLinearize), "sl_linearize", nullptr,
+				                        nullptr, "PSMain", "ps_5_0", 0, 0, &lps, &cerr))) {
+					D3D12_GRAPHICS_PIPELINE_STATE_DESC ld = td;
+					ld.VS = { lvs->GetBufferPointer(), lvs->GetBufferSize() };
+					ld.PS = { lps->GetBufferPointer(), lps->GetBufferSize() };
+					ld.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+					if(FAILED(m_device->CreateGraphicsPipelineState(&ld,
+					                                               IID_PPV_ARGS(&m_gpu->linearPso)))) {
+						LogError << "Streamline: linearize PSO failed — RR keeps gamma input";
+					}
+					dropBlob(lps);
+				}
+				dropBlob(cerr);
+				dropBlob(lvs);
+			} else {
+				dropBlob(cerr);
+			}
+		}
 		if(FAILED(m_device->CreateGraphicsPipelineState(&td, IID_PPV_ARGS(&m_gpu->tonemapPso)))) {
 			LogError << "Streamline: tonemap PSO failed";
 			dropBlob(vs);
 			dropBlob(ps);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(vs);
 		dropBlob(ps);
@@ -965,26 +1054,28 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		brs.pParameters = bp;
 		if(FAILED(D3D12SerializeRootSignature(&brs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err))) {
 			dropBlob(err);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(err);
 		if(FAILED(m_device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
 		                                        IID_PPV_ARGS(&m_gpu->blitRoot)))) {
 			dropBlob(blob);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(blob);
 		if(FAILED(D3DCompile(kBlit, std::strlen(kBlit), "sl_blit", nullptr, nullptr,
 		                     "VSMain", "vs_5_0", 0, 0, &vs, &cerr))) {
 			dropBlob(cerr);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(cerr);
 		if(FAILED(D3DCompile(kBlit, std::strlen(kBlit), "sl_blit", nullptr, nullptr,
 		                     "PSMain", "ps_5_0", 0, 0, &ps, &cerr))) {
+			LogError << "Streamline: tonemap PS failed: "
+			         << (cerr ? static_cast<const char *>(cerr->GetBufferPointer()) : "");
 			dropBlob(vs);
 			dropBlob(cerr);
-			return fail();
+			return fail("tonemap PS");
 		}
 		dropBlob(cerr);
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC bd = td;
@@ -995,7 +1086,7 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 			LogError << "Streamline: blit PSO failed";
 			dropBlob(vs);
 			dropBlob(ps);
-			return fail();
+			return fail("target setup");
 		}
 		dropBlob(vs);
 		dropBlob(ps);
@@ -1190,7 +1281,15 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	opt.mode = sl::DLSSMode(frame.dlssMode > 0 ? frame.dlssMode : int(sl::DLSSMode::eDLAA));
 	opt.outputWidth = uint32_t(outW);
 	opt.outputHeight = uint32_t(outH);
-	opt.colorBuffersHDR = sl::Boolean::eFalse;
+	// Ray Reconstruction refuses to create otherwise: sl.log says "HDR Color required" and NGX
+	// returns InvalidParameter. The SDK's own default is eTrue and its guide calls it mandatory,
+	// because the denoiser works in linear radiance. Plain DLSS below is different and keeps
+	// eFalse legitimately.
+	//
+	// Caveat worth knowing: the scene colour handed to it is R8G8B8A8_UNORM, so RR reads eight
+	// bits of tone-mapped output as linear radiance. It runs, but a linear fp16 scene colour is
+	// what it actually wants.
+	opt.colorBuffersHDR = sl::Boolean::eTrue;
 	opt.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
 	opt.dlaaPreset = sl::DLSSDPreset::ePresetD;
 	opt.qualityPreset = sl::DLSSDPreset::ePresetD;
@@ -1205,19 +1304,36 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	}
 	sl::Extent inExt { 0, 0, uint32_t(frame.width), uint32_t(frame.height) };
 	sl::Extent outExt { 0, 0, uint32_t(outW), uint32_t(outH) };
-	sl::Resource colorIn { sl::ResourceType::eTex2d, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET };
+	// Ray Reconstruction denoises in linear radiance. The raster writes gamma-encoded colour, so
+	// hand it a converted copy rather than eight bits of gamma relabelled as linear.
+	const bool linear = linearizeSceneColour(frame);
+	ID3D12Resource * rrIn = linear ? m_gpu->linearIn : frame.color;
+	const uint32_t rrInState = linear
+		? uint32_t(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+		: uint32_t(D3D12_RESOURCE_STATE_RENDER_TARGET);
+	sl::Resource colorIn { sl::ResourceType::eTex2d, rrIn, rrInState };
 	sl::Resource colorOut { sl::ResourceType::eTex2d, m_gpu->hdrOut, D3D12_RESOURCE_STATE_UNORDERED_ACCESS };
 	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
 	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource nrm { sl::ResourceType::eTex2d, m_gpu->nrm, D3D12_RESOURCE_STATE_RENDER_TARGET };
-	// colorCopy is lit raster, not unlit albedo. Hit is primary depth, not
-	// reflection t. Both optional RR guides — omit rather than lie.
+	m_rrLinearIn = linear;
+	sl::Resource albedo { sl::ResourceType::eTex2d, m_gpu->albedo,
+	                      D3D12_RESOURCE_STATE_RENDER_TARGET };
+	sl::Resource specA { sl::ResourceType::eTex2d, m_gpu->specA,
+	                     D3D12_RESOURCE_STATE_RENDER_TARGET };
+	// Albedo and specular albedo are required, not optional: the plugin rejects an evaluate
+	// without them. What we can hand it is lit raster rather than unlit albedo, which is an
+	// approximation — but the choice is an approximate albedo or no Ray Reconstruction at all.
+	// Specular hit distance genuinely is optional, and the G-buffer writes a constant zero
+	// there, so tagging it would be telling the denoiser something false.
 	sl::ResourceTag tags[] = {
 		{ &colorIn, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
 		{ &colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &outExt },
 		{ &depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &inExt },
 		{ &mvec, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
 		{ &nrm, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
+		{ &albedo, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
+		{ &specA, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eOnlyValidNow, &inExt },
 	};
 	auto * ft = static_cast<sl::FrameToken *>(token);
 	if(pslSetTagForFrame(*ft, vp, tags, UINT(_countof(tags)), frame.list) != sl::Result::eOk) {
@@ -1291,9 +1407,57 @@ bool D3D12Streamline::evaluateDlss(const Frame & frame, void * token) {
 #endif
 }
 
-bool D3D12Streamline::tonemapToBackbuffer(const Frame & frame) {
+bool D3D12Streamline::linearizeSceneColour(const Frame & frame) {
 #if !ARX_HAVE_STREAMLINE
 	ARX_UNUSED(frame);
+	return false;
+#else
+	if(!m_gpu || !m_gpu->linearIn || !m_gpu->linearPso || !m_gpu->tonemapRoot) {
+		return false;
+	}
+	D3D12_SHADER_RESOURCE_VIEW_DESC srv {};
+	srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srv.Texture2D.MipLevels = 1;
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_gpu->srvHeap->GetCPUDescriptorHandleForHeapStart();
+	cpu.ptr += SIZE_T(8) * m_gpu->srvSize;
+	m_device->CreateShaderResourceView(frame.color, &srv, cpu);
+	D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_gpu->srvHeap->GetGPUDescriptorHandleForHeapStart();
+	gpu.ptr += SIZE_T(8) * m_gpu->srvSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_gpu->rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	rtv.ptr += SIZE_T(5) * m_gpu->rtvSize;
+	m_device->CreateRenderTargetView(m_gpu->linearIn, nullptr, rtv);
+	slTransition(frame.list, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET,
+	             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	frame.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+	D3D12_VIEWPORT vp {};
+	vp.Width = float(frame.width);
+	vp.Height = float(frame.height);
+	vp.MaxDepth = 1.f;
+	D3D12_RECT sc { 0, 0, LONG(frame.width), LONG(frame.height) };
+	frame.list->RSSetViewports(1, &vp);
+	frame.list->RSSetScissorRects(1, &sc);
+	frame.list->SetGraphicsRootSignature(m_gpu->tonemapRoot);
+	frame.list->SetPipelineState(m_gpu->linearPso);
+	frame.list->SetDescriptorHeaps(1, &m_gpu->srvHeap);
+	frame.list->SetGraphicsRootDescriptorTable(0, gpu);
+	const UINT unused[4] = { 0u, 0u, 0u, 0u };
+	frame.list->SetGraphicsRoot32BitConstants(1, 4, unused, 0);
+	frame.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	frame.list->DrawInstanced(3, 1, 0, 0);
+	slTransition(frame.list, frame.color, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+	             D3D12_RESOURCE_STATE_RENDER_TARGET);
+	slTransition(frame.list, m_gpu->linearIn, D3D12_RESOURCE_STATE_RENDER_TARGET,
+	             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	return true;
+#endif
+}
+
+bool D3D12Streamline::tonemapToBackbuffer(const Frame & frame, bool linearSource) {
+#if !ARX_HAVE_STREAMLINE
+	ARX_UNUSED(frame);
+	ARX_UNUSED(linearSource);
 	return false;
 #else
 	slTransition(frame.list, m_gpu->hdrOut, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -1304,10 +1468,10 @@ bool D3D12Streamline::tonemapToBackbuffer(const Frame & frame) {
 	srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	srv.Texture2D.MipLevels = 1;
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_gpu->srvHeap->GetCPUDescriptorHandleForHeapStart();
-	cpu.ptr += SIZE_T(5) * m_gpu->srvSize;
+	cpu.ptr += SIZE_T(7) * m_gpu->srvSize;
 	m_device->CreateShaderResourceView(m_gpu->hdrOut, &srv, cpu);
 	D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_gpu->srvHeap->GetGPUDescriptorHandleForHeapStart();
-	gpu.ptr += SIZE_T(5) * m_gpu->srvSize;
+	gpu.ptr += SIZE_T(7) * m_gpu->srvSize;
 	
 	D3D12_CPU_DESCRIPTOR_HANDLE dummyRtv = m_gpu->rtvHeap->GetCPUDescriptorHandleForHeapStart();
 	dummyRtv.ptr += SIZE_T(6) * m_gpu->rtvSize;
@@ -1327,6 +1491,8 @@ bool D3D12Streamline::tonemapToBackbuffer(const Frame & frame) {
 	frame.list->SetPipelineState(m_gpu->tonemapPso);
 	frame.list->SetDescriptorHeaps(1, &m_gpu->srvHeap);
 	frame.list->SetGraphicsRootDescriptorTable(0, gpu);
+	const UINT encode[4] = { linearSource ? 1u : 0u, 0u, 0u, 0u };
+	frame.list->SetGraphicsRoot32BitConstants(1, 4, encode, 0);
 	frame.list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	frame.list->DrawInstanced(3, 1, 0, 0);
 	slTransition(frame.list, m_gpu->hdrOut, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
@@ -1680,12 +1846,15 @@ bool D3D12Streamline::evaluate(const Frame & frame) {
 		m_loggedOn = false;
 		return fail();
 	}
-	tonemapToBackbuffer(frame);
+	// Only the Ray Reconstruction path produced linear output; encoding the plain DLSS result
+	// would gamma it twice.
+	tonemapToBackbuffer(frame, m_rrLinearIn);
+	m_rrLinearIn = false;
 	if(!m_loggedOn || frame.reset) {
 		LogInfo << "Streamline: " << path << " evaluate ok " << frame.width << "x" << frame.height
 		        << " -> " << outW << "x" << outH
 		        << (std::strcmp(path, "DLSS-RR") == 0
-		            ? " (LDR, preset D, no albedo tag)"
+		            ? " (HDR flag, preset D, albedo=lit raster)"
 		            : " (LDR, preset K, jitter on)");
 		m_loggedOn = true;
 		m_loggedOff = false;

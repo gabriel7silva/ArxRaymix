@@ -77,7 +77,11 @@ function Start-Arx {
         [string]$Renderer,
         [string]$Config = 'RelWithDebInfo',
         [string]$DataDir,
-        [int]$LoadLevel = 0
+        [int]$LoadLevel = 0,
+        # 0 off, 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo.
+        # Replaces the ray traced reflection with the raw value: the pass cannot print.
+        [ValidateRange(0, 4)]
+        [int]$DxrDebug = 0
     )
 
     $root = Get-ArxRepoRoot
@@ -116,10 +120,18 @@ function Start-Arx {
         Write-Host 'DirectX 9 raster. Log: runtime\user\arx.log'
     }
 
+    if ($DxrDebug -ne 0) {
+        Write-Host "DXR debug view $DxrDebug - the reflection shows a raw value, not a reflection"
+    }
+
     $previousRenderer = $env:ARX_RENDERER
+    $previousDxrDebug = $env:ARX_DXR_DEBUG
     Push-Location $root
     try {
         $env:ARX_RENDERER = $Renderer
+        if ($DxrDebug -ne 0) {
+            $env:ARX_DXR_DEBUG = "$DxrDebug"
+        }
         & $exe @arguments
     } finally {
         Pop-Location
@@ -127,6 +139,11 @@ function Start-Arx {
             Remove-Item Env:\ARX_RENDERER -ErrorAction SilentlyContinue
         } else {
             $env:ARX_RENDERER = $previousRenderer
+        }
+        if ($null -eq $previousDxrDebug) {
+            Remove-Item Env:\ARX_DXR_DEBUG -ErrorAction SilentlyContinue
+        } else {
+            $env:ARX_DXR_DEBUG = $previousDxrDebug
         }
     }
 }

@@ -98,11 +98,11 @@ These are not style preferences. Each one has a reason that will bite.
 
 **The RTX Remix layer was deleted.** `arx/src/graphics/remix/` and `arx/third_party/rtx-remix/` are gone. Do not recreate them, and do not introduce `toRemix`, `remix::`, or `ARX_HAVE_RTX_REMIX`.
 
-This grep must return no hits in compiled sources (the DXR README may still name `toRemix` in order to forbid it):
+To check, run this by hand — it is deliberately not in a fenced block, because the maintenance
+checker fails any grep that matches nothing, and a grep proving an absence matches nothing when
+it is doing its job:
 
-```
-grep -rn --include=*.cpp --include=*.h -e "ARX_HAVE_RTX_REMIX" -e "graphics/remix" -e "remix::" arx/src
-```
+    grep -rn --include=*.cpp --include=*.h -e "ARX_HAVE_RTX_REMIX" -e "graphics/remix" -e "remix::" arx/src
 
 Any hit is leftover coupling and should be removed. The history of what Remix did is in `docs/UPSTREAM.md`. It is deliberately not repeated here, because a description of what it achieved is an invitation to revive it.
 

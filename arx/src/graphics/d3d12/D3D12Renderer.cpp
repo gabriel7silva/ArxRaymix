@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -19,6 +21,7 @@
 #include <vector>
 
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <dxgi1_6.h>
 #ifdef interface
@@ -87,7 +90,48 @@ public:
 namespace {
 
 constexpr UINT kFrameCount = 2;
+// Game textures rest here rather than in PIXEL_SHADER_RESOURCE alone. A ray dispatch reads
+// through the non-pixel stage, and transitioning thousands of textures each frame to hand them
+// to the ray pass is not an option, so they carry both bits for their whole life. The two
+// transitions in uploadTextureData are the only places that name this state, and they have to
+// keep naming the same one: a barrier whose before-state does not match is a debug-layer error.
+//! Descriptor index of a material's diffuse texture, or 0 for the 1x1 white fallback. Because
+//! the ray tracing block sits at the end of the heap, a texture's srvIndex is also its index
+//! in the bindless range, with nothing to add.
+//! Diffuse material of a face, or null when the face has none.
+const TextureContainer * faceTexture(const EERIE_3DOBJ * obj, const EERIE_FACE & face) {
+	if(!obj || !face.material || size_t(face.material) >= obj->materials.size()) {
+		return nullptr;
+	}
+	return obj->materials[face.material];
+}
+
+//! Copy a face's texture coordinates into the three vertices the ray tracing collector reads,
+//! scaled the way the raster path scales them: a texture stored larger than its image (the
+//! power-of-two padding) would otherwise sample shifted and shrunk.
+void setFaceUv(SMY_VERTEX (&verts)[3], const EERIE_FACE & face, const TextureContainer * tc) {
+	const Vec2f scale = tc ? tc->uv : Vec2f(1.f);
+	for(int i = 0; i < 3; ++i) {
+		verts[i].uv = Vec2f(face.u[i], face.v[i]) * scale;
+	}
+}
+
+unsigned srvOf(const TextureContainer * tc) {
+	if(!tc || !tc->m_pTexture) {
+		return 0u;
+	}
+	return static_cast<const D3D12Texture *>(tc->m_pTexture)->srvIndex();
+}
+
+constexpr D3D12_RESOURCE_STATES kTextureReadState =
+	D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 constexpr UINT kSrvHeapSize = 4096;
+// The ray tracing module works inside this same heap, because only one CBV_SRV_UAV heap can be
+// bound and its hit shader has to reach the game's textures. Its block sits at the END so that
+// every texture keeps the index it already had: a texture's srvIndex is its bindless index,
+// with no offset to apply in the shader, and no texture index can ever land on an RTAO
+// descriptor and be read as the wrong type.
+constexpr UINT kRtaoSrvBase = kSrvHeapSize - D3D12Rtao::kHeapDescriptors;
 constexpr UINT kUploadBytes = 16 * 1024 * 1024;
 constexpr float kNearW = 1.f;
 constexpr float kTLClipPad = 64.f;
@@ -547,10 +591,17 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 			if(fartherThan(ep.center, g_camera->m_pos, casterDist)) {
 				continue;
 			}
+			// The padding scale matters for textures stored larger than their image, exactly as
+			// the raster path applies it.
+			const Vec2f uvScale = ep.tex ? ep.tex->uv : Vec2f(1.f);
+			const unsigned roomTex = srvOf(ep.tex);
 			verts[0].p = ep.v[0].p;
 			verts[1].p = ep.v[1].p;
 			verts[2].p = ep.v[2].p;
-			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+			verts[0].uv = ep.v[0].uv * uvScale;
+			verts[1].uv = ep.v[1].uv * uvScale;
+			verts[2].uv = ep.v[2].uv * uvScale;
+			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex);
 			if(collectMetal && (ep.type & POLY_METAL)) {
 				rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 			}
@@ -558,7 +609,10 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 				verts[0].p = ep.v[3].p;
 				verts[1].p = ep.v[2].p;
 				verts[2].p = ep.v[1].p;
-				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0);
+				verts[0].uv = ep.v[3].uv * uvScale;
+				verts[1].uv = ep.v[2].uv * uvScale;
+				verts[2].uv = ep.v[1].uv * uvScale;
+				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex);
 				if(collectMetal && (ep.type & POLY_METAL)) {
 					rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 				}
@@ -611,10 +665,12 @@ void addObjectFaces(D3D12Rtao * rtao, const EERIE_3DOBJ * obj, bool includeAlpha
 		if(!ok) {
 			continue;
 		}
+		const TextureContainer * faceTc = faceTexture(obj, face);
 		verts[0].p = p[0];
 		verts[1].p = p[1];
 		verts[2].p = p[2];
-		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+		setFaceUv(verts, face, faceTc);
+		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
 		if(collectMetal) {
 			const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
 				? obj->materials[face.material] : nullptr;
@@ -678,10 +734,12 @@ void addLinkedCasters(D3D12Rtao * rtao, const Entity & entity, bool includeAlpha
 			if(!ok) {
 				continue;
 			}
+			const TextureContainer * faceTc = faceTexture(link.obj, face);
 			verts[0].p = p[0];
 			verts[1].p = p[1];
 			verts[2].p = p[2];
-			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+			setFaceUv(verts, face, faceTc);
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
 		}
 	}
 }
@@ -786,15 +844,17 @@ void collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 			if(!ok) {
 				continue;
 			}
+			const TextureContainer * faceTc = faceTexture(obj, face);
 			verts[0].p = p[0];
 			verts[1].p = p[1];
 			verts[2].p = p[2];
+			setFaceUv(verts, face, faceTc);
 			for(const Vec3f & v : p) {
 				mix(v.x);
 				mix(v.y);
 				mix(v.z);
 			}
-			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0);
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
 			if(collectMetal) {
 				const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
 					? obj->materials[face.material] : nullptr;
@@ -1581,6 +1641,9 @@ struct D3D12Renderer::Impl {
 	UINT srvSize = 0;
 	UINT sampSize = 0;
 	UINT nextSrv = 1;
+	//! A descriptor index was recycled, so the texture ids baked into the room geometry are
+	//! stale. Consumed by the room cache guard in applyWorldRayEffects.
+	bool roomsNeedRebuild = false;
 	std::vector<unsigned> freeSrv;
 	UINT uploadOffset = 0;
 	UINT uploadLimit = 0;
@@ -1880,7 +1943,9 @@ unsigned D3D12Renderer::allocateSrv() {
 		m->freeSrv.pop_back();
 		return index;
 	}
-	if(m->nextSrv >= kSrvHeapSize) {
+	if(m->nextSrv >= kRtaoSrvBase) {
+		// Stopping at the reserved block, not at the end of the heap: handing out a descriptor
+		// inside it would let a texture overwrite one of the ray pass's own views.
 		LogError << "D3D12: SRV heap exhausted";
 		return 0;
 	}
@@ -1892,6 +1957,17 @@ void D3D12Renderer::freeSrv(unsigned index) {
 		return;
 	}
 	m->freeSrv.push_back(index);
+	// The room geometry stores this index per triangle and is only re-uploaded when the room
+	// cache is rebuilt, so it can outlive the texture by many frames. Once the index is back in
+	// the pool the next texture takes it, and a reflected wall would quietly wear that texture
+	// instead of its own.
+	//
+	// Ask for a rebuild rather than clearing the geometry here. clearRooms() empties the room
+	// positions and the room metal, and only collectRoomCasters refills them — which runs behind
+	// a guard that fires when the camera moves far enough or the room changes. Clearing outside
+	// that guard left the ray pass with no room geometry at all until the player walked far
+	// enough to trip it, which read as reflections vanishing and returning seconds later.
+	m->roomsNeedRebuild = true;
 }
 
 void D3D12Renderer::createTextureSrv(ID3D12Resource * resource, unsigned index) {
@@ -1930,6 +2006,130 @@ void D3D12Renderer::unregisterTexture(D3D12Texture * texture) {
 	                     m_liveTextures.end());
 }
 
+//! Diagnostics level from the ARX_D3D12_DEBUG environment variable.
+//! 0 = off (default), 1 = debug layer, 2 = debug layer + GPU-based validation.
+//! Device Removed Extended Data is always armed; it costs nothing until the device dies.
+static int arxD3D12DebugLevel() {
+	static const int level = [] {
+		const char * env = std::getenv("ARX_D3D12_DEBUG");
+		if(!env || !*env) {
+			return 0;
+		}
+		const int value = std::atoi(env);
+		return value < 0 ? 0 : (value > 2 ? 2 : value);
+	}();
+	return level;
+}
+
+static const char * arxD3D12BreadcrumbOpName(D3D12_AUTO_BREADCRUMB_OP op) {
+	switch(op) {
+		case D3D12_AUTO_BREADCRUMB_OP_SETMARKER: return "SetMarker";
+		case D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT: return "BeginEvent";
+		case D3D12_AUTO_BREADCRUMB_OP_ENDEVENT: return "EndEvent";
+		case D3D12_AUTO_BREADCRUMB_OP_DRAWINSTANCED: return "DrawInstanced";
+		case D3D12_AUTO_BREADCRUMB_OP_DRAWINDEXEDINSTANCED: return "DrawIndexedInstanced";
+		case D3D12_AUTO_BREADCRUMB_OP_DISPATCH: return "Dispatch";
+		case D3D12_AUTO_BREADCRUMB_OP_COPYTEXTUREREGION: return "CopyTextureRegion";
+		case D3D12_AUTO_BREADCRUMB_OP_COPYRESOURCE: return "CopyResource";
+		case D3D12_AUTO_BREADCRUMB_OP_CLEARRENDERTARGETVIEW: return "ClearRenderTargetView";
+		case D3D12_AUTO_BREADCRUMB_OP_CLEARDEPTHSTENCILVIEW: return "ClearDepthStencilView";
+		case D3D12_AUTO_BREADCRUMB_OP_RESOURCEBARRIER: return "ResourceBarrier";
+		case D3D12_AUTO_BREADCRUMB_OP_CLEARUNORDEREDACCESSVIEW: return "ClearUnorderedAccessView";
+		case D3D12_AUTO_BREADCRUMB_OP_COPYBUFFERREGION: return "CopyBufferRegion";
+		case D3D12_AUTO_BREADCRUMB_OP_BEGINSUBMISSION: return "BeginSubmission";
+		case D3D12_AUTO_BREADCRUMB_OP_ENDSUBMISSION: return "EndSubmission";
+		case D3D12_AUTO_BREADCRUMB_OP_PRESENT: return "Present";
+		case D3D12_AUTO_BREADCRUMB_OP_BUILDRAYTRACINGACCELERATIONSTRUCTURE:
+			return "BuildRaytracingAccelerationStructure";
+		case D3D12_AUTO_BREADCRUMB_OP_DISPATCHRAYS: return "DispatchRays";
+		default: break;
+	}
+	return "other";
+}
+
+//! HRESULTs are only recognisable in hex; the log is the only place anyone will read them.
+static std::string arxD3D12Hex(std::uint64_t value) {
+	char buffer[24] {};
+	std::snprintf(buffer, sizeof(buffer), "0x%llx", static_cast<unsigned long long>(value));
+	return buffer;
+}
+
+//! Debug-layer messages, routed into arx.log so they survive without a debugger attached.
+static void CALLBACK arxD3D12MessageCallback(D3D12_MESSAGE_CATEGORY category,
+                                             D3D12_MESSAGE_SEVERITY severity, D3D12_MESSAGE_ID id,
+                                             LPCSTR description, void * context) {
+	ARX_UNUSED(category);
+	ARX_UNUSED(context);
+	const char * text = description ? description : "(no description)";
+	switch(severity) {
+		case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+		case D3D12_MESSAGE_SEVERITY_ERROR:
+			LogError << "D3D12 validation [" << unsigned(id) << "]: " << text;
+			break;
+		case D3D12_MESSAGE_SEVERITY_WARNING:
+			LogWarning << "D3D12 validation [" << unsigned(id) << "]: " << text;
+			break;
+		default:
+			break; // info and message severities are noise for this purpose
+	}
+}
+
+//! Log what the GPU was doing when it died. Only says anything after a real device loss.
+static void arxD3D12DumpDred(ID3D12Device * device) {
+	if(!device) {
+		return;
+	}
+	DxPtr<ID3D12DeviceRemovedExtendedData> dred;
+	if(FAILED(device->QueryInterface(IID_PPV_ARGS(dred.put())))) {
+		LogWarning << "D3D12: DRED unavailable (needs Windows 10 1903+)";
+		return;
+	}
+	D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT crumbs {};
+	if(SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&crumbs))) {
+		int nodes = 0;
+		for(const D3D12_AUTO_BREADCRUMB_NODE * node = crumbs.pHeadAutoBreadcrumbNode;
+		    node && nodes < 8; node = node->pNext, ++nodes) {
+			const UINT done = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
+			const UINT total = node->BreadcrumbCount;
+			if(done == total) {
+				continue; // this list finished; it is not the one that hung
+			}
+			std::string where = "?";
+			if(node->pCommandListDebugNameA) {
+				where = node->pCommandListDebugNameA;
+			} else if(node->pCommandQueueDebugNameA) {
+				where = node->pCommandQueueDebugNameA;
+			}
+			const char * op = "?";
+			if(node->pCommandHistory && done < total) {
+				op = arxD3D12BreadcrumbOpName(node->pCommandHistory[done]);
+			}
+			LogError << "D3D12 DRED: list \"" << where << "\" stopped at op " << done
+			         << " of " << total << " (" << op << ")";
+			// The few operations either side of the failure point are what identifies it.
+			const UINT first = done > 3 ? done - 3 : 0;
+			const UINT last = (done + 3 < total) ? done + 3 : total;
+			for(UINT i = first; node->pCommandHistory && i < last; ++i) {
+				LogError << "D3D12 DRED:   [" << i << "] "
+				         << arxD3D12BreadcrumbOpName(node->pCommandHistory[i])
+				         << (i == done ? "  <-- died here" : "");
+			}
+		}
+		if(nodes == 0) {
+			LogError << "D3D12 DRED: no breadcrumb nodes";
+		}
+	}
+	D3D12_DRED_PAGE_FAULT_OUTPUT fault {};
+	if(SUCCEEDED(dred->GetPageFaultAllocationOutput(&fault)) && fault.PageFaultVA != 0) {
+		LogError << "D3D12 DRED: page fault at VA " << std::uint64_t(fault.PageFaultVA);
+		for(const D3D12_DRED_ALLOCATION_NODE * n = fault.pHeadRecentFreedAllocationNode; n;
+		    n = n->pNext) {
+			LogError << "D3D12 DRED:   recently freed: "
+			         << (n->ObjectNameA ? n->ObjectNameA : "(unnamed)");
+		}
+	}
+}
+
 void D3D12Renderer::markUnusable() {
 	if(!m) {
 		return;
@@ -1958,15 +2158,59 @@ void D3D12Renderer::retireCompleted() {
 	m->retire.resize(live);
 }
 
-void D3D12Renderer::waitFence(std::uint64_t value) {
+bool D3D12Renderer::waitFence(std::uint64_t value) {
 	if(!m || !m->fence || value == 0) {
-		return;
+		return true;
 	}
 	if(m->fence->GetCompletedValue() < value) {
+		// The event is auto-reset and a bounded wait can leave a registration behind, so an old
+		// signal must never be allowed to satisfy the next wait.
+		ResetEvent(m->fenceEvent);
 		m->fence->SetEventOnCompletion(value, m->fenceEvent);
-		WaitForSingleObject(m->fenceEvent, INFINITE);
+		// Never wait forever: a GPU hang or a removed device leaves this fence unsignalled, and an
+		// INFINITE wait turns that into a frozen window with nothing written to the log.
+		const DWORD sliceMs = 2000;
+		const int maxSlices = 10;
+		for(int slice = 0; slice < maxSlices; ++slice) {
+			if(WaitForSingleObject(m->fenceEvent, sliceMs) == WAIT_OBJECT_0) {
+				retireCompleted();
+				return true;
+			}
+			const HRESULT removed = m->device ? m->device->GetDeviceRemovedReason() : S_OK;
+			if(FAILED(removed)) {
+				LogError << "D3D12: device removed while waiting for fence " << value
+				         << " (reason " << arxD3D12Hex(removed) << ")";
+				arxD3D12DumpDred(m->device.Get());
+				markUnusable();
+				return false;
+			}
+			LogWarning << "D3D12: still waiting for fence " << value << " after "
+			           << ((slice + 1) * int(sliceMs / 1000)) << "s";
+		}
+		LogError << "D3D12: gave up waiting for fence " << value << " — treating as a GPU hang."
+		            " DRED below is empty unless the device was actually removed";
+		arxD3D12DumpDred(m->device.Get());
+		markUnusable();
+		return false;
 	}
 	retireCompleted();
+	return true;
+}
+
+//! Block until every command list submitted so far has finished executing.
+//!
+//! The ray tracing module owns no fence and no per-frame ring. Every frame it overwrites its
+//! upload buffers in place, rebuilds the acceleration structures and the shared scratch buffer
+//! over the previous frame's, and releases resources outright when any of them has to grow —
+//! ten such release points sit inside D3D12Rtao::apply. All of that is only correct while at
+//! most one frame is in flight, which used to be guaranteed by a device-wide flush after every
+//! Present. That flush is gone, so the guarantee is re-established here, for the ray tracing
+//! path only: a raster-only frame still keeps kFrameCount frames in flight.
+bool D3D12Renderer::waitForSubmittedWork() {
+	if(!m || !m->fence) {
+		return true;
+	}
+	return waitFence(m->fenceValue);
 }
 
 void D3D12Renderer::waitGpu() {
@@ -2069,8 +2313,7 @@ bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, 
 		return false;
 	}
 	if(alreadyOnGpu) {
-		transition(m->list.Get(), dest, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-		           D3D12_RESOURCE_STATE_COPY_DEST);
+		transition(m->list.Get(), dest, kTextureReadState, D3D12_RESOURCE_STATE_COPY_DEST);
 	}
 	for(UINT mip = 0; mip < copyMips; ++mip) {
 		D3D12_TEXTURE_COPY_LOCATION dst {};
@@ -2083,7 +2326,7 @@ bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, 
 		src.PlacedFootprint = footprints[mip];
 		m->list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 	}
-	transition(m->list.Get(), dest, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(m->list.Get(), dest, D3D12_RESOURCE_STATE_COPY_DEST, kTextureReadState);
 	m->inflight.push_back(std::move(staging));
 	if(!wasRecording) {
 		m->list->Close();
@@ -2363,8 +2606,36 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	}
 	m_sl->init();
 	
+	// Arm the diagnostics before the device exists — neither can be turned on afterwards.
+	{
+		DxPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
+		if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(dredSettings.put())))) {
+			dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+			dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+		}
+		const int debugLevel = arxD3D12DebugLevel();
+		if(debugLevel > 0) {
+			DxPtr<ID3D12Debug> debug;
+			if(SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(debug.put())))) {
+				debug->EnableDebugLayer();
+				LogInfo << "D3D12: debug layer enabled (ARX_D3D12_DEBUG=" << debugLevel << ")";
+				if(debugLevel >= 2) {
+					DxPtr<ID3D12Debug1> debug1;
+					if(SUCCEEDED(debug->QueryInterface(IID_PPV_ARGS(debug1.put())))) {
+						debug1->SetEnableGPUBasedValidation(TRUE);
+						LogInfo << "D3D12: GPU-based validation enabled — expect a large slowdown";
+					}
+				}
+			} else {
+				LogWarning << "D3D12: debug layer requested but unavailable"
+				              " (install the Graphics Tools optional feature)";
+			}
+		}
+	}
+
 	DxPtr<IDXGIFactory6> factory;
-	if(FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(factory.put())))) {
+	if(FAILED(CreateDXGIFactory2(arxD3D12DebugLevel() > 0 ? DXGI_CREATE_FACTORY_DEBUG : 0u,
+	                             IID_PPV_ARGS(factory.put())))) {
 		LogError << "D3D12: CreateDXGIFactory2 failed";
 		return false;
 	}
@@ -2380,6 +2651,20 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	if(FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(m->device.put())))) {
 		LogError << "D3D12: D3D12CreateDevice failed";
 		return false;
+	}
+	if(arxD3D12DebugLevel() > 0) {
+		// Without this the debug layer only talks to an attached debugger, which nobody has when
+		// the bug reproduces on a player's machine. Route it into arx.log instead.
+		DxPtr<ID3D12InfoQueue1> infoQueue;
+		if(SUCCEEDED(m->device->QueryInterface(IID_PPV_ARGS(infoQueue.put())))) {
+			DWORD cookie = 0;
+			infoQueue->RegisterMessageCallback(arxD3D12MessageCallback,
+			                                   D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+			LogInfo << "D3D12: validation messages will be written to this log";
+		} else {
+			LogWarning << "D3D12: ID3D12InfoQueue1 unavailable — validation output goes to the"
+			              " debugger only";
+		}
 	}
 	
 	D3D12_COMMAND_QUEUE_DESC qd {};
@@ -2421,7 +2706,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	
 	delete m_rtao;
 	m_rtao = new D3D12Rtao();
-	m_rtao->init(m->device.Get());
+	m_rtao->init(m->device.Get(), m->srvHeap.Get(), kRtaoSrvBase);
 	m_rtao->resize(width, height);
 	if(m_sl) {
 		m_sl->setDevice(m->device.Get(), adapter.Get());
@@ -3417,7 +3702,12 @@ void D3D12Renderer::beginSceneUpscale() {
 			m->dlssReset = true;
 		}
 		m->prevDlssActive = 0;
-		if(m_rtao) {
+		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
+			// resize() releases the ray tracing targets outright; the previous frame read them.
+			// It also throws away the temporal history, so anything accumulated restarts.
+			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
+			        << " — temporal history restarts";
+			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
 		return;
@@ -3433,7 +3723,12 @@ void D3D12Renderer::beginSceneUpscale() {
 	}
 	m->dlssMode = slMode;
 	if(slMode <= 0) {
-		if(m_rtao) {
+		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
+			// resize() releases the ray tracing targets outright; the previous frame read them.
+			// It also throws away the temporal history, so anything accumulated restarts.
+			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
+			        << " — temporal history restarts";
+			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
 		return;
@@ -3445,7 +3740,12 @@ void D3D12Renderer::beginSceneUpscale() {
 		m->sceneW = m_width;
 		m->sceneH = m_height;
 		m->dlssMode = wantRr ? D3D12Streamline::resolveDlssMode(1, m_height) : 0;
-		if(m_rtao) {
+		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
+			// resize() releases the ray tracing targets outright; the previous frame read them.
+			// It also throws away the temporal history, so anything accumulated restarts.
+			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
+			        << " — temporal history restarts";
+			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
 		LogWarning << "D3D12: scene targets failed — native raster";
@@ -3462,7 +3762,10 @@ void D3D12Renderer::beginSceneUpscale() {
 	// stay unjittered. Without this, Ultra Performance is a bilinear 360p.
 	m->jitterX = halton(m->jitterFrame, 2) - 0.5f;
 	m->jitterY = halton(m->jitterFrame, 3) - 0.5f;
-	if(m_rtao) {
+	if(m_rtao && m_rtao->needsResize(rw, rh)) {
+		LogInfo << "DXR targets rebuilt at " << rw << "x" << rh
+		        << " — temporal history restarts";
+		waitForSubmittedWork();
 		m_rtao->resize(rw, rh);
 	}
 	static int s_mode = -1, s_rw = 0, s_rh = 0;
@@ -3634,7 +3937,9 @@ void D3D12Renderer::applyWorldRayEffects() {
 	   || s_roomMetal != int(collectMetal)
 	   || s_roomDist != config.video.dxrDistance
 	   || std::abs(s_roomCaster - casterDist) > 50.f
-	   || s_lightHash != g_shadowLightSetHash) {
+	   || s_lightHash != g_shadowLightSetHash
+	   || m->roomsNeedRebuild) {
+		m->roomsNeedRebuild = false;
 		m_rtao->clearRooms();
 		collectRoomCasters(m_rtao, casterDist, lights, nlights, includeAlpha, includeTrans,
 		                   collectMetal, dist.roomHops, dist.maxRooms);
@@ -3715,6 +4020,14 @@ void D3D12Renderer::applyWorldRayEffects() {
 	}
 	ID3D12Resource * color = usingSceneTargets() ? m->sceneColor.Get() : m->backbuffers[m->frame].Get();
 	ID3D12Resource * depth = usingSceneTargets() ? m->sceneDepth.Get() : m->depth.Get();
+	// apply() overwrites the ray tracing buffers and frees the ones that have to grow, both of
+	// which are only safe once the previous frame's work has left the GPU. See waitForSubmittedWork.
+	// If that wait fails the GPU is hung or gone, and running apply() anyway would free memory it
+	// is still reading — the exact fault this guard exists to prevent.
+	if(!waitForSubmittedWork()) {
+		m->worldPass = false;
+		return;
+	}
 	m_rtao->apply(m->list.Get(), color, depth, m_view, m_proj,
 	              passWidth(), passHeight(), dxr, lights, nlights, std::uint64_t(rtv.ptr));
 	restoreRasterBind();
@@ -3748,18 +4061,22 @@ void D3D12Renderer::showFrame() {
 		m_sl->onPresent();
 	}
 	const HRESULT presented = m->swapchain->Present(m_vsync == 0 ? 0u : 1u, 0);
-	if(FAILED(presented)) {
+	const bool presentFailed = FAILED(presented);
+	if(presentFailed) {
 		if(presented == DXGI_ERROR_DEVICE_REMOVED || presented == DXGI_ERROR_DEVICE_RESET) {
 			const HRESULT reason = m->device ? m->device->GetDeviceRemovedReason() : presented;
-			LogError << "D3D12: device removed (" << unsigned(reason) << ")";
+			LogError << "D3D12: device removed (" << arxD3D12Hex(unsigned(reason)) << ")";
+			arxD3D12DumpDred(m->device.Get());
 			markUnusable();
-		} else {
-			LogError << "D3D12: Present failed";
+			m->recording = false;
+			return;
 		}
-		m->recording = false;
-		return;
+		// The command list was already submitted above, so the fence still has to be signalled and
+		// recorded below. Returning early here would leave every later wait comparing against a
+		// stale value, and the next frame would reset an allocator the GPU is still reading.
+		LogError << "D3D12: Present failed (" << arxD3D12Hex(unsigned(presented)) << ")";
 	}
-	if(m_sl) {
+	if(m_sl && !presentFailed) {
 		m_sl->afterPresent();
 	}
 	const UINT64 value = ++m->fenceValue;

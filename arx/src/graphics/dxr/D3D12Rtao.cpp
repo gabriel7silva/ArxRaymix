@@ -12,7 +12,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <type_traits>
 #include <iterator>
 #include <string>
 
@@ -37,15 +39,63 @@ constexpr size_t kMaxWaterTriangles = 20000;
 constexpr size_t kMaxMetalTriangles = 30000;
 constexpr UINT kIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 constexpr UINT kShaderRecord = 64;
-// Heap: [0..14] RT SRVs t0-t14, [15..19] RT UAVs u0-u4,
-// [20..27] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
-constexpr UINT kRtSrvCount = 15;
-constexpr UINT kRtUavBase = 15;
+// Heap: [0..16] RT SRVs t0-t16, [17..21] RT UAVs u0-u4,
+// [22..29] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
+// t15 / t16 are the per-triangle attribute buffers. Growing the SRV range shifts the UAV and
+// composite ranges after it: INV-02 is one equation, so these five move together or not at all.
+constexpr UINT kRtSrvCount = 17;
+constexpr UINT kRtUavBase = 17;
 constexpr UINT kRtUavCount = 5;
-constexpr UINT kCompositeBase = 20;
+constexpr UINT kCompositeBase = 22;
 constexpr UINT kCompositeSrvCount = 8;
 constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
-constexpr UINT kRootConstants = 60;
+static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAVs follow the SRV range");
+static_assert(kCompositeBase == kRtUavBase + kRtUavCount, "INV-02: composite follows the UAVs");
+static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
+              "INV-02: the block the renderer reserves must match what this file lays out");
+// Size of the Params (b0) constant buffer. It used to be a count of root constants; those cost a
+// DWORD each and filled 60 of the root signature's 64, which is why every later value had to be
+// smuggled into ViewParams (b1). It is a root CBV now, so the size is only a size.
+//! ARX_DXR_DEBUG: 0 off, 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo. A ray pass
+//! cannot print, so the reflection surface doubles as the readout.
+//! ARX_DXR_FIRSTHIT=1 restores the old any-hit reflection traversal. An escape hatch for a
+//! machine where the extra traversal costs too much, without a rebuild.
+//! ARX_DXR_NO_TEXREFL=1 goes back to reflecting a light-only guess for off-screen hits. This
+//! is the switch for the one change in the series that alters how the game looks.
+bool arxDxrNoTexReflect() {
+	static const bool off = [] {
+		const char * env = std::getenv("ARX_DXR_NO_TEXREFL");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	return off;
+}
+
+bool arxDxrFirstHit() {
+	static const bool on = [] {
+		const char * env = std::getenv("ARX_DXR_FIRSTHIT");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	return on;
+}
+
+UINT arxDxrDebugView() {
+	static const UINT view = [] {
+		const char * env = std::getenv("ARX_DXR_DEBUG");
+		if(!env || !*env) {
+			return 0;
+		}
+		const int value = std::atoi(env);
+		return (value < 0 || value > 4) ? 0 : value;
+	}();
+	return view;
+}
+
+constexpr UINT kParamsBytes = 256;
+// A root CBV is read by the GPU when the dispatch runs, not copied into the command list when it
+// is recorded, so one slot would be overwritten while an earlier frame still reads it. The
+// renderer keeps kFrameCount frames in flight and waits only on the frame before that.
+constexpr UINT kParamsSlots = 3;
+constexpr UINT kParamsStride = 256; // SetComputeRootConstantBufferView requires a 256-byte address
 static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAV range must follow the RT SRVs");
 static_assert(kCompositeBase == kRtUavBase + kRtUavCount, "INV-02: composite SRVs follow the UAVs");
 constexpr UINT kMaskRtvWater = 0;
@@ -64,6 +114,20 @@ static constexpr UINT shadowRays[] = { 0u, 2u, 8u, 16u };
 static constexpr UINT giRayCount[] = { 0u, 4u, 8u, 16u };
 static constexpr UINT transRays[] = { 0u, 1u, 1u, 2u };
 static constexpr UINT metalRayCount[] = { 0u, 1u, 2u, 2u };
+// How reflective water looks head-on, per quality level. Physical water is 0.04, which reads as
+// no reflection at all on an indoor pool seen from above, so the levels trade physical accuracy
+// for a visible effect. Grazing angles still reach 1.0 at every level.
+static constexpr float waterFacing[] = { 0.f, 0.18f, 0.30f, 0.45f };
+// Brightness of the light reaching an off-screen hit. That light is now multiplied by the
+// surface's own albedo, so it lands as a material rather than as the untextured blob these
+// numbers were once kept small to hide. Albedo averages well under one, so the levels move up
+// to compensate; they are a look now, not a disguise.
+static constexpr float reflectFill[] = { 0.f, 0.70f, 0.95f, 1.25f };
+// How reflective metal looks head-on. 0.18 is dirty iron and was the only setting; the higher
+// levels take it towards a mirror. The cost of a mirror here is honesty about the sample count:
+// metal traces one or two rays, so the more of the raster texture the reflection replaces, the
+// more of that sparse sampling shows. Low stays where it always was.
+static constexpr float metalFacing[] = { 0.f, 0.18f, 0.35f, 0.60f };
 static constexpr float shadowAlpha[] = { kTemporalAlphaLow, kTemporalAlphaHigh };
 static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
 static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
@@ -72,6 +136,9 @@ static_assert(std::size(shadowRays) == kMaxRtQuality + 1);
 static_assert(std::size(giRayCount) == kMaxRtQuality + 1);
 static_assert(std::size(transRays) == kMaxRtQuality + 1);
 static_assert(std::size(metalRayCount) == kMaxRtQuality + 1);
+static_assert(std::size(waterFacing) == kMaxRtQuality + 1);
+static_assert(std::size(reflectFill) == kMaxRtQuality + 1);
+static_assert(std::size(metalFacing) == kMaxRtQuality + 1);
 static_assert(std::size(shadowAlpha) == kMaxShadowDenoise + 1);
 static_assert(std::size(giAlpha) == kMaxGiDenoise + 1);
 static_assert(aoRayCount[0] == 0u && shadowRays[0] == 0u && giRayCount[0] == 0u
@@ -107,8 +174,17 @@ struct DxrConstants {
 	float contactTMax;
 	float giTemporalAlpha;
 	UINT playerVertBase;
+	// Diagnostics. Added in a group of four so sizeof stays a multiple of 16 and prevViewProj
+	// keeps its float4 boundary — INV-01 applies to a root CBV exactly as it did to root
+	// constants. Zero in every normal run.
+	UINT debugView;
+	UINT specClosest;
+	UINT texReflect;
+	UINT dbgPad2;
 };
-static_assert(sizeof(DxrConstants) == kRootConstants * 4, "DXR root constants must match HLSL cbuffer");
+static_assert(sizeof(DxrConstants) == kParamsBytes, "Params (b0) must match the HLSL cbuffer");
+static_assert(sizeof(DxrConstants) % 16 == 0,
+              "INV-01: the cbuffer has to end on a complete float4 row");
 static_assert(offsetof(DxrConstants, invViewProj) == 0);
 static_assert(offsetof(DxrConstants, cameraPos) == 64);
 static_assert(offsetof(DxrConstants, prevViewProj) == 112,
@@ -124,10 +200,17 @@ struct DxrViewCbuf {
 	float specTMax;
 	float giTMax;
 	float rtRange;
-	float pad;
+	float waterFacing;
+	float waterFill;
+	float metalFill;
+	float metalFacingF0;
+	float pad1;
 };
 static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
 static_assert(offsetof(DxrViewCbuf, specTMax) == 64);
+static_assert(offsetof(DxrViewCbuf, waterFill) == 80,
+              "ViewParams must stay float4-aligned to match the HLSL cbuffer");
+static_assert(sizeof(DxrViewCbuf) == 96);
 
 glm::mat4x4 jitteredProjection(const glm::mat4x4 & proj, float jitterNdcX, float jitterNdcY) {
 	glm::mat4x4 jp = proj;
@@ -157,6 +240,22 @@ Texture2D<float> g_waterDepth : register(t11);
 Texture2D<float4> g_specPrev : register(t12);
 Texture2D<float> g_metalMask : register(t13);
 StructuredBuffer<float4> g_waterVerts : register(t14);
+// Per-triangle material, one entry per PrimitiveIndex. Declared now, read once the collectors
+// fill them; water keeps positions only, its surface is procedural.
+struct TriAttr {
+	float2 uv0;
+	float2 uv1;
+	float2 uv2;
+	uint tex;
+	uint pad;
+};
+StructuredBuffer<TriAttr> g_dynAttr : register(t15);
+StructuredBuffer<TriAttr> g_roomAttr : register(t16);
+// Every game texture, indexed by the descriptor index the renderer assigned it. space1 keeps
+// it clear of the pass's own t registers. Index 0 is a 1x1 white texture, so a face with no
+// material needs no branch.
+Texture2D<float4> g_textures[] : register(t0, space1);
+SamplerState g_matSamp : register(s0);
 RWTexture2D<float> g_ao : register(u0);
 RWTexture2D<float> g_shadow : register(u1);
 RWTexture2D<float4> g_gi : register(u2);
@@ -193,17 +292,34 @@ cbuffer Params : register(b0) {
 	float contactTMax;
 	float giTemporalAlpha;
 	uint playerVertBase;
+	// 0 = off. 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo. Replaces the reflection with
+	// the raw value so the ray pass can be inspected on screen; it cannot be printed from a
+	// hit shader.
+	uint debugView;
+	// 1 = reflections take the nearest hit. 0 = any hit, which is what the pass did before a
+	// hit carried a material and the distinction stopped being free.
+	uint specClosest;
+	// 1 = an off-screen hit reflects its own material. 0 = the light-only guess of E8.
+	uint texReflect;
+	uint dbgPad2;
 };
 
 cbuffer ViewParams : register(b1) {
 	float4x4 viewProj;
-	// Not in the root cbuffer: 60 constants + 2 tables + CBV already fill
-	// the 64-DWORD root-signature cap. Extra floats there kill CreateRootSignature
-	// ("DXR pipeline failed — raster only").
+	// These lived here because Params (b0) used to be 60 root constants and the signature was
+	// full at 64 DWORDs. Params is a root CBV now and the cap is no longer the reason, but they
+	// stay: this buffer is the natural home for per-view values, and moving them back would
+	// churn two cbuffer layouts for nothing.
 	float specTMax;
 	float giTMax;
 	float rtRange;
-	float padView;
+	// Reflection strength per quality level, so Off / Low / Medium / High actually look
+	// different instead of only changing the ray count.
+	float waterFacing;
+	float waterFill;
+	float metalFill;
+	float metalFacingF0;
+	float padView1;
 };
 
 // Cleared D24_UNORM depth is exactly 1.0 (INV-04). A value just below 1.0 is a
@@ -213,6 +329,12 @@ static const float SKY_Z = 1.0;
 struct RayPayload {
 	float t;
 	float3 n;
+	// Which instance was hit: 0 room, 1 entity, 2 water, 3 player. Only read by the debug
+	// views today, but it is what a material lookup will need to pick its vertex buffer.
+	uint inst;
+	// Surface colour at the hit, sampled from the real texture. Free: the shader config already
+	// reserves 32 bytes and the payload used 20.
+	float3 albedo;
 };
 
 // Interleaved gradient noise: a per-pixel rotation that is fixed in screen space
@@ -230,8 +352,11 @@ float2 rotate2(float2 p, float rot) {
 
 float3 diskOffsetFixed(float3 dir, uint s, float rad, float rot) {
 	float2 o[8] = {
-		float2(0.00, 1.00), float2(0.86, 0.50), float2(0.86, -0.50), float2(0.00, -1.00),
-		float2(-0.86, -0.50), float2(-0.86, 0.50), float2(0.44, 0.00), float2(-0.44, 0.00)
+		// Half-unit disk on purpose: rad is the light radius, so a full-unit ring would sample a
+		// source twice the intended size and widen every penumbra to match. Thin casters — leaves,
+		// bars, table legs — have a shadow no wider than the penumbra, so they wash out first.
+		float2(0.00, 0.50), float2(0.43, 0.25), float2(0.43, -0.25), float2(0.00, -0.50),
+		float2(-0.43, -0.25), float2(-0.43, 0.25), float2(0.22, 0.00), float2(-0.22, 0.00)
 	};
 	// Batches of 8: each further batch is rotated 22.5° and alternates a 0.72 ring
 	// so 16 samples are 16 distinct disk points, not the same 8 twice.
@@ -253,7 +378,11 @@ float3 hemisphereFixed(float3 n, uint s, float rot) {
 	return normalize(t * l.x + b * l.y + n * l.z);
 }
 
-float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uint mask,
+// Returns rgb plus a confidence in .a: 1 when the hit was resolved from the colour buffer,
+// low when only the light-only fallback was available. The caller fades the reflection by that
+// confidence, because an untextured milky blob where the geometry is off screen reads far worse
+// than no reflection at all.
+float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uint mask,
                           float lightScale, float lightCap) {
 	RayDesc rd;
 	rd.Origin = origin;
@@ -263,10 +392,47 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	RayPayload rp;
 	rp.t = 1e7;
 	rp.n = float3(0, 0, 0);
-	TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-	         mask, 0, 1, 0, rd, rp);
+	// ACCEPT_FIRST_HIT ends the search at whatever the traversal reaches first, which is not
+	// the nearest surface. For a visibility ray that is correct and free; for a reflection it
+	// means the picture can come from a wall behind the one being looked at, and it flickers
+	// as the camera turns and the traversal order changes. Now that the hit carries a
+	// material, the wrong hit brings the wrong texture with it.
+	//
+	// Deliberately not CULL_BACK_FACING_TRIANGLES, which would pay for part of the extra
+	// traversal: this world has POLY_DOUBLESIDED geometry that would drop out of reflections.
+	if(specClosest != 0u) {
+		TraceRay(g_scene, RAY_FLAG_NONE, mask, 0, 1, 0, rd, rp);
+	} else {
+		TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, mask, 0, 1, 0, rd, rp);
+	}
 	if(rp.t >= tmax) {
-		return float3(0, 0, 0);
+		// Nothing within range: the reflection genuinely shows nothing here.
+		return float4(0, 0, 0, 0);
+	}
+	if(debugView != 0u) {
+		// The reflection is the only surface in this pass that can carry a picture out, so the
+		// diagnostics ride on it. Full confidence so the composite draws it flat.
+		if(debugView == 1u) {
+			// room red, entity green, water blue, player yellow
+			float3 c = float3(0.5, 0.5, 0.5);
+			if(rp.inst == 0u) { c = float3(1, 0, 0); }
+			else if(rp.inst == 1u) { c = float3(0, 1, 0); }
+			else if(rp.inst == 2u) { c = float3(0, 0, 1); }
+			else if(rp.inst == 3u) { c = float3(1, 1, 0); }
+			return float4(c, 1.0);
+		}
+		if(debugView == 2u) {
+			return float4(rp.n * 0.5 + 0.5, 1.0);
+		}
+		if(debugView == 3u) {
+			float d = saturate(rp.t / max(tmax, 1.0));
+			return float4(d, d, d, 1.0);
+		}
+		if(debugView == 4u) {
+			// The whole point of the exercise: the real surface colour at the hit, including
+			// geometry the screen never shows.
+			return float4(rp.albedo, 1.0);
+		}
 	}
 	float3 hit = rd.Origin + rd.Direction * rp.t;
 	float3 hn = rp.n;
@@ -275,6 +441,7 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	}
 	float4 hc = mul(viewProj, float4(hit, 1.0));
 	float3 hitCol = float3(0, 0, 0);
+	float resolved = 0.0;
 	if(hc.w > 1.0) {
 		float2 hu = float2(hc.x / hc.w * 0.5 + 0.5, 0.5 - hc.y / hc.w * 0.5);
 		if(hu.x > 0.0 && hu.x < 1.0 && hu.y > 0.0 && hu.y < 1.0) {
@@ -284,6 +451,7 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 				float hw = projB / min(hz - projA, -1e-4);
 				if(abs(hw - hc.w) < max(0.04 * hc.w, 8.0)) {
 					hitCol = g_color.Load(int3(hp, 0)).rgb;
+					resolved = 1.0;
 				}
 			}
 		}
@@ -303,8 +471,23 @@ float3 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 			float fall = saturate((b.y - d) / span);
 			hitCol += col.rgb * min(a.w * fall * ndotl * b.w * lightScale, lightCap);
 		}
+		if(texReflect != 0u) {
+			// This sum is light arriving at the surface. Reflecting it on its own was never
+			// "missing colour", it was colour with no material — the untextured shape that slid
+			// over the water. Multiplied by the albedo sampled at the hit it becomes a surface,
+			// which is the whole point of carrying materials into the ray pass.
+			hitCol *= rp.albedo;
+			// Trusted far more than the untextured guess was, because it now says something true
+			// about the surface rather than approximating one.
+			return float4(hitCol, 0.85);
+		}
+		// kFallbackTrust: how much of a reflection to draw when all we have is a light-only
+		// guess with no surface colour. Keep it low; this is the term that used to paint a
+		// white shape that slid across the water as the camera turned.
+		const float kFallbackTrust = 0.30;
+		return float4(hitCol, kFallbackTrust);
 	}
-	return hitCol;
+	return float4(hitCol, resolved);
 }
 
 
@@ -412,7 +595,14 @@ void RayGen() {
 				occ += 1.0 - aop.t / radius;
 			}
 		}
-		aoCur = max(1.0 - occ / float(aoRays), 0.45);
+		// The ray set above is a proper cosine hemisphere (14° to 75° off the normal), not the
+		// 25° cone this used to sample. That is the correct distribution, but inside a closed
+		// stone room almost every pixel then occludes past the 0.45 floor, so ambient occlusion
+		// turns into a flat darkening with no gradient — and a flat darkening is exactly what
+		// stops ray traced shadows from reading. Scale the occlusion so the floor is reached
+		// only by geometry that really is enclosed, and the gradient survives.
+		const float kAoStrength = 0.6;
+		aoCur = max(1.0 - occ / float(aoRays) * kAoStrength, 0.45);
 	}
 
 	float shCur = 1.0;
@@ -438,8 +628,13 @@ void RayGen() {
 			}
 			float3 ldir = toL / d;
 			float ndotl = saturate(dot(n, ldir));
-			float span = max(fallend - fallstart, 1e-3);
-			float fall = saturate((fallend - d) / span);
+			// Shadows reach further than the raster falloff, and the light selector in
+			// D3D12Renderer::fillShadowLights ranks candidates by this same fallend * 1.35.
+			// Drop the factor here and the selector keeps handing shadow slots to lights this
+			// loop then evaluates as attn == 0, which removes their shadow entirely.
+			float shadowEnd = fallend * 1.35;
+			float span = max(shadowEnd - fallstart, 1e-3);
+			float fall = saturate((shadowEnd - d) / span);
 			float attn = intensity * fall * ndotl * presence;
 			if(attn <= 0.0) {
 				continue;
@@ -561,6 +756,14 @@ void RayGen() {
 
 	float3 specRgb = float3(0, 0, 0);
 	float specF = 0.0;
+	// Metal reflects from the primary surface, so the shared history reprojection above is right
+	// for it. Water does not: its reflection is computed on the water plane while pos, and every
+	// pixel derived from it, is the pool bottom seen through the water. Reprojecting the water
+	// reflection by the bottom's position drags the history sideways by the depth between the two
+	// every time the camera turns, and at specAlpha 0.10 that error survives dozens of frames —
+	// the smear that reads as ghosting. Water overwrites these below with its own reprojection.
+	bool specHistOk = histOk;
+	int2 specHistPix = histPix;
 	const bool doSpec = (specRays + metalRays) > 0u
 		&& (specHalfRes == 0u || ((pixel.x | pixel.y) & 1u) == 0u);
 	if(doSpec) {
@@ -577,6 +780,24 @@ void RayGen() {
 			if(wm > 0.5 && zw > 0.0 && zw < SKY_Z) {
 				float4 wposH = mul(invViewProj, float4(ndcX, ndcY, zw, 1.0));
 				float3 wpos = wposH.xyz / max(wposH.w, 1e-6);
+				// Reproject the reflection history by the water plane itself, not by the bottom.
+				specHistOk = false;
+				float4 wpc = mul(prevViewProj, float4(wpos, 1.0));
+				if(wpc.w > 1.0) {
+					float2 wpn = wpc.xy / wpc.w;
+					float2 wuv = float2(wpn.x * 0.5 + 0.5, 0.5 - wpn.y * 0.5);
+					if(wuv.x > 0.0 && wuv.x < 1.0 && wuv.y > 0.0 && wuv.y < 1.0) {
+						int2 wp = int2(wuv * float2(width, height));
+						// Only reuse history from a pixel that was also water at a matching
+						// depth; otherwise the reflection inherits the shore or the bottom.
+						float zwPrev = g_waterDepth.Load(int3(wp, 0)).r;
+						if(zwPrev > 0.0 && zwPrev < SKY_Z
+						   && abs(projB / min(zwPrev - projA, -1e-4) - wpc.w) < max(0.05 * wpc.w, 12.0)) {
+							specHistPix = wp;
+							specHistOk = true;
+						}
+					}
+				}
 				float zWR = g_waterDepth.Load(int3(int(pixel.x) + 1, int(pixel.y), 0)).r;
 				float zWD = g_waterDepth.Load(int3(int(pixel.x), int(pixel.y) + 1, 0)).r;
 				float3 nW = n;
@@ -593,37 +814,53 @@ void RayGen() {
 				}
 				float3 V = normalize(cameraPos - wpos);
 				float ndv = saturate(dot(nW, V));
+				// Physically water reflects about 4 % head-on, which on an indoor pool seen from
+				// above reads as no reflection at all — the whole effect only showed at grazing
+				// angles. Keep the Fresnel curve, but lift its head-on end so the reflection is
+				// visible from the angle players actually look at water. waterFacing comes from
+				// the Transparent reflections setting: 0.04 would be physical, 1.0 a mirror.
 				float F0 = 0.04;
-				specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+				float fresnel = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+				specF = saturate(lerp(waterFacing, 1.0, fresnel));
 				uint nSpec = min(max(specRays, 1u), 2u);
-				float3 acc = float3(0, 0, 0);
+				float4 acc = float4(0, 0, 0, 0);
 				for(uint s = 0; s < nSpec; ++s) {
 					float3 R = reflect(-V, nW);
 					if(s > 0u) {
 						R = normalize(R + hemisphereFixed(nW, s, rot) * 0.04);
 					}
-					acc += shadeReflectionHit(wpos + nW * 6.0, R, 6.0, specTMax, 0x05, 0.35, 0.6);
+					acc += shadeReflectionHit(wpos + nW * 6.0, R, 6.0, specTMax, 0x05,
+					                          0.35 * waterFill, 0.6 * waterFill);
 				}
-				specRgb = acc / float(nSpec);
+				acc /= float(nSpec);
+				specRgb = acc.rgb;
+				// Fade the whole reflection by how much of it was real data.
+				specF *= acc.a;
 			}
 		} else if(mm > 0.5 && metalRays > 0u) {
 			float3 V = normalize(cameraPos - pos);
 			float ndv = saturate(dot(n, V));
-			// Dirty iron, not chrome. 0.56 replaced the plate albedo with 2-ray
-			// static (the elevator rope face).
-			float F0 = 0.18;
+			// Dirty iron at Low, closer to a mirror at High. Raising this replaces more of the
+			// plate's own texture with the reflection, which also shows more of the one or two
+			// rays behind it — the reason it was pinned at 0.18 before there was a dial.
+			float F0 = metalFacingF0;
 			specF = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
 			uint nSpec = min(max(metalRays, 1u), 2u);
-			float3 acc = float3(0, 0, 0);
+			float4 acc = float4(0, 0, 0, 0);
 			for(uint s = 0; s < nSpec; ++s) {
 				float3 R = reflect(-V, n);
 				R = normalize(R + hemisphereFixed(n, s, rot) * 0.06);
-				acc += shadeReflectionHit(pos + n * shBias, R, shBias, specTMax * 0.625, 0x07, 0.30, 0.55);
+				acc += shadeReflectionHit(pos + n * shBias, R, shBias, specTMax * 0.625, 0x07,
+					                          0.30 * metalFill, 0.55 * metalFill);
 			}
-			specRgb = acc / float(nSpec);
+			acc /= float(nSpec);
+			specRgb = acc.rgb;
+			specF *= acc.a;
 		}
-		if(specF > 0.0 && specAlpha > 0.0 && histOk) {
-			int2 hp = specHalfRes ? (histPix & int2(~1, ~1)) : histPix;
+		// A diagnostic has to show this frame's value. Blending it with the history smears the
+		// reading across a dozen frames and makes a correct sample look like a broken one.
+		if(specF > 0.0 && specAlpha > 0.0 && specHistOk && debugView == 0u) {
+			int2 hp = specHalfRes ? (specHistPix & int2(~1, ~1)) : specHistPix;
 			float4 prevS = g_specPrev.Load(int3(hp, 0));
 			if(prevS.a >= 1e-4) {
 				specRgb = lerp(prevS.rgb, specRgb, specAlpha);
@@ -653,6 +890,9 @@ void RayGen() {
 			RayPayload bp;
 			bp.t = giTMax + 1.0;
 			bp.n = float3(0, 0, 0);
+			// Same caveat as the reflection ray: this treats the first hit as the nearest surface
+			// when computing the bounce. Left as it is — bounce light is diffuse and low
+			// frequency, so the error hides, and a second full traversal per ray is not worth it.
 			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 			         0x01, 0, 1, 0, bounce, bp);
 			if(bp.t < 8.0 || bp.t >= giTMax) {
@@ -670,12 +910,22 @@ void RayGen() {
 				float4 col = g_lights[i * 3 + 2];
 				float3 toL = a.xyz - hit;
 				float d = max(length(toL), 1.0);
+				// A bounce point sitting almost on a torch reports a near-maximum fill and floods
+				// the umbra with that torch's colour. Bounce light is what escapes the direct
+				// falloff, not a second copy of it — and this sum is added before the shadow
+				// multiply, so anything spilled here lands squarely in the shadow. Ramp the
+				// contribution in over the first 40 units instead of trusting the falloff at
+				// point-blank range.
+				float nearFade = saturate((d - 8.0) / 32.0);
+				if(nearFade <= 0.0) {
+					continue;
+				}
 				float ndotl = saturate(dot(hn, toL / d));
 				float span = max(b.y - b.x, 1e-3);
 				float fall = saturate((b.y - d) / span);
 				// Bounce carries the light's hue; grey bounce read as a white haze
 				// on the ceiling above the torch.
-				fill += col.rgb * min(a.w * fall * ndotl * b.w * 0.20, 0.25);
+				fill += col.rgb * min(a.w * fall * ndotl * b.w * 0.20, 0.25) * nearFade;
 			}
 			// Per-ray clamp, then average over rays *launched*: dividing by the
 			// rays that hit let one lucky ray next to a lamp light the whole texel
@@ -692,7 +942,7 @@ void RayGen() {
 }
 
 [shader("closesthit")]
-void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* attr */) {
+void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) {
 	p.t = RayTCurrent();
 	uint prim = PrimitiveIndex();
 	float3 v0, v1, v2;
@@ -715,12 +965,57 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes /* att
 		n = -n;
 	}
 	p.n = n;
+	p.inst = InstanceID();
+	// Barycentrics give the point inside the triangle; the attribute buffer is picked by the
+	// same InstanceID branch as the vertices above. InstanceIndex would slide whenever one of
+	// the four categories is absent, InstanceID is written explicitly per instance.
+	float3 bc = float3(1.0 - attr.barycentrics.x - attr.barycentrics.y,
+	                   attr.barycentrics.x, attr.barycentrics.y);
+	TriAttr a;
+	if(InstanceID() == 0u) {
+		a = g_roomAttr[prim];
+	} else if(InstanceID() == 2u) {
+		// Water carries no material. Giving it one would mean a third attribute buffer, a third
+		// SRV and moving the heap constants again, all for the one case that reaches here: a metal
+		// surface reflecting a water surface, since the metal ray's mask includes water and the
+		// water ray's does not. A dim neutral rather than white, so it reads as dark water rather
+		// than as a highlight on the metal.
+		p.albedo = float3(0.18, 0.20, 0.20);
+		return;
+	} else {
+		// The player's BLAS starts partway into the shared dynamic buffer and its
+		// PrimitiveIndex restarts at zero, so shift by where that geometry begins.
+		uint attrBase = (InstanceID() == 3u) ? (playerVertBase / 3u) : 0u;
+		a = g_dynAttr[attrBase + prim];
+	}
+	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
+	// Ray-cone mip selection. A hit shader has no quad derivatives, so the level has to be
+	// derived: compare how much texture the triangle carries per unit of world area with how
+	// much world area this ray covers by the time it arrives. A fixed level aliased on distant
+	// surfaces and thrashed the cache with incoherent rays; picking the level the footprint
+	// deserves is what makes texture fetches affordable here.
+	uint texW, texH;
+	g_textures[NonUniformResourceIndex(a.tex)].GetDimensions(texW, texH);
+	float2 duv1 = a.uv1 - a.uv0;
+	float2 duv2 = a.uv2 - a.uv0;
+	float texArea = abs(duv1.x * duv2.y - duv1.y * duv2.x) * float(texW) * float(texH);
+	float worldArea = length(cross(v1 - v0, v2 - v0));
+	// footprint: the world-space width of the pixel this ray started from, at the hit distance.
+	float footprint = max(RayTCurrent() * pixelWorld, 1e-4);
+	float lod = 0.0;
+	if(texArea > 1e-9 && worldArea > 1e-9) {
+		lod = 0.5 * log2(texArea / worldArea) + log2(footprint);
+	}
+	p.albedo = g_textures[NonUniformResourceIndex(a.tex)]
+	           .SampleLevel(g_matSamp, uv, clamp(lod, 0.0, 12.0)).rgb;
 }
 
 [shader("miss")]
 void Miss(inout RayPayload p) {
 	p.t = 1e7;
 	p.n = 0.xxx;
+	p.inst = 0xffffffffu;
+	p.albedo = 0.xxx;
 }
 )";
 
@@ -814,7 +1109,11 @@ float4 PSMain(VSOut i) : SV_Target {
 	// Strength tuned by the user ("triplica os efeitos"): AO up to 55 % dark,
 	// umbra keeps 10 % of the light, GI up to about +0.33 on lit stone.
 	// AO is low frequency: a wider blur than the shadow's hides the dither.
-	float ao = lerp(1.0, bilateral(aoTex, pix, aoRadius, zCenter), 1.0);
+	// Second dial for ambient occlusion, on the presentation side: 1.0 applies the buffer as
+	// traced, 0.0 removes it entirely. Kept at 1.0 because the strength is set where the rays are
+	// accumulated; turn it down here to weaken ambient occlusion without touching the history.
+	const float kAoComposite = 1.0;
+	float ao = lerp(1.0, bilateral(aoTex, pix, aoRadius, zCenter), kAoComposite);
 	float sh = lerp(0.10, 1.0, bilateral(shadowTex, pix, shadowRadius, zCenter));
 	// Bounce light scaled by the surface's own raster color (plus a small floor
 	// for the darkest stone) so it reads as light on the material, not grey haze.
@@ -835,8 +1134,11 @@ float4 PSMain(VSOut i) : SV_Target {
 	}
 	c = saturate(c) * max(ao * sh, 0.08);
 	if(metal > 0.5) {
-		// Coat, not a replace: the elevator iron must keep its raster texture.
-		c = saturate(c * (1.0 - specS.a * 0.35) + specS.rgb * specS.a * 0.45);
+		// How much of the plate's own texture survives is left to specS.a, which already carries
+		// the quality-scaled Fresnel. At Low that alpha is small and this stays a coat, as it
+		// always was; at High it is large and the reflection takes over, which is what a mirror
+		// is. Fixed factors of 0.35 and 0.45 capped it below a mirror no matter the setting.
+		c = saturate(c * (1.0 - specS.a * 0.85) + specS.rgb * specS.a * 0.95);
 	}
 	return float4(saturate(c), 1);
 }
@@ -1075,12 +1377,21 @@ void D3D12Rtao::shutdown() {
 	m_metalMask.reset();
 	m_histValid = false;
 	m_lights.reset();
+	if(m_paramsCbuf && m_paramsMapped) {
+		m_paramsCbuf->Unmap(0, nullptr);
+	}
+	m_paramsMapped = nullptr;
+	m_paramsCbuf.reset();
 	m_viewCbuf.reset();
 	m_shaderTable.reset();
 	m_instances.reset();
 	m_scratch.reset();
 	m_tlas.reset();
 	m_blas.reset();
+	m_attrUpload.reset();
+	m_attrDefault.reset();
+	m_roomAttrUpload.reset();
+	m_roomAttrDefault.reset();
 	m_vertDefault.reset();
 	m_vertUpload.reset();
 	m_roomDefault.reset();
@@ -1092,7 +1403,8 @@ void D3D12Rtao::shutdown() {
 	m_roomBlas.reset();
 	m_waterBlas.reset();
 	m_playerBlas.reset();
-	m_heap.reset();
+	m_heap = nullptr; // not ours to release
+	m_rtaoBase = 0;
 	m_rtvHeap.reset();
 	m_dsvHeap.reset();
 	m_compositePso.reset();
@@ -1119,7 +1431,8 @@ void D3D12Rtao::shutdown() {
 	m_failedH = 0;
 }
 
-bool D3D12Rtao::init(ID3D12Device * device) {
+bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
+                     unsigned baseIndex) {
 	shutdown();
 	m_device = device;
 	if(!device) {
@@ -1134,6 +1447,16 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 		return true;
 	}
 	LogInfo << "RaytracingTier=" << int(opt.RaytracingTier);
+	// The bindless texture range needs Resource Binding Tier 2. Every DXR-capable GPU reports
+	// Tier 3 in practice, but the project only ever asked about ray tracing, so say it out loud.
+	D3D12_FEATURE_DATA_D3D12_OPTIONS base {};
+	if(SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &base, sizeof(base)))) {
+		LogInfo << "ResourceBindingTier=" << int(base.ResourceBindingTier);
+		if(base.ResourceBindingTier < D3D12_RESOURCE_BINDING_TIER_2) {
+			LogError << "RTAO: Resource Binding Tier 2 required for material sampling — raster only";
+			return true;
+		}
+	}
 	
 	if(FAILED(device->QueryInterface(IID_PPV_ARGS(m_device5.put())))) {
 		LogInfo << "RaytracingTier=NOT_SUPPORTED (Device5 QI failed)";
@@ -1141,6 +1464,16 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 	}
 	
 	m_supported = true;
+	// The heap belongs to the renderer. A ray dispatch and a raster draw cannot bind different
+	// CBV_SRV_UAV heaps, and the hit shader has to reach the game's textures, so this module
+	// works inside a reserved block of the renderer's heap instead of owning one.
+	if(!sharedHeap) {
+		LogError << "RTAO: no shared descriptor heap";
+		return true;
+	}
+	m_heap = sharedHeap;
+	m_rtaoBase = baseIndex;
+	// createPipeline sizes the bindless range from m_rtaoBase, so this has to come first.
 	m_descriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	m_rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 	
@@ -1153,14 +1486,6 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 		LogWarning << "RTAO: mask pipeline failed — reflections off, AO/shadows/GI still on";
 	}
 	
-	D3D12_DESCRIPTOR_HEAP_DESC heap {};
-	heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	heap.NumDescriptors = kHeapCount;
-	heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	if(FAILED(device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(m_heap.put())))) {
-		LogError << "RTAO: descriptor heap failed";
-		return true;
-	}
 	if(!createBuffer(device, UINT64(kMaxShadowLights * sizeof(GpuLight)), D3D12_HEAP_TYPE_UPLOAD,
 	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, m_lights.put())) {
 		LogError << "RTAO: light buffer failed";
@@ -1169,6 +1494,19 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 	if(!createBuffer(device, 256, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
 	                 D3D12_RESOURCE_FLAG_NONE, m_viewCbuf.put())) {
 		LogError << "RTAO: view cbuffer failed";
+		return true;
+	}
+	if(!createBuffer(device, UINT64(kParamsSlots) * kParamsStride, D3D12_HEAP_TYPE_UPLOAD,
+	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE,
+	                 m_paramsCbuf.put())) {
+		LogError << "RTAO: params cbuffer failed";
+		return true;
+	}
+	// Upload heaps may stay mapped for their whole life, so map once here rather than around
+	// every dispatch.
+	if(FAILED(m_paramsCbuf->Map(0, nullptr, &m_paramsMapped)) || !m_paramsMapped) {
+		LogError << "RTAO: params cbuffer map failed";
+		m_paramsMapped = nullptr;
 		return true;
 	}
 	D3D12_DESCRIPTOR_HEAP_DESC rtvHeap {};
@@ -1281,9 +1619,18 @@ bool D3D12Rtao::createPipeline() {
 	uav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 	uav.NumDescriptors = kRtUavCount;
 	uav.BaseShaderRegister = 0;
-	D3D12_ROOT_PARAMETER params[4] {};
-	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-	params[0].Constants.Num32BitValues = kRootConstants;
+	// Every descriptor before this module's reserved block is a game texture, addressed by the
+	// index the renderer already handed each one. Bounded rather than unbounded so the debug
+	// layer can validate an out-of-range index instead of letting it read whatever is there.
+	D3D12_DESCRIPTOR_RANGE bindless {};
+	bindless.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	bindless.NumDescriptors = m_rtaoBase;
+	bindless.BaseShaderRegister = 0;
+	bindless.RegisterSpace = 1;
+	D3D12_ROOT_PARAMETER params[5] {};
+	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+	params[0].Descriptor.ShaderRegister = 0;
+	params[0].Descriptor.RegisterSpace = 0;
 	params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 	params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -1296,9 +1643,25 @@ bool D3D12Rtao::createPipeline() {
 	params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 	params[3].Descriptor.ShaderRegister = 1;
 	params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	params[4].DescriptorTable.NumDescriptorRanges = 1;
+	params[4].DescriptorTable.pDescriptorRanges = &bindless;
+	params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	// Sampling in a hit shader needs a sampler and there is no sampler heap bound here. A
+	// static sampler costs no DWORDs. WRAP, not the composite's CLAMP: game UVs tile.
+	D3D12_STATIC_SAMPLER_DESC matSamp {};
+	matSamp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	matSamp.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	matSamp.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	matSamp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	matSamp.MaxLOD = D3D12_FLOAT32_MAX;
+	matSamp.ShaderRegister = 0;
+	matSamp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	D3D12_ROOT_SIGNATURE_DESC rs {};
-	rs.NumParameters = 4;
+	rs.NumParameters = 5;
 	rs.pParameters = params;
+	rs.NumStaticSamplers = 1;
+	rs.pStaticSamplers = &matSamp;
 	ComPtr<ID3DBlob> blob;
 	ComPtr<ID3DBlob> err;
 	if(FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, blob.put(), err.put()))) {
@@ -1571,12 +1934,16 @@ void D3D12Rtao::releaseTargets() {
 	m_height = 0;
 }
 
-void D3D12Rtao::resize(int width, int height) {
+bool D3D12Rtao::needsResize(int width, int height) const {
 	if(m_targetsFailed && width == m_failedW && height == m_failedH) {
-		return;
+		return false;
 	}
-	if(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
-	   && m_spec && m_waterMask && m_metalMask) {
+	return !(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
+	         && m_spec && m_waterMask && m_metalMask);
+}
+
+void D3D12Rtao::resize(int width, int height) {
+	if(!needsResize(width, height)) {
 		return;
 	}
 	m_targetsFailed = false;
@@ -1739,7 +2106,10 @@ void D3D12Rtao::updateDescriptors() {
 	if(!m_device || !m_heap) {
 		return;
 	}
+	// Every slot(i) below is relative to this module's reserved block, so the base is folded in
+	// here once instead of at each of the twenty call sites.
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu = m_heap->GetCPUDescriptorHandleForHeapStart();
+	cpu.ptr += SIZE_T(m_rtaoBase) * m_descriptorSize;
 	auto slot = [&](UINT i) {
 		D3D12_CPU_DESCRIPTOR_HANDLE h = cpu;
 		h.ptr += SIZE_T(i) * m_descriptorSize;
@@ -1779,6 +2149,25 @@ void D3D12Rtao::updateDescriptors() {
 	}
 	if(m_roomDefault && !m_roomPositions.empty()) {
 		bindVerts(m_roomDefault.Get(), m_roomPositions.size(), 5);
+	}
+	// t15 / t16: one entry per triangle, indexed by PrimitiveIndex in the hit shader.
+	auto bindAttr = [&](ID3D12Resource * res, size_t n, UINT slotIndex) {
+		if(!res || n == 0) {
+			return;
+		}
+		D3D12_SHADER_RESOURCE_VIEW_DESC ab {};
+		ab.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		ab.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		ab.Buffer.FirstElement = 0;
+		ab.Buffer.NumElements = UINT(n);
+		ab.Buffer.StructureByteStride = sizeof(TriAttr);
+		m_device->CreateShaderResourceView(res, &ab, slot(slotIndex));
+	};
+	if(m_attrDefault && !m_triAttr.empty()) {
+		bindAttr(m_attrDefault.Get(), m_triAttr.size(), 15);
+	}
+	if(m_roomAttrDefault && !m_roomTriAttr.empty()) {
+		bindAttr(m_roomAttrDefault.Get(), m_roomTriAttr.size(), 16);
 	}
 	if(m_waterDefault && !m_waterPositions.empty()) {
 		bindVerts(m_waterDefault.Get(), m_waterPositions.size(), 14);
@@ -1889,6 +2278,7 @@ void D3D12Rtao::beginWorldFrame() {
 	m_positions.clear();
 	m_waterPositions.clear();
 	m_metalPositions.clear();
+	m_triAttr.clear();
 	m_reflectOnlyStart = SIZE_MAX;
 	m_masksRasterized = false;
 }
@@ -1900,13 +2290,20 @@ void D3D12Rtao::markReflectOnlyStart() {
 void D3D12Rtao::clearRooms() {
 	m_roomPositions.clear();
 	m_roomMetalPositions.clear();
+	m_roomTriAttr.clear();
 	m_roomsDirty = true;
 }
 
+//! SMY_VERTEX3 carries three UV sets for lightmap blending; the ray pass only wants the
+//! diffuse one.
+static Vec2f diffuseUv(const SMY_VERTEX & v) { return v.uv; }
+static Vec2f diffuseUv(const SMY_VERTEX3 & v) { return v.uv[0]; }
+
 template <typename Vertex>
-void D3D12Rtao::addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
+void D3D12Rtao::addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, size_t cap,
+                        Renderer::Primitive primitive,
                         const Vertex * vertices, size_t nvertices,
-                        const unsigned short * indices, size_t nindices) {
+                        const unsigned short * indices, size_t nindices, unsigned texIndex) {
 	if(!m_supported || !vertices || nvertices == 0) {
 		return;
 	}
@@ -1934,21 +2331,31 @@ void D3D12Rtao::addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive 
 		if(glm::dot(nrm, nrm) < 1e-4f) {
 			return;
 		}
+		// The three early returns above skip a triangle entirely. The attribute has to be pushed
+		// here, with the positions, or every later PrimitiveIndex points at the wrong triangle.
 		dst.push_back({ pa.x, pa.y, pa.z, 1.f });
 		dst.push_back({ pb.x, pb.y, pb.z, 1.f });
 		dst.push_back({ pc.x, pc.y, pc.z, 1.f });
+		if(attr) {
+			const Vec2f ua = diffuseUv(vertices[a]);
+			const Vec2f ub = diffuseUv(vertices[b]);
+			const Vec2f uc = diffuseUv(vertices[c]);
+			attr->push_back({ ua.x, ua.y, ub.x, ub.y, uc.x, uc.y, texIndex, 0u });
+		}
 	});
 }
 
 void D3D12Rtao::addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                        const unsigned short * indices, size_t nindices) {
-	addTris(m_roomPositions, kMaxRoomTriangles, primitive, vertices, nvertices, indices, nindices);
+                        const unsigned short * indices, size_t nindices, unsigned texIndex) {
+	addTris(m_roomPositions, &m_roomTriAttr, kMaxRoomTriangles, primitive, vertices, nvertices,
+	        indices, nindices, texIndex);
 	m_roomsDirty = true;
 }
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                         const unsigned short * indices, size_t nindices) {
-	addTris(m_positions, kMaxDynTriangles, primitive, vertices, nvertices, indices, nindices);
+                         const unsigned short * indices, size_t nindices, unsigned texIndex) {
+	addTris(m_positions, &m_triAttr, kMaxDynTriangles, primitive, vertices, nvertices,
+	        indices, nindices, texIndex);
 }
 
 void D3D12Rtao::addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c) {
@@ -1977,34 +2384,69 @@ void D3D12Rtao::addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c) {
 
 void D3D12Rtao::addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
                          const unsigned short * indices, size_t nindices) {
-	addTris(m_metalPositions, kMaxMetalTriangles, primitive, vertices, nvertices, indices, nindices);
+	// Mask geometry never enters a BLAS and has no material lookup.
+	addTris(m_metalPositions, nullptr, kMaxMetalTriangles, primitive, vertices, nvertices,
+	        indices, nindices, 0u);
 }
 
 void D3D12Rtao::addRoomMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
                              const unsigned short * indices, size_t nindices) {
-	addTris(m_roomMetalPositions, kMaxMetalTriangles, primitive, vertices, nvertices, indices, nindices);
+	addTris(m_roomMetalPositions, nullptr, kMaxMetalTriangles, primitive, vertices, nvertices,
+	        indices, nindices, 0u);
 }
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-                         const unsigned short * indices, size_t nindices) {
-	addTris(m_positions, kMaxDynTriangles, primitive, vertices, nvertices, indices, nindices);
+                         const unsigned short * indices, size_t nindices, unsigned texIndex) {
+	addTris(m_positions, &m_triAttr, kMaxDynTriangles, primitive, vertices, nvertices,
+	        indices, nindices, texIndex);
 }
 
-template void D3D12Rtao::addTris<SMY_VERTEX>(std::vector<Pos> &, size_t, Renderer::Primitive,
-                                             const SMY_VERTEX *, size_t, const unsigned short *, size_t);
-template void D3D12Rtao::addTris<SMY_VERTEX3>(std::vector<Pos> &, size_t, Renderer::Primitive,
-                                              const SMY_VERTEX3 *, size_t, const unsigned short *, size_t);
+template void D3D12Rtao::addTris<SMY_VERTEX>(std::vector<Pos> &, std::vector<TriAttr> *, size_t,
+                                            Renderer::Primitive, const SMY_VERTEX *, size_t,
+                                            const unsigned short *, size_t, unsigned);
+template void D3D12Rtao::addTris<SMY_VERTEX3>(std::vector<Pos> &, std::vector<TriAttr> *, size_t,
+                                            Renderer::Primitive, const SMY_VERTEX3 *, size_t,
+                                            const unsigned short *, size_t, unsigned);
 
 bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 	if(!m_device || (m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty())) {
 		return false;
 	}
-	auto upload = [&](const std::vector<Pos> & src, ComPtr<ID3D12Resource> & up,
+	// Geometry census, logged only when it moves. Per-triangle attributes will be pushed alongside
+	// these positions, and the counts have to stay in lockstep: a triangle whose attribute was
+	// dropped shifts every later PrimitiveIndex, so the reflection samples a neighbour's texture.
+	// That failure is invisible without a number to compare against, hence the line.
+	if(arxDxrDebugView() != 0) {
+		static size_t loggedDyn = SIZE_MAX;
+		static size_t loggedRoom = SIZE_MAX;
+		const size_t dyn = m_positions.size() / 3;
+		const size_t room = m_roomPositions.size() / 3;
+		if(dyn != loggedDyn || room != loggedRoom) {
+			// attrDyn must equal dyn and attrRoom must equal room. They are looked up by
+			// PrimitiveIndex, so one missing entry shifts every triangle after it and the
+			// reflection silently samples its neighbour's texture.
+			LogInfo << "DXR geometry dyn=" << dyn << " attrDyn=" << m_triAttr.size()
+			        << " room=" << room << " attrRoom=" << m_roomTriAttr.size()
+			        << " water=" << (m_waterPositions.size() / 3)
+			        << " metal=" << (m_metalPositions.size() / 3)
+			        << " roomMetal=" << (m_roomMetalPositions.size() / 3);
+			if(m_triAttr.size() != dyn || m_roomTriAttr.size() != room) {
+				LogWarning << "DXR geometry: attribute count does not match triangle count —"
+				              " every PrimitiveIndex past the gap reads the wrong triangle";
+			}
+			loggedDyn = dyn;
+			loggedRoom = room;
+		}
+	}
+	// Templated over the element so positions and per-triangle attributes travel the same path:
+	// grow, map, copy into a DEFAULT buffer, leave it readable by the ray shaders.
+	auto upload = [&](const auto & src, ComPtr<ID3D12Resource> & up,
 	                  ComPtr<ID3D12Resource> & def, bool & srvFlag) -> bool {
 		if(src.empty()) {
 			return true;
 		}
-		const UINT64 bytes = UINT64(src.size() * sizeof(Pos));
+		using Elem = typename std::decay_t<decltype(src)>::value_type;
+		const UINT64 bytes = UINT64(src.size() * sizeof(Elem));
 		if(!up || up->GetDesc().Width < bytes) {
 			up.reset();
 			def.reset();
@@ -2035,6 +2477,13 @@ bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 		srvFlag = true;
 		return true;
 	};
+	if(!upload(m_triAttr, m_attrUpload, m_attrDefault, m_attrIsSrv)) {
+		return false;
+	}
+	if(m_roomsDirty && !upload(m_roomTriAttr, m_roomAttrUpload, m_roomAttrDefault,
+	                           m_roomAttrIsSrv)) {
+		return false;
+	}
 	if(!upload(m_positions, m_vertUpload, m_vertDefault, m_vertsAreSrv)) {
 		return false;
 	}
@@ -2449,6 +2898,22 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, kMaxGiDenoise));
 	const int contact = settings.contact ? 1 : 0;
 	const bool skipTemporal = settings.skipTemporal;
+	// Ray Reconstruction takes over both the accumulation and the spatial blur, so toggling it
+	// swaps denoisers mid-flight. Log the swap and the history state: a reflection that fades in
+	// after the toggle is history rebuilding, and without this line that is indistinguishable
+	// from the pass having failed.
+	{
+		static int loggedSkip = -1;
+		static int loggedHist = -1;
+		const int skipNow = skipTemporal ? 1 : 0;
+		const int histNow = m_histValid ? 1 : 0;
+		if(skipNow != loggedSkip || histNow != loggedHist) {
+			LogInfo << "DXR denoise: skipTemporal=" << skipNow << " histValid=" << histNow
+			        << " (0 history means the reflection restarts from a single frame)";
+			loggedSkip = skipNow;
+			loggedHist = histNow;
+		}
+	}
 	if(aoQuality <= 0 && shadowQuality <= 0 && giQuality <= 0 && transRefl <= 0 && metalRefl <= 0
 	   && contact <= 0) {
 		return false;
@@ -2476,11 +2941,14 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	depthSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	depthSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 	depthSrv.Texture2D.MipLevels = 1;
-	D3D12_CPU_DESCRIPTOR_HANDLE depthCpu = m_heap->GetCPUDescriptorHandleForHeapStart();
-	depthCpu.ptr += SIZE_T(3) * m_descriptorSize;
+	// These two write into the reserved block like slot() does, so they carry the same base.
+	const SIZE_T heapStart = m_heap->GetCPUDescriptorHandleForHeapStart().ptr
+	                         + SIZE_T(m_rtaoBase) * m_descriptorSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE depthCpu { heapStart + SIZE_T(3) * m_descriptorSize };
 	m_device->CreateShaderResourceView(depth, &depthSrv, depthCpu);
-	D3D12_CPU_DESCRIPTOR_HANDLE depthPs = m_heap->GetCPUDescriptorHandleForHeapStart();
-	depthPs.ptr += SIZE_T(kCompositeBase + 3) * m_descriptorSize;
+	D3D12_CPU_DESCRIPTOR_HANDLE depthPs {
+		heapStart + SIZE_T(kCompositeBase + 3) * m_descriptorSize
+	};
 	m_device->CreateShaderResourceView(depth, &depthSrv, depthPs);
 	transition(list, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE,
 	           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -2552,21 +3020,39 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.specHalfRes = (transRefl == 1) ? 1u : 0u;
 	cb.contactOn = (contact && shadowQuality > 0) ? 1u : 0u;
 	cb.metalRays = metalRayCount[metalRefl];
-	cb.specAlpha = (m_histValid && !skipTemporal) ? 0.10f : 0.f;
+	// 0.10 kept 90 % of last frame's reflection, so any reprojection error took dozens of frames
+	// to wash out and read as a smear trailing the camera. 0.16 leans back towards steadying the
+	// 1-2 ray reflection now that water reprojects against its own surface and the trail is gone;
+	// lower it further only if the smear comes back, raise it if the sparkle does.
+	cb.specAlpha = (m_histValid && !skipTemporal) ? 0.16f : 0.f;
 	cb.contactTMax = 60.f;
 	cb.giTemporalAlpha = (m_histValid && !skipTemporal) ? giAlpha[giDenoise] : 0.f;
 	cb.playerVertBase = (m_reflectOnlyStart == SIZE_MAX) ? 0u : UINT(m_reflectOnlyStart);
+	cb.debugView = arxDxrDebugView();
+	cb.specClosest = arxDxrFirstHit() ? 0u : 1u;
+	cb.texReflect = arxDxrNoTexReflect() ? 0u : 1u;
 	const DistancePreset dist = distancePreset(settings.distance);
 
-	ID3D12DescriptorHeap * heaps[] = { m_heap.Get() };
+	ID3D12DescriptorHeap * heaps[] = { m_heap };
 	list->SetDescriptorHeaps(1, heaps);
 	list->SetComputeRootSignature(m_rtRoot.Get());
-	list->SetComputeRoot32BitConstants(0, kRootConstants, &cb, 0);
+	if(m_paramsMapped) {
+		m_paramsSlot = (m_paramsSlot + 1) % kParamsSlots;
+		std::memcpy(static_cast<char *>(m_paramsMapped) + m_paramsSlot * kParamsStride,
+		            &cb, sizeof(cb));
+		list->SetComputeRootConstantBufferView(0, m_paramsCbuf->GetGPUVirtualAddress()
+		                                          + m_paramsSlot * kParamsStride);
+	}
 	D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_heap->GetGPUDescriptorHandleForHeapStart();
+	gpu.ptr += SIZE_T(m_rtaoBase) * m_descriptorSize;
 	list->SetComputeRootDescriptorTable(1, gpu);
 	D3D12_GPU_DESCRIPTOR_HANDLE uav = gpu;
 	uav.ptr += SIZE_T(kRtUavBase) * m_descriptorSize;
 	list->SetComputeRootDescriptorTable(2, uav);
+	// Anchored at the start of the heap, not at this module's block: a texture's srvIndex is
+	// then its index in g_textures with nothing to add. A table declared and left unbound is
+	// undefined behaviour, so this and the root signature go together or not at all.
+	list->SetComputeRootDescriptorTable(4, m_heap->GetGPUDescriptorHandleForHeapStart());
 	if(m_viewCbuf) {
 		void * mappedView = nullptr;
 		if(SUCCEEDED(m_viewCbuf->Map(0, nullptr, &mappedView)) && mappedView) {
@@ -2575,6 +3061,10 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 			viewCb.specTMax = dist.specTMax;
 			viewCb.giTMax = dist.giTMax;
 			viewCb.rtRange = (settings.range > 8.f) ? settings.range : dist.caster;
+			viewCb.waterFacing = waterFacing[transRefl];
+			viewCb.waterFill = reflectFill[transRefl];
+			viewCb.metalFill = reflectFill[metalRefl];
+			viewCb.metalFacingF0 = metalFacing[metalRefl];
 			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
 		}
