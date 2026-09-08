@@ -105,18 +105,27 @@ grep -n "kMaxRtQuality\\|kMaxShadowDenoise\\|kMaxGiDenoise" arx/src/graphics/dxr
 
 Every ray-count / radius array's first entry must also be zero, because the menu's Off state is the zero index and a non-zero entry would leave the effect running while the menu says it is off. `shadowAlpha` and `giAlpha` are denoise weights, not Off switches — their index-0 entries are intentionally non-zero.
 
-### <a id="inv-13"></a>INV-13 — The DXR root signature is already at the 64-DWORD cap
+### <a id="inv-13"></a>~~INV-13 — The DXR root signature is already at the 64-DWORD cap~~
 
-**Break it by** adding root constants to `kRootConstants` (for example stuffing `specTMax` / `giTMax` / `rtRange` next to the existing floats).
+**No longer true.** `Params` (`b0`) was 60 root constants, which with 2 descriptor tables and the
+`ViewParams` root CBV (2 DWORDs) filled the signature exactly: 64 of 64. Adding anything at all
+failed `CreateRootSignature`, and the log said `RTAO: DXR pipeline failed — raster only` while
+RaytracingTier still reported support, so the menu looked live over a plain raster world. That is
+why `specTMax`, `giTMax` and `rtRange` were put in `ViewParams` instead.
 
-**Symptom** `CreateRootSignature` fails. The log says `RTAO: DXR pipeline failed — raster only`. RaytracingTier still reports support, so the menu looks live and the world is plain raster.
+`Params` is a root CBV now (`kParamsBytes`, ringed over `kParamsSlots`), so the signature costs
+2 + 1 + 1 + 2 = 6 DWORDs and there is room to spare. The 64-DWORD limit itself has not moved, and
+the failure mode above is still what running into it looks like — but nothing in this pipeline is
+near it any more.
 
-**Mechanism** a D3D12 root signature allows 64 DWORDs. This one is 60 root constants + 2 descriptor tables + 1 CBV (2 DWORDs). Distance `TMax` and `rtRange` belong in the `ViewParams` CBV (`b1`).
-
-**Detect** the log after launch. Confirm the count:
+Two things the change did **not** make safe. [INV-01](#inv-01) applies unchanged: float4 row
+alignment is a rule of HLSL cbuffer packing, not of the root parameter type, so `pad0` / `pad1`
+still earn their place. And a root CBV is read by the GPU when the dispatch executes, not copied
+into the command list when it is recorded, which is why `Params` is ringed. `m_viewCbuf` and
+`m_lights` are single-slot upload buffers rewritten every frame and do **not** have that ring.
 
 ```
-grep -n "kRootConstants\|ViewParams" arx/src/graphics/dxr/D3D12Rtao.cpp
+grep -n "kParamsBytes\|kParamsSlots\|ViewParams" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
 ## Run-time invariants

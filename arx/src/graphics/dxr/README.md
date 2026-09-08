@@ -73,7 +73,7 @@ Log: `Streamline: slInit ok`, `Ray tracing: DXR=… DLSS=… DLSS-RR=… DLSS-G=
 
 **Options → Render → Render distance** (`fog=` 0–10) is the far plane. Slider 0 is ~1600 (one cell + fog wall); 10 is 28000. D3D12 world pixels fade into the zone fog colour from 40 % to 92 % of that distance. Fog is applied whenever `render3D().fog()` is on — it must not depend on the DLSS `worldPass` flag. HUD stays unfogged.
 
-The DXR root signature is already at the 64-DWORD cap (60 root constants + 2 descriptor tables + 1 CBV). Reflection / GI `TMax` from `dxr_distance` lives in the `ViewParams` CBV. Adding root constants there fails `CreateRootSignature` (`RTAO: DXR pipeline failed — raster only`).
+`Params` (`b0`) is a root CBV, ringed over `kParamsSlots` because the GPU reads it at dispatch time. That leaves the DXR root signature at 6 of its 64 DWORDs; it used to be full at 64, which is why reflection / GI `TMax` from `dxr_distance` sits in the `ViewParams` CBV and stays there. Overrunning the cap still fails `CreateRootSignature` (`RTAO: DXR pipeline failed — raster only`).
 
 ### Phase 6 — Path-traced indirect (**archived**)
 
@@ -92,7 +92,7 @@ Not doing this. Indirect lighting stays one analytic bounce. A path tracer with 
 
 `createDevice` asks for `D3D_FEATURE_LEVEL_11_0` and queries `D3D12_FEATURE_D3D12_OPTIONS5` / `RaytracingTier`. If the tier is `NOT_SUPPORTED`, raster only.
 
-Cbuffer: `pad0` / `pad1` keep `prevViewProj` on a float4 boundary. Extra spec / contact / denoise fields sit after `projB`. `viewProj` for hit reprojection is a root CBV (`b1`), not more root constants (the 64-DWORD cap). Composite is FXC — no `0.xxx`. Ray lib is DXC `lib_6_3`.
+Cbuffer: `pad0` / `pad1` keep `prevViewProj` on a float4 boundary. Extra spec / contact / denoise fields sit after `projB`. `viewProj` for hit reprojection is a root CBV (`b1`); `Params` (`b0`) is one too. Composite is FXC — no `0.xxx`. Ray lib is DXC `lib_6_3`.
 
 ## Menu
 

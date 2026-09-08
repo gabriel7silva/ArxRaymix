@@ -45,7 +45,15 @@ constexpr UINT kRtUavCount = 5;
 constexpr UINT kCompositeBase = 20;
 constexpr UINT kCompositeSrvCount = 8;
 constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
-constexpr UINT kRootConstants = 60;
+// Size of the Params (b0) constant buffer. It used to be a count of root constants; those cost a
+// DWORD each and filled 60 of the root signature's 64, which is why every later value had to be
+// smuggled into ViewParams (b1). It is a root CBV now, so the size is only a size.
+constexpr UINT kParamsBytes = 240;
+// A root CBV is read by the GPU when the dispatch runs, not copied into the command list when it
+// is recorded, so one slot would be overwritten while an earlier frame still reads it. The
+// renderer keeps kFrameCount frames in flight and waits only on the frame before that.
+constexpr UINT kParamsSlots = 3;
+constexpr UINT kParamsStride = 256; // SetComputeRootConstantBufferView requires a 256-byte address
 static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAV range must follow the RT SRVs");
 static_assert(kCompositeBase == kRtUavBase + kRtUavCount, "INV-02: composite SRVs follow the UAVs");
 constexpr UINT kMaskRtvWater = 0;
@@ -119,7 +127,9 @@ struct DxrConstants {
 	float giTemporalAlpha;
 	UINT playerVertBase;
 };
-static_assert(sizeof(DxrConstants) == kRootConstants * 4, "DXR root constants must match HLSL cbuffer");
+static_assert(sizeof(DxrConstants) == kParamsBytes, "Params (b0) must match the HLSL cbuffer");
+static_assert(sizeof(DxrConstants) % 16 == 0,
+              "INV-01: the cbuffer has to end on a complete float4 row");
 static_assert(offsetof(DxrConstants, invViewProj) == 0);
 static_assert(offsetof(DxrConstants, cameraPos) == 64);
 static_assert(offsetof(DxrConstants, prevViewProj) == 112,
@@ -215,9 +225,10 @@ cbuffer Params : register(b0) {
 
 cbuffer ViewParams : register(b1) {
 	float4x4 viewProj;
-	// Not in the root cbuffer: 60 constants + 2 tables + CBV already fill
-	// the 64-DWORD root-signature cap. Extra floats there kill CreateRootSignature
-	// ("DXR pipeline failed — raster only").
+	// These lived here because Params (b0) used to be 60 root constants and the signature was
+	// full at 64 DWORDs. Params is a root CBV now and the cap is no longer the reason, but they
+	// stay: this buffer is the natural home for per-view values, and moving them back would
+	// churn two cbuffer layouts for nothing.
 	float specTMax;
 	float giTMax;
 	float rtRange;
@@ -1179,6 +1190,11 @@ void D3D12Rtao::shutdown() {
 	m_metalMask.reset();
 	m_histValid = false;
 	m_lights.reset();
+	if(m_paramsCbuf && m_paramsMapped) {
+		m_paramsCbuf->Unmap(0, nullptr);
+	}
+	m_paramsMapped = nullptr;
+	m_paramsCbuf.reset();
 	m_viewCbuf.reset();
 	m_shaderTable.reset();
 	m_instances.reset();
@@ -1273,6 +1289,19 @@ bool D3D12Rtao::init(ID3D12Device * device) {
 	if(!createBuffer(device, 256, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
 	                 D3D12_RESOURCE_FLAG_NONE, m_viewCbuf.put())) {
 		LogError << "RTAO: view cbuffer failed";
+		return true;
+	}
+	if(!createBuffer(device, UINT64(kParamsSlots) * kParamsStride, D3D12_HEAP_TYPE_UPLOAD,
+	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE,
+	                 m_paramsCbuf.put())) {
+		LogError << "RTAO: params cbuffer failed";
+		return true;
+	}
+	// Upload heaps may stay mapped for their whole life, so map once here rather than around
+	// every dispatch.
+	if(FAILED(m_paramsCbuf->Map(0, nullptr, &m_paramsMapped)) || !m_paramsMapped) {
+		LogError << "RTAO: params cbuffer map failed";
+		m_paramsMapped = nullptr;
 		return true;
 	}
 	D3D12_DESCRIPTOR_HEAP_DESC rtvHeap {};
@@ -1386,8 +1415,9 @@ bool D3D12Rtao::createPipeline() {
 	uav.NumDescriptors = kRtUavCount;
 	uav.BaseShaderRegister = 0;
 	D3D12_ROOT_PARAMETER params[4] {};
-	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-	params[0].Constants.Num32BitValues = kRootConstants;
+	params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+	params[0].Descriptor.ShaderRegister = 0;
+	params[0].Descriptor.RegisterSpace = 0;
 	params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 	params[1].DescriptorTable.NumDescriptorRanges = 1;
@@ -2673,7 +2703,13 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	ID3D12DescriptorHeap * heaps[] = { m_heap.Get() };
 	list->SetDescriptorHeaps(1, heaps);
 	list->SetComputeRootSignature(m_rtRoot.Get());
-	list->SetComputeRoot32BitConstants(0, kRootConstants, &cb, 0);
+	if(m_paramsMapped) {
+		m_paramsSlot = (m_paramsSlot + 1) % kParamsSlots;
+		std::memcpy(static_cast<char *>(m_paramsMapped) + m_paramsSlot * kParamsStride,
+		            &cb, sizeof(cb));
+		list->SetComputeRootConstantBufferView(0, m_paramsCbuf->GetGPUVirtualAddress()
+		                                          + m_paramsSlot * kParamsStride);
+	}
 	D3D12_GPU_DESCRIPTOR_HANDLE gpu = m_heap->GetGPUDescriptorHandleForHeapStart();
 	list->SetComputeRootDescriptorTable(1, gpu);
 	D3D12_GPU_DESCRIPTOR_HANDLE uav = gpu;

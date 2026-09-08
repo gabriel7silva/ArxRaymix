@@ -205,6 +205,13 @@ private:
 	ComPtr<ID3D12Resource> m_waterDefault;
 	ComPtr<ID3D12Resource> m_metalUpload;
 	ComPtr<ID3D12Resource> m_roomMetalUpload;
+	// Params (b0). A root CBV rather than root constants: constants would occupy 60 of the
+	// signature's 64 DWORDs and leave no room for the texture table the reflections need.
+	// Ringed over kParamsSlots because, unlike root constants, an upload buffer is read by the
+	// GPU at dispatch time and the renderer keeps more than one frame in flight.
+	ComPtr<ID3D12Resource> m_paramsCbuf;
+	void * m_paramsMapped = nullptr;
+	unsigned m_paramsSlot = 0;
 	ComPtr<ID3D12Resource> m_viewCbuf;
 	ComPtr<ID3D12Resource> m_blas;
 	ComPtr<ID3D12Resource> m_playerBlas;
