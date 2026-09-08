@@ -119,9 +119,11 @@ void ARX_GLOBALMODS_Apply() {
 	const float t = std::clamp(config.video.fogDistance, 0.f, 10.f) / 10.f;
 	float fZclipp = DEFAULT_MINZCLIP + std::pow(t, 1.65f) * (DEFAULT_ZCLIP - DEFAULT_MINZCLIP);
 	fZclipp += (g_camera->focal - 310.f) * 5.f;
-	// PATH_FARCLIP (current.zclip) caps the far plane. The Render slider sets
-	// the default reach; D3D12 fades world pixels into zone fog before the clip.
-	g_camera->cdepth = (std::max)((std::min)(current.zclip, fZclipp), DEFAULT_MINZCLIP);
+	// Zone PATH_FARCLIP (current.zclip) drives the fog colour only; the Render slider owns the far
+	// plane. Clamping cdepth to the zone's clip pins the far plane to whatever the level author
+	// chose — on level 15 that is 2170 — so the slider stops doing anything above that and the
+	// option reads as broken.
+	g_camera->cdepth = (std::max)(fZclipp, DEFAULT_MINZCLIP);
 	
 	if(current.depthcolor.r + current.depthcolor.g + current.depthcolor.b < 0.04f) {
 		g_fogColor = Color(Color3f::rgb(0.11f, 0.09f, 0.08f));
