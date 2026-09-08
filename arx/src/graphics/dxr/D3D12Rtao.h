@@ -40,9 +40,18 @@ public:
 	D3D12Rtao(const D3D12Rtao &) = delete;
 	D3D12Rtao & operator=(const D3D12Rtao &) = delete;
 	
-	bool init(ID3D12Device * device);
+	//! The ray pass and the raster share one CBV_SRV_UAV heap, because only one can be bound at
+	//! a time and the hit shader has to reach the game's textures through it. The renderer owns
+	//! the heap and lends this module a reserved block of kHeapDescriptors at baseIndex.
+	bool init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap, unsigned baseIndex);
+
+	//! Descriptors this module needs inside the shared heap.
+	static constexpr unsigned kHeapDescriptors = 30;
 	void shutdown();
 	void resize(int width, int height);
+	//! True when resize() would actually release and recreate the targets. Lets the caller pay for
+	//! a GPU sync only on the frames that need one, instead of on every frame.
+	[[nodiscard]] bool needsResize(int width, int height) const;
 	
 	[[nodiscard]] bool supported() const { return m_supported; }
 	[[nodiscard]] bool ready() const { return m_ready; }
@@ -60,12 +69,14 @@ public:
 	void beginWorldFrame();
 	void markReflectOnlyStart();
 	void clearRooms();
+	//! texIndex is the caller's descriptor index for the face's texture, 0 for the white
+	//! fallback. It is stored per triangle so a hit can find its material.
 	void addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	             const unsigned short * indices, size_t nindices);
+	             const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
 	void addWorld(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	              const unsigned short * indices, size_t nindices);
+	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
 	void addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-	              const unsigned short * indices, size_t nindices);
+	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
 	void addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	void addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
 	              const unsigned short * indices, size_t nindices);
@@ -134,6 +145,16 @@ private:
 	struct Pos {
 		float x, y, z, w;
 	};
+
+	//! Per-triangle material, parallel to every three entries of the position vectors. Kept out
+	//! of the vertex so sizeof(Pos) stays 16: the acceleration-structure build reads the
+	//! position buffer every frame and a fat vertex would double what it walks. The texture
+	//! index belongs to the face anyway, and a vertex would carry three copies of it.
+	struct TriAttr {
+		float u0, v0, u1, v1, u2, v2;
+		std::uint32_t tex;
+		std::uint32_t pad;
+	};
 	
 	template <class T>
 	class ComPtr {
@@ -175,9 +196,12 @@ private:
 	void rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
 	                    ID3D12Resource * depth, float jitterNdcX, float jitterNdcY);
 	template <typename Vertex>
-	void addTris(std::vector<Pos> & dst, size_t cap, Renderer::Primitive primitive,
-	             const Vertex * vertices, size_t nvertices,
-	             const unsigned short * indices, size_t nindices);
+	//! attr may be null for geometry that carries no material (the mask buffers). When it is
+	//! not, one entry is pushed for every triangle pushed into dst, in the same block, because
+	//! the hit shader finds an attribute by PrimitiveIndex.
+	void addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, size_t cap,
+	             Renderer::Primitive primitive, const Vertex * vertices, size_t nvertices,
+	             const unsigned short * indices, size_t nindices, unsigned texIndex);
 	void addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	
 	ID3D12Device * m_device = nullptr;
@@ -193,7 +217,14 @@ private:
 	ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
 	ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
 	std::vector<unsigned char> m_dxil;
-	ComPtr<ID3D12DescriptorHeap> m_heap;
+	//! Not owned: the renderer's CBV_SRV_UAV heap. Cleared in shutdown.
+	ID3D12DescriptorHeap * m_heap = nullptr;
+	//! First descriptor of this module's reserved block inside that heap.
+	unsigned m_rtaoBase = 0;
+	ComPtr<ID3D12Resource> m_attrUpload;
+	ComPtr<ID3D12Resource> m_attrDefault;
+	ComPtr<ID3D12Resource> m_roomAttrUpload;
+	ComPtr<ID3D12Resource> m_roomAttrDefault;
 	ComPtr<ID3D12Resource> m_vertUpload;
 	ComPtr<ID3D12Resource> m_vertDefault;
 	ComPtr<ID3D12Resource> m_roomUpload;
@@ -202,6 +233,13 @@ private:
 	ComPtr<ID3D12Resource> m_waterDefault;
 	ComPtr<ID3D12Resource> m_metalUpload;
 	ComPtr<ID3D12Resource> m_roomMetalUpload;
+	// Params (b0). A root CBV rather than root constants: constants would occupy 60 of the
+	// signature's 64 DWORDs and leave no room for the texture table the reflections need.
+	// Ringed over kParamsSlots because, unlike root constants, an upload buffer is read by the
+	// GPU at dispatch time and the renderer keeps more than one frame in flight.
+	ComPtr<ID3D12Resource> m_paramsCbuf;
+	void * m_paramsMapped = nullptr;
+	unsigned m_paramsSlot = 0;
 	ComPtr<ID3D12Resource> m_viewCbuf;
 	ComPtr<ID3D12Resource> m_blas;
 	ComPtr<ID3D12Resource> m_playerBlas;
@@ -231,6 +269,10 @@ private:
 
 	std::vector<Pos> m_positions;
 	std::vector<Pos> m_roomPositions;
+	//! One entry per triangle of the vector above it. Sizes must stay in lockstep: attributes are
+	//! looked up by PrimitiveIndex, so a missing entry shifts every triangle after it.
+	std::vector<TriAttr> m_triAttr;
+	std::vector<TriAttr> m_roomTriAttr;
 	std::vector<Pos> m_waterPositions;
 	std::vector<Pos> m_metalPositions;
 	std::vector<Pos> m_roomMetalPositions;
@@ -247,6 +289,8 @@ private:
 	bool m_colorIsShader = false;
 	bool m_vertsAreSrv = false;
 	bool m_roomVertsAreSrv = false;
+	bool m_attrIsSrv = false;
+	bool m_roomAttrIsSrv = false;
 	bool m_waterVertsAreSrv = false;
 	bool m_roomsDirty = true;
 	bool m_maskIsSrv = false;

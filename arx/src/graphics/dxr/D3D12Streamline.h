@@ -118,7 +118,14 @@ private:
 	void resetState();
 	bool evaluateRr(const Frame & frame, void * token);
 	bool evaluateDlss(const Frame & frame, void * token);
-	bool tonemapToBackbuffer(const Frame & frame);
+	//! linearSource: the Ray Reconstruction path hands over linear radiance and needs gamma
+	//! encoding on the way out; plain DLSS hands over gamma already and must not be encoded twice.
+	//! True when this frame's Ray Reconstruction ran against a linearised input, so its output
+	//! is linear and has to be encoded on the way to the display.
+	bool m_rrLinearIn = false;
+	bool tonemapToBackbuffer(const Frame & frame, bool linearSource);
+	//! Scene colour (gamma) to linear fp16, the input Ray Reconstruction actually asks for.
+	bool linearizeSceneColour(const Frame & frame);
 	void * frameToken();
 	void setDlssg(bool on);
 	void setReflex(bool on);

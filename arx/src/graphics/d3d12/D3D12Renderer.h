@@ -181,7 +181,8 @@ private:
 	[[nodiscard]] int passHeight() const;
 	void markUnusable();
 	void retireCompleted();
-	void waitFence(std::uint64_t value);
+	bool waitFence(std::uint64_t value);
+	bool waitForSubmittedWork();
 	
 	struct Impl;
 	Impl * m = nullptr;

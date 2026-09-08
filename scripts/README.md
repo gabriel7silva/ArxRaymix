@@ -12,6 +12,7 @@ These scripts start a built `arx.exe` against your own Arx Fatalis install. They
 | `fetch-streamline.ps1` | Fetch the NVIDIA Streamline SDK once into `arx/third_party/streamline/` |
 | `Check-MaintenanceDocs.ps1` | Fail if a grep in `docs/maintenance/` matches nothing |
 | `import-speech-portugues.ps1` | Copy PT-BR speech WAVs into `arx/data/core/speech/portugues/` |
+| `sweep-plausible-levels.ps1` | Load each level for a few seconds (`--benchmark`) and score Pdxr-5 / F5 from the log; it reports F4 as undecidable |
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-d3d12.ps1
@@ -19,5 +20,26 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 ```
 
 Optional arguments: `-DataDir '<path to Arx Fatalis>'`, `-LoadLevel <n>`, `-Config RelWithDebInfo`.
+
+`-DxrDebug <1-4>` replaces the ray traced reflection with a raw value, because a ray pass cannot
+print: 1 which instance was hit (room red, entity green, water blue, player yellow), 2 the hit
+normal, 3 the hit distance, 4 the texture sampled at the hit. Look at water or metal.
+
+`ARX_DXR_FIRSTHIT=1` puts reflection rays back on any-hit traversal instead of nearest-hit.
+Nearest is correct and costs a full traversal per ray; this is the escape hatch if that is too
+slow on a given machine.
+
+`ARX_DXR_NO_TEXREFL=1` stops off-screen reflected hits from using their own texture and goes
+back to the light-only approximation.
+
+Plausible load sweep (loads levels, does not play them):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/sweep-plausible-levels.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File scripts/sweep-plausible-levels.ps1 -Levels 1
+powershell -ExecutionPolicy Bypass -File scripts/sweep-plausible-levels.ps1
+```
+
+Report: `runtime/user-sweep/sweep-report.txt`. Extra flags (`--benchmark`, `--skipcinematic`) go to `arx.exe` from that script, not from `run-d3d12.ps1`.
 
 `ARX_RENDERER` is set for that process only. It does not rewrite `cfg.ini`. Change the saved API in **Options → Video** (restart required).

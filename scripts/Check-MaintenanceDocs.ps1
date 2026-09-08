@@ -47,11 +47,22 @@ try {
     $checked = 0
 
     # 1. Every fenced grep must match something.
+    #
+    # Only inside a fence, as the description says. A grep written to prove an ABSENCE — 'this
+    # must return no hits' — matches nothing precisely when it is doing its job, and this check
+    # would read that success as a failure. Keeping those out of fences is how a guide says
+    # 'run this by hand', and the checker has to honour the distinction it already claims to.
     foreach ($doc in $docs) {
         $lineNo = 0
+        $inFence = $false
         foreach ($line in (Get-Content -LiteralPath $doc.FullName)) {
             $lineNo++
             $line = $line.Trim()
+            if ($line -match '^```') {
+                $inFence = -not $inFence
+                continue
+            }
+            if (-not $inFence) { continue }
             if ($line -notmatch '^grep\s') { continue }
 
             $checked++

@@ -47,13 +47,17 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "graphics/Color.h"
 #include "util/Flags.h"
 
-// Shared culling (upstream). Portal / sphere tests use these.
-const float fZFogStart = 0.3f;
-const float fZFogEnd = 0.5f;
-
-// D3D12 world-pixel fade. Not used for portal / sphere culls.
-const float fZFogRampStart = 0.40f;
-const float fZFogRampEnd = 0.92f;
+// Fade starts at 40 % of the render-distance far plane and is solid at 92 %, so the clip is a
+// wall of fog instead of another room hanging in empty space.
+//
+// Culling and the fog ramp must use the SAME numbers. Splitting them — culling at 0.5 while the
+// fog only closed at 0.92 — dropped rooms, entities and particles at little over half the render
+// distance, in the open, with the fog still nearly clear. That reads as the render distance
+// slider being broken.
+const float fZFogStart = 0.40f;
+const float fZFogEnd = 0.92f;
+const float fZFogRampStart = fZFogStart;
+const float fZFogRampEnd = fZFogEnd;
 
 enum GMODFlag {
 	GMOD_DCOLOR = 1 << 0,
