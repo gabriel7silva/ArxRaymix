@@ -43,6 +43,9 @@ public:
 	bool init(ID3D12Device * device);
 	void shutdown();
 	void resize(int width, int height);
+	//! True when resize() would actually release and recreate the targets. Lets the caller pay for
+	//! a GPU sync only on the frames that need one, instead of on every frame.
+	[[nodiscard]] bool needsResize(int width, int height) const;
 	
 	[[nodiscard]] bool supported() const { return m_supported; }
 	[[nodiscard]] bool ready() const { return m_ready; }

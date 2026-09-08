@@ -3630,7 +3630,9 @@ void D3D12Renderer::beginSceneUpscale() {
 			m->dlssReset = true;
 		}
 		m->prevDlssActive = 0;
-		if(m_rtao) {
+		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
+			// resize() releases the ray tracing targets outright; the previous frame read them.
+			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
 		return;
@@ -3646,7 +3648,9 @@ void D3D12Renderer::beginSceneUpscale() {
 	}
 	m->dlssMode = slMode;
 	if(slMode <= 0) {
-		if(m_rtao) {
+		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
+			// resize() releases the ray tracing targets outright; the previous frame read them.
+			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
 		return;
@@ -3658,7 +3662,9 @@ void D3D12Renderer::beginSceneUpscale() {
 		m->sceneW = m_width;
 		m->sceneH = m_height;
 		m->dlssMode = wantRr ? D3D12Streamline::resolveDlssMode(1, m_height) : 0;
-		if(m_rtao) {
+		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
+			// resize() releases the ray tracing targets outright; the previous frame read them.
+			waitForSubmittedWork();
 			m_rtao->resize(m_width, m_height);
 		}
 		LogWarning << "D3D12: scene targets failed — native raster";
@@ -3675,7 +3681,8 @@ void D3D12Renderer::beginSceneUpscale() {
 	// stay unjittered. Without this, Ultra Performance is a bilinear 360p.
 	m->jitterX = halton(m->jitterFrame, 2) - 0.5f;
 	m->jitterY = halton(m->jitterFrame, 3) - 0.5f;
-	if(m_rtao) {
+	if(m_rtao && m_rtao->needsResize(rw, rh)) {
+		waitForSubmittedWork();
 		m_rtao->resize(rw, rh);
 	}
 	static int s_mode = -1, s_rw = 0, s_rh = 0;
@@ -3928,6 +3935,14 @@ void D3D12Renderer::applyWorldRayEffects() {
 	}
 	ID3D12Resource * color = usingSceneTargets() ? m->sceneColor.Get() : m->backbuffers[m->frame].Get();
 	ID3D12Resource * depth = usingSceneTargets() ? m->sceneDepth.Get() : m->depth.Get();
+	// apply() overwrites the ray tracing buffers and frees the ones that have to grow, both of
+	// which are only safe once the previous frame's work has left the GPU. See waitForSubmittedWork.
+	// If that wait fails the GPU is hung or gone, and running apply() anyway would free memory it
+	// is still reading — the exact fault this guard exists to prevent.
+	if(!waitForSubmittedWork()) {
+		m->worldPass = false;
+		return;
+	}
 	m_rtao->apply(m->list.Get(), color, depth, m_view, m_proj,
 	              passWidth(), passHeight(), dxr, lights, nlights, std::uint64_t(rtv.ptr));
 	restoreRasterBind();

@@ -1571,12 +1571,16 @@ void D3D12Rtao::releaseTargets() {
 	m_height = 0;
 }
 
-void D3D12Rtao::resize(int width, int height) {
+bool D3D12Rtao::needsResize(int width, int height) const {
 	if(m_targetsFailed && width == m_failedW && height == m_failedH) {
-		return;
+		return false;
 	}
-	if(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
-	   && m_spec && m_waterMask && m_metalMask) {
+	return !(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
+	         && m_spec && m_waterMask && m_metalMask);
+}
+
+void D3D12Rtao::resize(int width, int height) {
+	if(!needsResize(width, height)) {
 		return;
 	}
 	m_targetsFailed = false;
