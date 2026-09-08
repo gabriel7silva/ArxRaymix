@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <type_traits>
 #include <iterator>
 #include <string>
 
@@ -38,14 +39,18 @@ constexpr size_t kMaxWaterTriangles = 20000;
 constexpr size_t kMaxMetalTriangles = 30000;
 constexpr UINT kIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 constexpr UINT kShaderRecord = 64;
-// Heap: [0..14] RT SRVs t0-t14, [15..19] RT UAVs u0-u4,
-// [20..27] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
-constexpr UINT kRtSrvCount = 15;
-constexpr UINT kRtUavBase = 15;
+// Heap: [0..16] RT SRVs t0-t16, [17..21] RT UAVs u0-u4,
+// [22..29] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
+// t15 / t16 are the per-triangle attribute buffers. Growing the SRV range shifts the UAV and
+// composite ranges after it: INV-02 is one equation, so these five move together or not at all.
+constexpr UINT kRtSrvCount = 17;
+constexpr UINT kRtUavBase = 17;
 constexpr UINT kRtUavCount = 5;
-constexpr UINT kCompositeBase = 20;
+constexpr UINT kCompositeBase = 22;
 constexpr UINT kCompositeSrvCount = 8;
 constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
+static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAVs follow the SRV range");
+static_assert(kCompositeBase == kRtUavBase + kRtUavCount, "INV-02: composite follows the UAVs");
 static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
               "INV-02: the block the renderer reserves must match what this file lays out");
 // Size of the Params (b0) constant buffer. It used to be a count of root constants; those cost a
@@ -209,6 +214,17 @@ Texture2D<float> g_waterDepth : register(t11);
 Texture2D<float4> g_specPrev : register(t12);
 Texture2D<float> g_metalMask : register(t13);
 StructuredBuffer<float4> g_waterVerts : register(t14);
+// Per-triangle material, one entry per PrimitiveIndex. Declared now, read once the collectors
+// fill them; water keeps positions only, its surface is procedural.
+struct TriAttr {
+	float2 uv0;
+	float2 uv1;
+	float2 uv2;
+	uint tex;
+	uint pad;
+};
+StructuredBuffer<TriAttr> g_dynAttr : register(t15);
+StructuredBuffer<TriAttr> g_roomAttr : register(t16);
 RWTexture2D<float> g_ao : register(u0);
 RWTexture2D<float> g_shadow : register(u1);
 RWTexture2D<float4> g_gi : register(u2);
@@ -1257,6 +1273,10 @@ void D3D12Rtao::shutdown() {
 	m_scratch.reset();
 	m_tlas.reset();
 	m_blas.reset();
+	m_attrUpload.reset();
+	m_attrDefault.reset();
+	m_roomAttrUpload.reset();
+	m_roomAttrDefault.reset();
 	m_vertDefault.reset();
 	m_vertUpload.reset();
 	m_roomDefault.reset();
@@ -1980,6 +2000,25 @@ void D3D12Rtao::updateDescriptors() {
 	if(m_roomDefault && !m_roomPositions.empty()) {
 		bindVerts(m_roomDefault.Get(), m_roomPositions.size(), 5);
 	}
+	// t15 / t16: one entry per triangle, indexed by PrimitiveIndex in the hit shader.
+	auto bindAttr = [&](ID3D12Resource * res, size_t n, UINT slotIndex) {
+		if(!res || n == 0) {
+			return;
+		}
+		D3D12_SHADER_RESOURCE_VIEW_DESC ab {};
+		ab.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		ab.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		ab.Buffer.FirstElement = 0;
+		ab.Buffer.NumElements = UINT(n);
+		ab.Buffer.StructureByteStride = sizeof(TriAttr);
+		m_device->CreateShaderResourceView(res, &ab, slot(slotIndex));
+	};
+	if(m_attrDefault && !m_triAttr.empty()) {
+		bindAttr(m_attrDefault.Get(), m_triAttr.size(), 15);
+	}
+	if(m_roomAttrDefault && !m_roomTriAttr.empty()) {
+		bindAttr(m_roomAttrDefault.Get(), m_roomTriAttr.size(), 16);
+	}
 	if(m_waterDefault && !m_waterPositions.empty()) {
 		bindVerts(m_waterDefault.Get(), m_waterPositions.size(), 14);
 	}
@@ -2089,6 +2128,7 @@ void D3D12Rtao::beginWorldFrame() {
 	m_positions.clear();
 	m_waterPositions.clear();
 	m_metalPositions.clear();
+	m_triAttr.clear();
 	m_reflectOnlyStart = SIZE_MAX;
 	m_masksRasterized = false;
 }
@@ -2100,6 +2140,7 @@ void D3D12Rtao::markReflectOnlyStart() {
 void D3D12Rtao::clearRooms() {
 	m_roomPositions.clear();
 	m_roomMetalPositions.clear();
+	m_roomTriAttr.clear();
 	m_roomsDirty = true;
 }
 
@@ -2209,20 +2250,31 @@ bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 		const size_t dyn = m_positions.size() / 3;
 		const size_t room = m_roomPositions.size() / 3;
 		if(dyn != loggedDyn || room != loggedRoom) {
-			LogInfo << "DXR geometry dyn=" << dyn << " room=" << room
+			// attrDyn must equal dyn and attrRoom must equal room. They are looked up by
+			// PrimitiveIndex, so one missing entry shifts every triangle after it and the
+			// reflection silently samples its neighbour's texture.
+			LogInfo << "DXR geometry dyn=" << dyn << " attrDyn=" << m_triAttr.size()
+			        << " room=" << room << " attrRoom=" << m_roomTriAttr.size()
 			        << " water=" << (m_waterPositions.size() / 3)
 			        << " metal=" << (m_metalPositions.size() / 3)
 			        << " roomMetal=" << (m_roomMetalPositions.size() / 3);
+			if(m_triAttr.size() != dyn || m_roomTriAttr.size() != room) {
+				LogWarning << "DXR geometry: attribute count does not match triangle count —"
+				              " every PrimitiveIndex past the gap reads the wrong triangle";
+			}
 			loggedDyn = dyn;
 			loggedRoom = room;
 		}
 	}
-	auto upload = [&](const std::vector<Pos> & src, ComPtr<ID3D12Resource> & up,
+	// Templated over the element so positions and per-triangle attributes travel the same path:
+	// grow, map, copy into a DEFAULT buffer, leave it readable by the ray shaders.
+	auto upload = [&](const auto & src, ComPtr<ID3D12Resource> & up,
 	                  ComPtr<ID3D12Resource> & def, bool & srvFlag) -> bool {
 		if(src.empty()) {
 			return true;
 		}
-		const UINT64 bytes = UINT64(src.size() * sizeof(Pos));
+		using Elem = typename std::decay_t<decltype(src)>::value_type;
+		const UINT64 bytes = UINT64(src.size() * sizeof(Elem));
 		if(!up || up->GetDesc().Width < bytes) {
 			up.reset();
 			def.reset();
@@ -2253,6 +2305,13 @@ bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 		srvFlag = true;
 		return true;
 	};
+	if(!upload(m_triAttr, m_attrUpload, m_attrDefault, m_attrIsSrv)) {
+		return false;
+	}
+	if(m_roomsDirty && !upload(m_roomTriAttr, m_roomAttrUpload, m_roomAttrDefault,
+	                           m_roomAttrIsSrv)) {
+		return false;
+	}
 	if(!upload(m_positions, m_vertUpload, m_vertDefault, m_vertsAreSrv)) {
 		return false;
 	}

@@ -46,7 +46,7 @@ public:
 	bool init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap, unsigned baseIndex);
 
 	//! Descriptors this module needs inside the shared heap.
-	static constexpr unsigned kHeapDescriptors = 28;
+	static constexpr unsigned kHeapDescriptors = 30;
 	void shutdown();
 	void resize(int width, int height);
 	//! True when resize() would actually release and recreate the targets. Lets the caller pay for
@@ -143,6 +143,16 @@ private:
 	struct Pos {
 		float x, y, z, w;
 	};
+
+	//! Per-triangle material, parallel to every three entries of the position vectors. Kept out
+	//! of the vertex so sizeof(Pos) stays 16: the acceleration-structure build reads the
+	//! position buffer every frame and a fat vertex would double what it walks. The texture
+	//! index belongs to the face anyway, and a vertex would carry three copies of it.
+	struct TriAttr {
+		float u0, v0, u1, v1, u2, v2;
+		std::uint32_t tex;
+		std::uint32_t pad;
+	};
 	
 	template <class T>
 	class ComPtr {
@@ -206,6 +216,10 @@ private:
 	ID3D12DescriptorHeap * m_heap = nullptr;
 	//! First descriptor of this module's reserved block inside that heap.
 	unsigned m_rtaoBase = 0;
+	ComPtr<ID3D12Resource> m_attrUpload;
+	ComPtr<ID3D12Resource> m_attrDefault;
+	ComPtr<ID3D12Resource> m_roomAttrUpload;
+	ComPtr<ID3D12Resource> m_roomAttrDefault;
 	ComPtr<ID3D12Resource> m_vertUpload;
 	ComPtr<ID3D12Resource> m_vertDefault;
 	ComPtr<ID3D12Resource> m_roomUpload;
@@ -250,6 +264,10 @@ private:
 
 	std::vector<Pos> m_positions;
 	std::vector<Pos> m_roomPositions;
+	//! One entry per triangle of the vector above it. Sizes must stay in lockstep: attributes are
+	//! looked up by PrimitiveIndex, so a missing entry shifts every triangle after it.
+	std::vector<TriAttr> m_triAttr;
+	std::vector<TriAttr> m_roomTriAttr;
 	std::vector<Pos> m_waterPositions;
 	std::vector<Pos> m_metalPositions;
 	std::vector<Pos> m_roomMetalPositions;
@@ -266,6 +284,8 @@ private:
 	bool m_colorIsShader = false;
 	bool m_vertsAreSrv = false;
 	bool m_roomVertsAreSrv = false;
+	bool m_attrIsSrv = false;
+	bool m_roomAttrIsSrv = false;
 	bool m_waterVertsAreSrv = false;
 	bool m_roomsDirty = true;
 	bool m_maskIsSrv = false;
