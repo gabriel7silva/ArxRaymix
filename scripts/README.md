@@ -12,6 +12,7 @@ These scripts start a built `arx.exe` against your own Arx Fatalis install. They
 | `fetch-streamline.ps1` | Fetch the NVIDIA Streamline SDK once into `arx/third_party/streamline/` |
 | `Check-MaintenanceDocs.ps1` | Fail if a grep in `docs/maintenance/` matches nothing |
 | `import-speech-portugues.ps1` | Copy PT-BR speech WAVs into `arx/data/core/speech/portugues/` |
+| `sweep-plausible-levels.ps1` | Load each level for a few seconds (`--benchmark`) and score F4 / Pdxr-5 / F5 from the log |
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-d3d12.ps1
@@ -19,5 +20,15 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 ```
 
 Optional arguments: `-DataDir '<path to Arx Fatalis>'`, `-LoadLevel <n>`, `-Config RelWithDebInfo`.
+
+Plausible load sweep (loads levels, does not play them):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/sweep-plausible-levels.ps1 -DryRun
+powershell -ExecutionPolicy Bypass -File scripts/sweep-plausible-levels.ps1 -Levels 1
+powershell -ExecutionPolicy Bypass -File scripts/sweep-plausible-levels.ps1
+```
+
+Report: `runtime/user-sweep/sweep-report.txt`. Extra flags (`--benchmark`, `--skipcinematic`) go to `arx.exe` from that script, not from `run-d3d12.ps1`.
 
 `ARX_RENDERER` is set for that process only. It does not rewrite `cfg.ini`. Change the saved API in **Options → Video** (restart required).
