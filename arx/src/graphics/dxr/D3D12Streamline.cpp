@@ -814,9 +814,11 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		return fail("hdrOut");
 	}
 	// Input resolution, not output: this is what Ray Reconstruction reads, before it upscales.
+	// It is created in the state it rests in — a shader resource — because linearizeSceneColour
+	// runs every Ray Reconstruction frame and has to leave the resource the way it found it.
 	if(needHdrOut
 	   && !makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
-	               D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->linearIn)) {
+	               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &m_gpu->linearIn)) {
 		return fail("linearIn");
 	}
 	if(needHudless
@@ -1430,6 +1432,8 @@ bool D3D12Streamline::linearizeSceneColour(const Frame & frame) {
 	m_device->CreateRenderTargetView(m_gpu->linearIn, nullptr, rtv);
 	slTransition(frame.list, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET,
 	             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	slTransition(frame.list, m_gpu->linearIn, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+	             D3D12_RESOURCE_STATE_RENDER_TARGET);
 	frame.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 	D3D12_VIEWPORT vp {};
 	vp.Width = float(frame.width);
