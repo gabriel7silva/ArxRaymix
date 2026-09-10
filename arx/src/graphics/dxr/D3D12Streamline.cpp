@@ -814,9 +814,11 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 		return fail("hdrOut");
 	}
 	// Input resolution, not output: this is what Ray Reconstruction reads, before it upscales.
+	// It is created in the state it rests in — a shader resource — because linearizeSceneColour
+	// runs every Ray Reconstruction frame and has to leave the resource the way it found it.
 	if(needHdrOut
 	   && !makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
-	               D3D12_RESOURCE_STATE_RENDER_TARGET, &m_gpu->linearIn)) {
+	               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &m_gpu->linearIn)) {
 		return fail("linearIn");
 	}
 	if(needHudless
@@ -1316,7 +1318,6 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
 	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource nrm { sl::ResourceType::eTex2d, m_gpu->nrm, D3D12_RESOURCE_STATE_RENDER_TARGET };
-	m_rrLinearIn = linear;
 	sl::Resource albedo { sl::ResourceType::eTex2d, m_gpu->albedo,
 	                      D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource specA { sl::ResourceType::eTex2d, m_gpu->specA,
@@ -1345,6 +1346,10 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 		LogWarning << "Streamline: DLSS-RR evaluate failed (" << resultName(r) << ")";
 		return false;
 	}
+	// Only now, past every way this can fail. A failure here drops the frame to ordinary DLSS,
+	// whose output is gamma-encoded; claiming a linear source would have the tonemap encode it
+	// a second time and the fallback frame would come out visibly washed.
+	m_rrLinearIn = linear;
 	return true;
 #endif
 }
@@ -1430,6 +1435,8 @@ bool D3D12Streamline::linearizeSceneColour(const Frame & frame) {
 	m_device->CreateRenderTargetView(m_gpu->linearIn, nullptr, rtv);
 	slTransition(frame.list, frame.color, D3D12_RESOURCE_STATE_RENDER_TARGET,
 	             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	slTransition(frame.list, m_gpu->linearIn, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+	             D3D12_RESOURCE_STATE_RENDER_TARGET);
 	frame.list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
 	D3D12_VIEWPORT vp {};
 	vp.Width = float(frame.width);
