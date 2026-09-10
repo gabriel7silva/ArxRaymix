@@ -16,9 +16,11 @@ param(
     [string]$DataDir,
     [int]$LoadLevel = 0,
     [ValidateRange(0, 4)]
-    [int]$DxrDebug = 0
+    [int]$DxrDebug = 0,
+    [ValidateRange(0, 2)]
+    [int]$D3d12Debug = 0
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Find-ArxFatalis.ps1')
-Start-Arx -Renderer d3d12 -Config $Config -DataDir $DataDir -LoadLevel $LoadLevel -DxrDebug $DxrDebug
+Start-Arx -Renderer d3d12 -Config $Config -DataDir $DataDir -LoadLevel $LoadLevel -DxrDebug $DxrDebug -D3d12Debug $D3d12Debug
