@@ -1318,7 +1318,6 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 	sl::Resource depth { sl::ResourceType::eTex2d, frame.depth, D3D12_RESOURCE_STATE_DEPTH_WRITE };
 	sl::Resource mvec { sl::ResourceType::eTex2d, m_gpu->mvec, D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource nrm { sl::ResourceType::eTex2d, m_gpu->nrm, D3D12_RESOURCE_STATE_RENDER_TARGET };
-	m_rrLinearIn = linear;
 	sl::Resource albedo { sl::ResourceType::eTex2d, m_gpu->albedo,
 	                      D3D12_RESOURCE_STATE_RENDER_TARGET };
 	sl::Resource specA { sl::ResourceType::eTex2d, m_gpu->specA,
@@ -1347,6 +1346,10 @@ bool D3D12Streamline::evaluateRr(const Frame & frame, void * token) {
 		LogWarning << "Streamline: DLSS-RR evaluate failed (" << resultName(r) << ")";
 		return false;
 	}
+	// Only now, past every way this can fail. A failure here drops the frame to ordinary DLSS,
+	// whose output is gamma-encoded; claiming a linear source would have the tonemap encode it
+	// a second time and the fallback frame would come out visibly washed.
+	m_rrLinearIn = linear;
 	return true;
 #endif
 }
