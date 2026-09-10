@@ -2213,17 +2213,42 @@ bool D3D12Renderer::waitForSubmittedWork() {
 	return waitFence(m->fenceValue);
 }
 
-void D3D12Renderer::waitGpu() {
-	if(!m || !m->queue || !m->fence) {
+//! Rebuild the ray tracing targets at a new resolution, once the GPU has let go of the old ones.
+//!
+//! resize() releases those targets outright and the previous frame read them, so the release is
+//! only safe behind a wait that completed. It also throws away the temporal history, so anything
+//! accumulated restarts. When the wait gives up the device is hung, and stale targets cost less
+//! than the use-after-free that freeing them would be — so the rebuild is skipped and logged.
+void D3D12Renderer::resizeRayTargets(int width, int height) {
+	if(!m_rtao || !m_rtao->needsResize(width, height)) {
 		return;
+	}
+	if(!waitForSubmittedWork()) {
+		LogError << "D3D12: skipping the DXR resize — the GPU never finished the last frame";
+		return;
+	}
+	LogInfo << "DXR targets rebuilt at " << width << "x" << height
+	        << " — temporal history restarts";
+	m_rtao->resize(width, height);
+}
+
+//! Block until the GPU has drained, and say whether it actually did.
+//!
+//! Callers use this to earn the right to destroy something. The wait is bounded now, so it can
+//! come back having given up on a hung device — and a caller that frees the resource anyway hands
+//! the driver a use-after-free on top of the hang. The result is what separates the two cases.
+bool D3D12Renderer::waitGpu() {
+	if(!m || !m->queue || !m->fence) {
+		return true;
 	}
 	const UINT64 value = ++m->fenceValue;
 	if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
 		m->inflight.clear();
-		return;
+		return false;
 	}
-	waitFence(value);
+	const bool drained = waitFence(value);
 	m->inflight.clear();
+	return drained;
 }
 
 bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, unsigned width,
@@ -2530,7 +2555,10 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 	if(!m->swapchain || width <= 0 || height <= 0) {
 		return;
 	}
-	waitGpu();
+	if(!waitGpu()) {
+		LogError << "D3D12: skipping the swapchain resize — the GPU never finished the last frame";
+		return;
+	}
 	releaseSceneTargets();
 	for(UINT i = 0; i < kFrameCount; ++i) {
 		m->backbuffers[i].reset();
@@ -2920,7 +2948,12 @@ bool D3D12Renderer::ensureCommandList() {
 	if(m->recording) {
 		return true;
 	}
-	waitFence(m->frameFence[m->frame]);
+	if(!waitFence(m->frameFence[m->frame])) {
+		// Resetting an allocator whose commands may still be executing is undefined behaviour, and a
+		// wait that gave up is exactly the case where they still are. waitFence has already marked
+		// the renderer unusable; this only stops one more invalid call going out behind it.
+		return false;
+	}
 	if(FAILED(m->allocators[m->frame]->Reset())) {
 		return false;
 	}
@@ -3584,7 +3617,10 @@ bool D3D12Renderer::ensureSceneTargets(int rw, int rh) {
 	   && m->sceneAllocW == rw && m->sceneAllocH == rh) {
 		return true;
 	}
-	waitGpu();
+	if(!waitGpu()) {
+		LogError << "D3D12: keeping the scene targets — the GPU never finished the last frame";
+		return false;
+	}
 	m->sceneColor.reset();
 	m->sceneDepth.reset();
 	m->sceneReady = false;
@@ -3691,8 +3727,7 @@ void D3D12Renderer::beginSceneUpscale() {
 		m_sl->beginFrame();
 	}
 	if(!wantDlss) {
-		if(m->sceneColor || m->sceneDepth) {
-			waitGpu();
+		if((m->sceneColor || m->sceneDepth) && waitGpu()) {
 			releaseSceneTargets();
 		}
 		if(wantRr) {
@@ -3702,14 +3737,7 @@ void D3D12Renderer::beginSceneUpscale() {
 			m->dlssReset = true;
 		}
 		m->prevDlssActive = 0;
-		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
-			// resize() releases the ray tracing targets outright; the previous frame read them.
-			// It also throws away the temporal history, so anything accumulated restarts.
-			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
-			        << " — temporal history restarts";
-			waitForSubmittedWork();
-			m_rtao->resize(m_width, m_height);
-		}
+		resizeRayTargets(m_width, m_height);
 		return;
 	}
 	
@@ -3723,14 +3751,7 @@ void D3D12Renderer::beginSceneUpscale() {
 	}
 	m->dlssMode = slMode;
 	if(slMode <= 0) {
-		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
-			// resize() releases the ray tracing targets outright; the previous frame read them.
-			// It also throws away the temporal history, so anything accumulated restarts.
-			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
-			        << " — temporal history restarts";
-			waitForSubmittedWork();
-			m_rtao->resize(m_width, m_height);
-		}
+		resizeRayTargets(m_width, m_height);
 		return;
 	}
 	
@@ -3740,14 +3761,7 @@ void D3D12Renderer::beginSceneUpscale() {
 		m->sceneW = m_width;
 		m->sceneH = m_height;
 		m->dlssMode = wantRr ? D3D12Streamline::resolveDlssMode(1, m_height) : 0;
-		if(m_rtao && m_rtao->needsResize(m_width, m_height)) {
-			// resize() releases the ray tracing targets outright; the previous frame read them.
-			// It also throws away the temporal history, so anything accumulated restarts.
-			LogInfo << "DXR targets rebuilt at " << m_width << "x" << m_height
-			        << " — temporal history restarts";
-			waitForSubmittedWork();
-			m_rtao->resize(m_width, m_height);
-		}
+		resizeRayTargets(m_width, m_height);
 		LogWarning << "D3D12: scene targets failed — native raster";
 		return;
 	}
@@ -3762,12 +3776,7 @@ void D3D12Renderer::beginSceneUpscale() {
 	// stay unjittered. Without this, Ultra Performance is a bilinear 360p.
 	m->jitterX = halton(m->jitterFrame, 2) - 0.5f;
 	m->jitterY = halton(m->jitterFrame, 3) - 0.5f;
-	if(m_rtao && m_rtao->needsResize(rw, rh)) {
-		LogInfo << "DXR targets rebuilt at " << rw << "x" << rh
-		        << " — temporal history restarts";
-		waitForSubmittedWork();
-		m_rtao->resize(rw, rh);
-	}
+	resizeRayTargets(rw, rh);
 	static int s_mode = -1, s_rw = 0, s_rh = 0;
 	if(slMode != s_mode || rw != s_rw || rh != s_rh) {
 		const char * name = D3D12Streamline::wasDowngraded(config.video.dxrDlss, m_height)

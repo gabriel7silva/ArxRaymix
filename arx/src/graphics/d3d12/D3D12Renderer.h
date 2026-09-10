@@ -163,7 +163,7 @@ private:
 	bool createPipeline();
 	bool createFrameResources();
 	void resizeSwapchain(int width, int height);
-	void waitGpu();
+	bool waitGpu();
 	bool ensureCommandList();
 	bool beginRecording();
 	bool bindDrawState(Primitive primitive);
@@ -183,6 +183,7 @@ private:
 	void retireCompleted();
 	bool waitFence(std::uint64_t value);
 	bool waitForSubmittedWork();
+	void resizeRayTargets(int width, int height);
 	
 	struct Impl;
 	Impl * m = nullptr;

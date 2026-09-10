@@ -26,6 +26,7 @@ Start here if something is already wrong.
 | A quality level reads as Off in the menu but the effect is on, or the reverse | [INV-11](#inv-11) |
 | Hit geometry is lit or shaped wrongly, but only for one category of object | [INV-08](#inv-08) |
 | A reflection shows a plausible but wrong texture | [INV-16](#inv-16), [INV-17](#inv-17) |
+| A reflection is intermittently black, or the high presets lose frame rate with nothing visibly different | [INV-18](#inv-18) |
 
 ## Build-time and layout invariants
 
@@ -137,6 +138,29 @@ only happens when a texture is actually destroyed.
 
 ```
 grep -n "freeSrv\|clearRooms" arx/src/graphics/d3d12/D3D12Renderer.cpp
+```
+
+### <a id="inv-18"></a>INV-18 — Every ray declares whether it wants a material
+
+**Break it by** adding a `TraceRay` whose `RayPayload` never sets `wantMat`, by reading `p.albedo`
+after tracing with `wantMat = 0`, or by growing the payload past `MaxPayloadSizeInBytes`.
+
+**Symptom** either a reflection that is intermittently black, or the high presets losing frame rate
+with nothing visibly different on screen. Which one you get depends on what the uninitialised field
+happened to hold that frame, so it is not reproducible from the outside.
+
+**Mechanism** all five ray types share one hit group, and only the reflection ray reads `albedo`.
+The material work in `ClosestHit` — the attribute fetch, the ray-cone mip derivation and the
+bindless `SampleLevel` — is the most expensive thing in the library, and the shadow, occlusion,
+contact and bounce rays would each pay for it to produce a value nobody reads: at the high presets
+that is hundreds of incoherent texture fetches per pixel. `wantMat` is the caller's declaration,
+read before any of that work starts. A DXR payload is caller-initialised, so a field left unset is
+whatever the register held. The struct is 36 bytes today and the shader config must cover it.
+
+**Detect** *none in game.* Neither failure names itself in the log.
+
+```
+grep -n "RayPayload \|wantMat\|MaxPayloadSizeInBytes" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
 ### <a id="inv-03"></a>INV-03 — The composite shader and the ray library are compiled by different compilers

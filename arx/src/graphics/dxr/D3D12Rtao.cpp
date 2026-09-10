@@ -332,9 +332,14 @@ struct RayPayload {
 	// Which instance was hit: 0 room, 1 entity, 2 water, 3 player. Only read by the debug
 	// views today, but it is what a material lookup will need to pick its vertex buffer.
 	uint inst;
-	// Surface colour at the hit, sampled from the real texture. Free: the shader config already
-	// reserves 32 bytes and the payload used 20.
+	// Surface colour at the hit, sampled from the real texture.
 	float3 albedo;
+	// Set by the caller, read by the hit shader: whether this ray wants albedo at all. Only the
+	// reflection ray does. Shadow, ambient occlusion, contact and bounce rays share this hit
+	// group but read nothing past t and n, and a bindless texture fetch is the most expensive
+	// thing in the shader — at the high presets that is hundreds of incoherent fetches a pixel
+	// paid for a value nobody reads.
+	uint wantMat;
 };
 
 // Interleaved gradient noise: a per-pixel rotation that is fixed in screen space
@@ -392,6 +397,7 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	RayPayload rp;
 	rp.t = 1e7;
 	rp.n = float3(0, 0, 0);
+	rp.wantMat = 1u;
 	// ACCEPT_FIRST_HIT ends the search at whatever the traversal reaches first, which is not
 	// the nearest surface. For a visibility ray that is correct and free; for a reflection it
 	// means the picture can come from a wall behind the one being looked at, and it flickers
@@ -589,6 +595,7 @@ void RayGen() {
 			RayPayload aop;
 			aop.t = radius + 1.0;
 			aop.n = 0.xxx;
+			aop.wantMat = 0u;
 			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 			         0x01, 0, 1, 0, ao, aop);
 			if(aop.t >= 8.0 && aop.t < radius) {
@@ -653,6 +660,7 @@ void RayGen() {
 				RayPayload shp;
 				shp.t = 1e7;
 				shp.n = 0.xxx;
+				shp.wantMat = 0u;
 				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 				         0x01, 0, 1, 0, sh, shp);
 				vis += (shp.t >= tmax) ? 1.0 : 0.0;
@@ -666,6 +674,7 @@ void RayGen() {
 				RayPayload cp;
 				cp.t = 1e7;
 				cp.n = float3(0, 0, 0);
+				cp.wantMat = 0u;
 				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
 				         0x01, 0, 1, 0, cs, cp);
 				if(cp.t < cs.TMax) {
@@ -890,6 +899,9 @@ void RayGen() {
 			RayPayload bp;
 			bp.t = giTMax + 1.0;
 			bp.n = float3(0, 0, 0);
+			// The bounce reads t and n to place and orient the secondary light gather; the colour it
+			// adds comes from the light loop below, never from the surface it landed on.
+			bp.wantMat = 0u;
 			// Same caveat as the reflection ray: this treats the first hit as the nearest surface
 			// when computing the bounce. Left as it is — bounce light is diffuse and low
 			// frequency, so the error hides, and a second full traversal per ray is not worth it.
@@ -966,6 +978,12 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) 
 	}
 	p.n = n;
 	p.inst = InstanceID();
+	if(p.wantMat == 0u) {
+		// Everything below is material work: the attribute fetch, the mip derivation and the
+		// texture sample. A visibility ray has what it came for.
+		p.albedo = 0.xxx;
+		return;
+	}
 	// Barycentrics give the point inside the triangle; the attribute buffer is picked by the
 	// same InstanceID branch as the vertices above. InstanceIndex would slide whenever one of
 	// the four categories is absent, InstanceID is written explicitly per instance.
@@ -1693,7 +1711,8 @@ bool D3D12Rtao::createPipeline() {
 	hit.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
 	hit.ClosestHitShaderImport = L"ClosestHit";
 	D3D12_RAYTRACING_SHADER_CONFIG sc {};
-	sc.MaxPayloadSizeInBytes = 32;
+	// t, n, inst, albedo, wantMat.
+	sc.MaxPayloadSizeInBytes = 36;
 	sc.MaxAttributeSizeInBytes = 8;
 	D3D12_RAYTRACING_PIPELINE_CONFIG pc {};
 	pc.MaxTraceRecursionDepth = 2;
