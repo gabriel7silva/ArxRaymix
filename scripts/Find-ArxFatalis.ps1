@@ -81,7 +81,11 @@ function Start-Arx {
         # 0 off, 1 instance id, 2 hit normal, 3 hit distance, 4 sampled albedo.
         # Replaces the ray traced reflection with the raw value: the pass cannot print.
         [ValidateRange(0, 4)]
-        [int]$DxrDebug = 0
+        [int]$DxrDebug = 0,
+        # 0 off, 1 debug layer, 2 adds GPU-based validation and a large slowdown.
+        # Validation messages are routed into arx.log; without this they go nowhere visible.
+        [ValidateRange(0, 2)]
+        [int]$D3d12Debug = 0
     )
 
     $root = Get-ArxRepoRoot
@@ -123,14 +127,21 @@ function Start-Arx {
     if ($DxrDebug -ne 0) {
         Write-Host "DXR debug view $DxrDebug - the reflection shows a raw value, not a reflection"
     }
+    if ($D3d12Debug -ne 0) {
+        Write-Host "D3D12 debug layer $D3d12Debug - validation goes to arx.log, grep 'D3D12 validation'"
+    }
 
     $previousRenderer = $env:ARX_RENDERER
     $previousDxrDebug = $env:ARX_DXR_DEBUG
+    $previousD3d12Debug = $env:ARX_D3D12_DEBUG
     Push-Location $root
     try {
         $env:ARX_RENDERER = $Renderer
         if ($DxrDebug -ne 0) {
             $env:ARX_DXR_DEBUG = "$DxrDebug"
+        }
+        if ($D3d12Debug -ne 0) {
+            $env:ARX_D3D12_DEBUG = "$D3d12Debug"
         }
         & $exe @arguments
     } finally {
@@ -144,6 +155,11 @@ function Start-Arx {
             Remove-Item Env:\ARX_DXR_DEBUG -ErrorAction SilentlyContinue
         } else {
             $env:ARX_DXR_DEBUG = $previousDxrDebug
+        }
+        if ($null -eq $previousD3d12Debug) {
+            Remove-Item Env:\ARX_D3D12_DEBUG -ErrorAction SilentlyContinue
+        } else {
+            $env:ARX_D3D12_DEBUG = $previousD3d12Debug
         }
     }
 }
