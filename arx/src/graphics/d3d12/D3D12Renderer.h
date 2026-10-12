@@ -162,6 +162,7 @@ private:
 	void createSamplers();
 	bool createPipeline();
 	bool createFrameResources();
+	bool createUploadBuffer(unsigned bytes);
 	void resizeSwapchain(int width, int height);
 	bool waitGpu();
 	bool ensureCommandList();
@@ -181,6 +182,7 @@ private:
 	[[nodiscard]] int passHeight() const;
 	void markUnusable();
 	void retireCompleted();
+	void retireSubmitted(std::uint64_t value);
 	bool waitFence(std::uint64_t value);
 	bool waitForSubmittedWork();
 	void resizeRayTargets(int width, int height);

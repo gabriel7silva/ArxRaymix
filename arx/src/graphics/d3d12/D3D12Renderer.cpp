@@ -133,6 +133,7 @@ constexpr UINT kSrvHeapSize = 4096;
 // descriptor and be read as the wrong type.
 constexpr UINT kRtaoSrvBase = kSrvHeapSize - D3D12Rtao::kHeapDescriptors;
 constexpr UINT kUploadBytes = 16 * 1024 * 1024;
+constexpr UINT kUploadBytesMax = 256 * 1024 * 1024;
 constexpr float kNearW = 1.f;
 constexpr float kTLClipPad = 64.f;
 constexpr int kMaxClipVerts = 16;
@@ -178,24 +179,26 @@ bool roomsConnected(RoomHandle from, RoomHandle to, int maxHops) {
 	if(size_t(from) >= g_rooms->rooms.size() || size_t(to) >= g_rooms->rooms.size()) {
 		return false;
 	}
-	RoomHandle q[48];
-	int hop[48];
-	size_t n = 0;
+	// Sized to the level rather than a fixed 48: at Ultra (6 hops) a hub level reaches more rooms
+	// than that, and a truncated search reported connected rooms as unconnected, dropping lights.
+	static std::vector<std::pair<RoomHandle, int>> queue;
+	static std::vector<u32> visited;
+	static u32 stamp = 0;
+	if(visited.size() != g_rooms->rooms.size()) {
+		visited.assign(g_rooms->rooms.size(), 0);
+		stamp = 0;
+	}
+	if(++stamp == 0) {
+		std::fill(visited.begin(), visited.end(), 0);
+		stamp = 1;
+	}
+	queue.clear();
+	queue.emplace_back(from, 0);
+	visited[size_t(from)] = stamp;
 	size_t head = 0;
-	auto seen = [&](RoomHandle h) {
-		for(size_t i = 0; i < n; ++i) {
-			if(q[i] == h) {
-				return true;
-			}
-		}
-		return false;
-	};
-	q[n] = from;
-	hop[n] = 0;
-	n++;
-	while(head < n) {
-		const RoomHandle cur = q[head];
-		const int h = hop[head];
+	while(head < queue.size()) {
+		const RoomHandle cur = queue[head].first;
+		const int h = queue[head].second;
 		head++;
 		if(h >= maxHops) {
 			continue;
@@ -212,10 +215,9 @@ bool roomsConnected(RoomHandle from, RoomHandle to, int maxHops) {
 			if(next == to) {
 				return true;
 			}
-			if(n < std::size(q) && !seen(next)) {
-				q[n] = next;
-				hop[n] = h + 1;
-				n++;
+			if(visited[size_t(next)] != stamp) {
+				visited[size_t(next)] = stamp;
+				queue.emplace_back(next, h + 1);
 			}
 		}
 	}
@@ -349,6 +351,9 @@ size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t
 			: (el->intensity * el->fallend * bonus / (outside * outside));
 		cands[n++] = { score, el, pos };
 	};
+	// The held torch scores above everything, so it goes in before the static lights can fill
+	// cands[] in a level with hundreds of them in range.
+	consider(lightHandleGet(torchLightHandle));
 	for(const EERIE_LIGHT & light : g_staticLights) {
 		if(light.m_exists && light.m_ignitionStatus) {
 			consider(&light);
@@ -1631,7 +1636,10 @@ struct D3D12Renderer::Impl {
 	DxPtr<ID3D12RootSignature> root;
 	DxPtr<ID3D12Resource> upload;
 	DxPtr<ID3D12Resource> white;
+	//! Staging buffers and freed textures that the open command list may still name. They move to
+	//! `retire` only once that list is submitted, tagged with the fence value signalled after it.
 	std::vector<DxPtr<ID3D12Resource>> inflight;
+	std::vector<ID3D12Resource *> releaseOnSubmit;
 	std::vector<std::pair<ID3D12Resource *, UINT64>> retire;
 	HANDLE fenceEvent = nullptr;
 	UINT64 fenceValue = 0;
@@ -1647,6 +1655,9 @@ struct D3D12Renderer::Impl {
 	std::vector<unsigned> freeSrv;
 	UINT uploadOffset = 0;
 	UINT uploadLimit = 0;
+	UINT uploadBytes = 0;
+	//! Bytes this frame asked of its upload region, including draws that did not fit.
+	UINT uploadDemand = 0;
 	void * uploadMapped = nullptr;
 	bool recording = false;
 	bool unusable = false;
@@ -1992,6 +2003,12 @@ void D3D12Renderer::freeTexture(ID3D12Resource * resource) {
 		resource->Release();
 		return;
 	}
+	if(m->recording) {
+		// The open list may still name this texture, and a mid-frame waitGpu() signals
+		// fenceValue + 1 before that list is submitted, so the tag has to wait for the submit.
+		m->releaseOnSubmit.push_back(resource);
+		return;
+	}
 	m->retire.push_back({ resource, m->fenceValue + 1 });
 }
 
@@ -2158,6 +2175,21 @@ void D3D12Renderer::retireCompleted() {
 	m->retire.resize(live);
 }
 
+//! Hand everything the just-submitted command list referenced to the retire list, to be released
+//! once `value` (the fence signalled after that submit) completes.
+void D3D12Renderer::retireSubmitted(std::uint64_t value) {
+	for(DxPtr<ID3D12Resource> & res : m->inflight) {
+		if(res) {
+			m->retire.push_back({ res.forget(), value });
+		}
+	}
+	m->inflight.clear();
+	for(ID3D12Resource * res : m->releaseOnSubmit) {
+		m->retire.push_back({ res, value });
+	}
+	m->releaseOnSubmit.clear();
+}
+
 bool D3D12Renderer::waitFence(std::uint64_t value) {
 	if(!m || !m->fence || value == 0) {
 		return true;
@@ -2243,12 +2275,11 @@ bool D3D12Renderer::waitGpu() {
 	}
 	const UINT64 value = ++m->fenceValue;
 	if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
-		m->inflight.clear();
 		return false;
 	}
-	const bool drained = waitFence(value);
-	m->inflight.clear();
-	return drained;
+	// Staging buffers recorded into a list that is still open are not covered by this signal:
+	// they stay in `inflight` until that list is submitted (retireSubmitted).
+	return waitFence(value);
 }
 
 bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, unsigned width,
@@ -2357,8 +2388,9 @@ bool D3D12Renderer::uploadTextureData(ID3D12Resource * dest, const void * bgra, 
 		m->list->Close();
 		ID3D12CommandList * lists[] = { m->list.Get() };
 		m->queue->ExecuteCommandLists(1, lists);
-		waitGpu();
 		m->recording = false;
+		retireSubmitted(m->fenceValue + 1);
+		waitGpu();
 	}
 	return true;
 }
@@ -2508,24 +2540,7 @@ bool D3D12Renderer::createFrameResources() {
 	}
 	m->fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 	
-	D3D12_RESOURCE_DESC ub {};
-	ub.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	ub.Width = kUploadBytes;
-	ub.Height = 1;
-	ub.DepthOrArraySize = 1;
-	ub.MipLevels = 1;
-	ub.SampleDesc.Count = 1;
-	ub.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-	D3D12_HEAP_PROPERTIES uploadHeap {};
-	uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
-	if(FAILED(m->device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &ub,
-	                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-	                                             IID_PPV_ARGS(m->upload.put())))) {
-		return false;
-	}
-	if(FAILED(m->upload->Map(0, nullptr, &m->uploadMapped)) || !m->uploadMapped) {
-		LogError << "D3D12: upload buffer Map failed";
-		m->uploadMapped = nullptr;
+	if(!createUploadBuffer(kUploadBytes)) {
 		return false;
 	}
 	
@@ -2776,6 +2791,7 @@ void D3D12Renderer::releaseDevice() {
 		return;
 	}
 	waitGpu();
+	retireSubmitted(m->fenceValue);
 	for(auto & item : m->retire) {
 		if(item.first) {
 			item.first->Release();
@@ -2941,6 +2957,42 @@ void D3D12Renderer::SetFillMode(FillMode mode) {
 	m_fillMode = mode;
 }
 
+//! (Re)create the per-frame vertex upload ring with `bytes` split evenly between the frames.
+//!
+//! Only called with no command list open. An existing buffer is still read by the frames in
+//! flight, so it is retired behind the next signal rather than released here.
+bool D3D12Renderer::createUploadBuffer(unsigned bytes) {
+	D3D12_RESOURCE_DESC ub {};
+	ub.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	ub.Width = bytes;
+	ub.Height = 1;
+	ub.DepthOrArraySize = 1;
+	ub.MipLevels = 1;
+	ub.SampleDesc.Count = 1;
+	ub.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	D3D12_HEAP_PROPERTIES uploadHeap {};
+	uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+	DxPtr<ID3D12Resource> next;
+	if(FAILED(m->device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &ub,
+	                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+	                                             IID_PPV_ARGS(next.put())))) {
+		LogError << "D3D12: upload buffer of " << bytes << " bytes failed";
+		return false;
+	}
+	void * mapped = nullptr;
+	if(FAILED(next->Map(0, nullptr, &mapped)) || !mapped) {
+		LogError << "D3D12: upload buffer Map failed";
+		return false;
+	}
+	if(m->upload) {
+		freeTexture(m->upload.forget());
+	}
+	m->upload = std::move(next);
+	m->uploadMapped = mapped;
+	m->uploadBytes = bytes;
+	return true;
+}
+
 bool D3D12Renderer::ensureCommandList() {
 	if(!m || m->unusable || !m->device || !m->list) {
 		return false;
@@ -2960,8 +3012,20 @@ bool D3D12Renderer::ensureCommandList() {
 	if(FAILED(m->list->Reset(m->allocators[m->frame].Get(), nullptr))) {
 		return false;
 	}
+	const UINT oldRegion = m->uploadBytes / kFrameCount;
+	if(m->uploadDemand > oldRegion && m->uploadBytes < kUploadBytesMax) {
+		// Last frame dropped draws. Grow before recording starts, while no list names the buffer.
+		const UINT64 want = (std::min)(UINT64(m->uploadDemand) * 3 / 2 * kFrameCount,
+		                               UINT64(kUploadBytesMax));
+		const UINT bytes = (UINT(want) + 0xffffu) & ~0xffffu;
+		if(createUploadBuffer(bytes)) {
+			LogInfo << "D3D12: upload buffer grown to " << (bytes >> 20) << " MiB ("
+			        << m->uploadDemand << " bytes asked in one frame)";
+		}
+	}
+	m->uploadDemand = 0;
 	m->recording = true;
-	const UINT region = kUploadBytes / kFrameCount;
+	const UINT region = m->uploadBytes / kFrameCount;
 	m->uploadOffset = m->frame * region;
 	m->uploadLimit = m->uploadOffset + region;
 	return true;
@@ -3242,12 +3306,19 @@ void D3D12Renderer::drawGpuVerts(Primitive primitive, const void * verts, size_t
 		return;
 	}
 	const UINT bytes = UINT(stride * count);
-	if(m->uploadOffset + bytes > m->uploadLimit) {
-		m->uploadOffset = m->frame * (kUploadBytes / kFrameCount);
-	}
 	const UINT aligned = (m->uploadOffset + 255u) & ~255u;
+	const UINT regionStart = m->uploadLimit - m->uploadBytes / kFrameCount;
+	m->uploadDemand = (std::max)(m->uploadDemand, aligned - regionStart) + bytes;
 	if(aligned + bytes > m->uploadLimit) {
-		LogWarning << "D3D12: upload buffer full, dropping draw";
+		// Never wrap back to the start of the region: draws already recorded in this list read
+		// those vertices when the GPU runs it, so they would come out as this draw's geometry.
+		// Drop the draw; ensureCommandList() grows the buffer before the next frame.
+		static int s_dropped = 0;
+		if(s_dropped < 8) {
+			LogWarning << "D3D12: upload buffer full (" << (m->uploadBytes >> 20)
+			           << " MiB), dropping draw — growing next frame";
+			s_dropped++;
+		}
 		return;
 	}
 	m->uploadOffset = aligned;
@@ -3452,6 +3523,7 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 	ID3D12CommandList * lists[] = { m->list.Get() };
 	m->queue->ExecuteCommandLists(1, lists);
 	m->recording = false;
+	retireSubmitted(m->fenceValue + 1);
 	waitGpu();
 	void * mapped = nullptr;
 	if(FAILED(readback->Map(0, nullptr, &mapped)) || !mapped) {
@@ -4089,8 +4161,8 @@ void D3D12Renderer::showFrame() {
 		m_sl->afterPresent();
 	}
 	const UINT64 value = ++m->fenceValue;
+	retireSubmitted(value);
 	if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
-		m->inflight.clear();
 		markUnusable();
 		m->recording = false;
 		return;

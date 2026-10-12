@@ -13,11 +13,10 @@
 
     What the report can decide from existing logs:
       Pdxr-5 - max n= on DXR lights set changed (shadow set is 16, not 256)
+      F4   - 'upload buffer full' fires on every overflow of a frame's upload
+             region (the ring no longer wraps), and 'upload buffer grown' says
+             the next frame recovered
       F5   - DEVICE_REMOVED / timeout / non-zero exit
-    What it cannot decide, and says so:
-      F4   - the ring wrap is silent. The 'upload buffer full' line it counts fires
-             only for a single draw larger than the whole region, which is a
-             different case, so no amount of clean sweeps rules F4 out.
     F163 / torch-by-eye / PIX stay manual. F155 / F115 / F128 / F154 are CMake.
 
 .EXAMPLE
@@ -345,16 +344,11 @@ foreach ($r in $rows) {
 [void]$report.Add('')
 [void]$report.Add('Verdicts (observed / not observed - not a code fix):')
 if ($f4Hits -gt 0) {
-    [void]$report.Add(('F4     OBSERVED   upload buffer full on {0} level(s) - a single draw exceeded the region.' -f $f4Hits))
-    [void]$report.Add('                  That is the loud case. The silent wrap below is still unmeasured.')
+    # The ring no longer wraps: an overflow drops draws for one frame and the buffer grows.
+    [void]$report.Add(('F4     OBSERVED   upload region overflowed on {0} level(s). Check for the' -f $f4Hits))
+    [void]$report.Add('                  "upload buffer grown" line; without it the level keeps dropping draws.')
 } else {
-    # 'upload buffer full, dropping draw' only fires when one draw is larger than the
-    # whole region. F4 is the wrap that happens before that, which logs nothing at all,
-    # so zero hits here says nothing about F4 either way. Reporting it as "not seen"
-    # invited the opposite reading.
-    [void]$report.Add('F4     CANNOT TELL  this sweep has no probe for it. The failure is a silent ring wrap;')
-    [void]$report.Add('                  the only log line nearby fires for a different, louder case. To decide')
-    [void]$report.Add('                  F4, log once per frame where uploadOffset is reset in drawGpuVerts.')
+    [void]$report.Add('F4     not seen   no frame overflowed its upload region.')
 }
 if ($maxN -ge 16) {
     [void]$report.Add(('Pdxr-5 NOTE      shadow set hit n={0} (cap is 16 lights, not 256 cands). Check those levels by eye.' -f $maxN))

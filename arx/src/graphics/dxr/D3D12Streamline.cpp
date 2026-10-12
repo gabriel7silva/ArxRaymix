@@ -229,7 +229,9 @@ PSOut PSMain(float4 pos : SV_Position) {
 	float4 prevH = mul(prevViewProj, float4(world, 1.0));
 	float2 prevNdc = prevH.xy / max(prevH.w, 1e-4);
 	PSOut o;
-	o.mvec = (float2(ndcX, ndcY) - prevNdc) * 0.5;
+	// DLSS wants the UV offset from this pixel to where it was last frame (prev = cur + mvec).
+	// NDC y points up and UV y points down, so only x needs the prev - cur order spelled out.
+	o.mvec = float2(prevNdc.x - ndcX, ndcY - prevNdc.y) * 0.5;
 	o.nrmR = float4(nView, rough);
 	o.albedo = float4(base, 1.0);
 	o.specA = float4(f0, 1.0);
@@ -1213,10 +1215,11 @@ bool D3D12Streamline::clearMotionVectors(const Frame & frame) {
 #endif
 }
 
-bool D3D12Streamline::setConstants(const Frame & frame, void * token) {
+bool D3D12Streamline::setConstants(const Frame & frame, void * token, bool cameraMotionInMvec) {
 #if !ARX_HAVE_STREAMLINE
 	ARX_UNUSED(frame);
 	ARX_UNUSED(token);
+	ARX_UNUSED(cameraMotionInMvec);
 	return false;
 #else
 	sl::Constants c {};
@@ -1243,7 +1246,11 @@ bool D3D12Streamline::setConstants(const Frame & frame, void * token) {
 	const int aspectW = frame.outputWidth > 0 ? frame.outputWidth : frame.width;
 	c.cameraAspectRatio = float(aspectW) / float((std::max)(aspectH, 1));
 	c.depthInverted = sl::Boolean::eFalse;
-	c.cameraMotionIncluded = sl::Boolean::eTrue;
+	// Only the RR G-buffer pass writes real motion vectors. Every other path hands Streamline a
+	// cleared buffer, and claiming camera motion was in it told DLSS / DLSS-G the camera never
+	// moved: history smeared and ray traced shadows dropped out while turning. With eFalse,
+	// Streamline adds camera motion itself from depth and clipToPrevClip.
+	c.cameraMotionIncluded = cameraMotionInMvec ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	c.motionVectors3D = sl::Boolean::eFalse;
 	c.reset = (m_firstFrame || frame.reset) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 	c.orthographicProjection = sl::Boolean::eFalse;
@@ -1744,7 +1751,7 @@ void D3D12Streamline::prepareFrameGen(const Frame & frame) {
 		if(!frame.wantDlss && !frame.wantRr && !clearMotionVectors(frame)) {
 			return;
 		}
-		if(!setConstants(frame, token)) {
+		if(!setConstants(frame, token, false)) {
 			return;
 		}
 		m_constantsSet = true;
@@ -1819,14 +1826,18 @@ bool D3D12Streamline::evaluate(const Frame & frame) {
 		LogError << "Streamline: slGetNewFrameToken failed";
 		return fail();
 	}
-	if(!setConstants(frame, token)) {
+	// The G-buffer pass reprojects through m_prevViewProj, which setConstants() advances to this
+	// frame's camera. Run it first, or every motion vector comes out as zero.
+	const bool tryRr = frame.wantRr && m_rr && !m_rrFailed;
+	const bool gbuffersOk = tryRr && rasterGbuffers(frame);
+	if(!setConstants(frame, token, gbuffersOk)) {
 		return fail();
 	}
 	m_constantsSet = true;
 	bool ok = false;
 	const char * path = nullptr;
-	if(frame.wantRr && m_rr && !m_rrFailed) {
-		if(rasterGbuffers(frame) && evaluateRr(frame, token)) {
+	if(tryRr) {
+		if(gbuffersOk && evaluateRr(frame, token)) {
 			ok = true;
 			path = "DLSS-RR";
 			m_rrLive = true;

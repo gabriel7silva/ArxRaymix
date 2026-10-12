@@ -113,7 +113,7 @@ private:
 	bool ensureTargets(int inputW, int inputH, int outputW, int outputH, unsigned needed);
 	bool rasterGbuffers(const Frame & frame);
 	bool clearMotionVectors(const Frame & frame);
-	bool setConstants(const Frame & frame, void * token);
+	bool setConstants(const Frame & frame, void * token, bool cameraMotionInMvec);
 	void commitCamera(const Frame & frame);
 	void resetState();
 	bool evaluateRr(const Frame & frame, void * token);
