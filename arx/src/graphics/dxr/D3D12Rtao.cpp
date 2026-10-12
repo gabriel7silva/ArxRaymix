@@ -560,7 +560,22 @@ void RayGen() {
 	const float dH = useL ? dL : dR;
 	const float dV = useU ? dU : dD;
 	const float discTol = max(4.0 * footprint, 1.0);
-	const bool disc = (dH > discTol || dV > discTol);
+	// A floor or wall seen at a grazing angle steps far more than 4 footprints per pixel and
+	// still is one plane. 1/w is affine in screen space across a plane, so its second difference
+	// over the three pixels of an axis stays near zero there and is large only at a real
+	// silhouette. Without this, which pixels counted as "discontinuity" (and got the
+	// view-dependent normal below) changed as the camera turned, and shadows on those surfaces
+	// blinked in and out with the view angle.
+	float iC = 1.0 / wC;
+	float iR = (zR <= 0.0 || zR >= SKY_Z) ? 0.0 : (zR - projA) / projB;
+	float iL = (zL <= 0.0 || zL >= SKY_Z) ? 0.0 : (zL - projA) / projB;
+	float iD = (zD <= 0.0 || zD >= SKY_Z) ? 0.0 : (zD - projA) / projB;
+	float iU = (zU <= 0.0 || zU >= SKY_Z) ? 0.0 : (zU - projA) / projB;
+	const bool planarH = iR > 0.0 && iL > 0.0
+		&& abs(iL + iR - 2.0 * iC) <= 0.1 * max(abs(iR - iC), abs(iC - iL)) + 1e-7 * iC;
+	const bool planarV = iD > 0.0 && iU > 0.0
+		&& abs(iU + iD - 2.0 * iC) <= 0.1 * max(abs(iD - iC), abs(iC - iU)) + 1e-7 * iC;
+	const bool disc = (dH > discTol && !planarH) || (dV > discTol && !planarV);
 	float3 n;
 	if(disc) {
 		n = normalize(cameraPos - pos);
@@ -634,7 +649,11 @@ void RayGen() {
 				continue;
 			}
 			float3 ldir = toL / d;
-			float ndotl = saturate(dot(n, ldir));
+			// On a silhouette n is only the direction to the camera, not the surface. Weighting by
+			// it made every light behind the line of sight count zero there, and with no light
+			// counted the pixel came out fully lit: edges lost their shadow as the camera turned.
+			// The ratio below only needs each light's share, so weigh silhouettes by distance alone.
+			float ndotl = disc ? 1.0 : saturate(dot(n, ldir));
 			// Shadows reach further than the raster falloff, and the light selector in
 			// D3D12Renderer::fillShadowLights ranks candidates by this same fallend * 1.35.
 			// Drop the factor here and the selector keeps handing shadow slots to lights this

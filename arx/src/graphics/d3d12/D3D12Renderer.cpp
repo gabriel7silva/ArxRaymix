@@ -154,17 +154,13 @@ u32 toPacked(ColorRGBA rgba) {
 	return Color::fromRGBA(rgba).toBGRA().t;
 }
 
+// The held torch casts from just below the eye, independent of where the player looks. It used
+// to sit 18 units along the view direction: that light swung around the camera with every mouse
+// move, and since it outranks every other light and lights whatever is in front of the camera,
+// the wall torches' shadows washed out or came back depending only on the view angle. Below the
+// eye it still never sits inside the lens (the player mesh is not in the shadow-ray mask).
 Vec3f heldTorchPos(const glm::vec3 & cam) {
-	const Camera & view = g_camera ? *g_camera : g_playerCamera;
-	Vec3f fwd = angleToVector(view.angle);
-	const float len = glm::length(fwd);
-	if(len > 1e-6f) {
-		fwd /= len;
-	}
-	Vec3f pos(cam.x, cam.y, cam.z);
-	pos += fwd * 18.f;
-	pos.y = cam.y + 12.f;
-	return pos;
+	return Vec3f(cam.x, cam.y + 12.f, cam.z);
 }
 
 u32 g_shadowLightSetHash = 0;
@@ -2078,6 +2074,27 @@ static void CALLBACK arxD3D12MessageCallback(D3D12_MESSAGE_CATEGORY category,
 	ARX_UNUSED(category);
 	ARX_UNUSED(context);
 	const char * text = description ? description : "(no description)";
+	// Benign by design, and they drowned everything else (5700 of 5750 lines in one session):
+	// the world is cleared to the zone's fog colour, which no clear value fixed at creation can
+	// match, and swapchain buffers cannot carry one at all. Buffers created in COPY_DEST are
+	// promoted from COMMON on first copy anyway. Depth is cleared to whatever the caller asks,
+	// not only the 1.0 the buffers are created with. Say each once, then stay quiet.
+	if(id == D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE
+	   || id == D3D12_MESSAGE_ID_CLEARDEPTHSTENCILVIEW_MISMATCHINGCLEARVALUE
+	   || id == D3D12_MESSAGE_ID_CREATERESOURCE_STATE_IGNORED) {
+		static bool s_clearSeen = false;
+		static bool s_depthSeen = false;
+		static bool s_stateSeen = false;
+		bool & seen = (id == D3D12_MESSAGE_ID_CREATERESOURCE_STATE_IGNORED) ? s_stateSeen
+		            : (id == D3D12_MESSAGE_ID_CLEARDEPTHSTENCILVIEW_MISMATCHINGCLEARVALUE) ? s_depthSeen
+		            : s_clearSeen;
+		if(seen) {
+			return;
+		}
+		seen = true;
+		LogInfo << "D3D12 validation [" << unsigned(id) << "] (benign, further ones muted): " << text;
+		return;
+	}
 	switch(severity) {
 		case D3D12_MESSAGE_SEVERITY_CORRUPTION:
 		case D3D12_MESSAGE_SEVERITY_ERROR:
