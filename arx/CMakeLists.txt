@@ -958,6 +958,7 @@ set(CORE_SOURCES
 	src/core/Localisation.cpp
 	src/core/SaveGame.cpp
 	src/core/Startup.cpp
+	src/core/UpdateCheck.cpp
 )
 
 set(GAME_SOURCES
@@ -1304,7 +1305,10 @@ endif()
 if(WIN32)
 	set(ARX_HAVE_D3D9 1)
 	set(ARX_HAVE_D3D12 1)
-	list(APPEND ARX_LIBRARIES d3d9 d3d12 dxgi d3dcompiler dxguid)
+	list(APPEND ARX_LIBRARIES d3d9 d3d12 dxgi d3dcompiler dxguid winhttp)
+	# Update check (core/UpdateCheck.cpp). Kept out of the unity blob: winhttp.h and wininet.h
+	# cannot share a translation unit.
+	set(ARX_UPDATE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/HttpGet.cpp")
 	# Compiled outside the custom unity blob: d3d9.h #defines `interface`.
 	set(ARX_D3D9_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/graphics/d3d9/D3D9Renderer.cpp")
 	set(ARX_D3D12_SOURCES
@@ -1875,6 +1879,26 @@ endforeach()
 
 if(ARX_HAVE_D3D9)
 	target_sources(arx PRIVATE ${ARX_D3D9_SOURCES})
+endif()
+if(ARX_UPDATE_SOURCES)
+	target_sources(arx PRIVATE ${ARX_UPDATE_SOURCES})
+	# The player launcher, ArxRaymix.exe (tools/launcher): checks for a newer release, updates the
+	# package and starts arx.exe. A plain executable that links none of the engine; built
+	# whenever arx is, so `--target arx` and scripts/package.ps1 always have it.
+	set(arxlauncher_SOURCES
+		tools/launcher/Launcher.cpp
+		tools/launcher/Zip.cpp
+		tools/launcher/Zip.h
+		src/core/UpdateRelease.h
+		src/platform/HttpGet.cpp
+		src/platform/HttpGet.h
+	)
+	create_version_resource(arxlauncher "${VERSION_NAME} Launcher")
+	add_executable(arxlauncher WIN32 ${arxlauncher_SOURCES} ${arxlauncher-version.rc} ${arx-libertatis-icon.rc})
+	set_target_properties(arxlauncher PROPERTIES OUTPUT_NAME ArxRaymix)
+	target_include_directories(arxlauncher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(arxlauncher PRIVATE winhttp bcrypt comctl32 shell32 ${ZLIB_LIBRARIES})
+	add_dependencies(arx arxlauncher)
 endif()
 if(ARX_HAVE_D3D12)
 	target_sources(arx PRIVATE ${ARX_D3D12_SOURCES})

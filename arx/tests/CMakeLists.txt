@@ -14,6 +14,9 @@ set(arxtest_TESTCASES
 	tests/core/LocalisationEncodingTest.h
 	tests/core/LocalisationEncodingTest.cpp
 	
+	tests/core/UpdateReleaseTest.h
+	tests/core/UpdateReleaseTest.cpp
+	
 	tests/graphics/ColorTest.h
 	tests/graphics/ColorTest.cpp
 	

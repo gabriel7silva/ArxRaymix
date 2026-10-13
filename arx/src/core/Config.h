@@ -288,6 +288,9 @@ public:
 		std::string debug; //!< Logger debug levels.
 		
 		std::string realtimeOverride;
+
+		//! Ask GitHub at startup whether a newer Arx Raymix exists (core/UpdateCheck.h).
+		bool checkForUpdates;
 		
 	} misc;
 	

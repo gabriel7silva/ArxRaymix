@@ -131,7 +131,8 @@ constexpr const bool
 	rawMouseInput = true,
 	borderTurning = true,
 	useAltRuneRecognition = true,
-	improvedBowAim = true;
+	improvedBowAim = true,
+	checkForUpdates = true;
 
 #ifdef ARX_DEBUG
 const bool allowConsole = true;
@@ -363,7 +364,8 @@ constexpr const std::string_view
 	migration = "migration",
 	quicksaveSlots = "quicksave_slots",
 	debugLevels = "debug",
-	realtimeOverride = "realtime_override";
+	realtimeOverride = "realtime_override",
+	checkForUpdates = "check_for_updates";
 
 } // namespace Key
 
@@ -605,6 +607,7 @@ bool Config::save() {
 	writer.writeKey(Key::quicksaveSlots, misc.quicksaveSlots);
 	writer.writeKey(Key::debugLevels, misc.debug);
 	writer.writeKey(Key::realtimeOverride, misc.realtimeOverride);
+	writer.writeKey(Key::checkForUpdates, misc.checkForUpdates);
 	
 	return writer.flush();
 }
@@ -783,6 +786,7 @@ bool Config::init(const fs::path & file) {
 	misc.quicksaveSlots = std::max(reader.getKey(Section::Misc, Key::quicksaveSlots, Default::quicksaveSlots), 1);
 	misc.debug = reader.getKey(Section::Misc, Key::debugLevels, Default::debugLevels);
 	misc.realtimeOverride = reader.getKey(Section::Misc, Key::realtimeOverride, Default::realtimeOverride);
+	misc.checkForUpdates = reader.getKey(Section::Misc, Key::checkForUpdates, Default::checkForUpdates);
 	
 	return loaded;
 }

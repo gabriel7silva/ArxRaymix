@@ -52,12 +52,33 @@ Package for players (needs a RelWithDebInfo build; run `fetch-streamline.ps1` fi
 DLSS / Frame Generation):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.4
+powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version v1.4
 ```
 
-The zip holds `arx.exe`, the DLLs CMake staged next to it, `data\` (from `arx/data/core`), the
-licence, a `README.txt` and `Arx Raymix - DirectX 9.bat`. It never holds game data, PDBs (unless
-`-IncludePdb`), `data.dirs` or the imported PT-BR speech WAVs, which are game audio.
+The zip holds `arx.exe`, the launcher `ArxRaymix.exe`, the DLLs CMake staged next to it, `data\`
+(from `arx/data/core`), the licence, a `README.txt`, `Arx Raymix - DirectX 9.bat` and
+`package.txt` (the version, then every file in the zip). `<zip>.sha256` is written next to it. The
+zip never holds game data, PDBs (unless `-IncludePdb`), `data.dirs` or the imported PT-BR speech
+WAVs, which are game audio.
+
+### Releases and updates
+
+1. Set the first line of `arx/VERSION` to the new version (`Arx Raymix 1.5`) and merge it.
+2. Tag that commit and push the tag: `git tag v1.5` then `git push origin v1.5`.
+3. `.github/workflows/release.yml` builds, runs `package.ps1 -Version v1.5` and publishes a
+   GitHub Release with `ArxRaymix-v1.5.zip` and `ArxRaymix-v1.5.zip.sha256`. It stops if the tag
+   and `arx/VERSION` disagree. Upload the same zip to Nexus Mods by hand.
+
+Players who start `ArxRaymix.exe` are offered the new version: it downloads the zip, checks the
+SHA-256, moves the files listed in the old `package.txt` to `backup\` and puts the new ones in
+place. `ArxRaymix.exe --rollback` restores `backup\`; `ArxRaymix.exe --install <zip>` installs a
+zip downloaded by hand (from Nexus, say), checked against `<zip>.sha256` when it is next to it;
+`--no-update` skips the check. The launcher writes `launcher.log` next to itself.
+
+The game itself asks the same endpoint once per launch (skipped when the launcher already did) and
+shows "New version available" in the main menu. **Options → Interface → Check for updates**
+(`check_for_updates` in `[misc]`) and `ARX_NO_UPDATE_CHECK=1` turn it off. `ARX_UPDATE_API=<https
+URL>` points both at another repository's `releases/latest`, for testing.
 
 Plausible load sweep (loads levels, does not play them):
 

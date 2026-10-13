@@ -67,6 +67,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "core/GameTime.h"
 #include "core/Localisation.h"
 #include "core/SaveGame.h"
+#include "core/UpdateCheck.h"
 #include "core/URLConstants.h"
 #include "core/Version.h"
 
@@ -219,6 +220,9 @@ bool ArxGame::initialize() {
 		LogCritical << "Failed to initialize the config subsystem";
 		return false;
 	}
+
+	// Runs in the background; the main menu shows the result if a newer release exists.
+	updates::startCheck();
 	
 	init = initWindow();
 	if(!init) {

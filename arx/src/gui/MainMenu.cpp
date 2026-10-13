@@ -39,6 +39,7 @@
 #include "core/Core.h"
 #include "core/Localisation.h"
 #include "core/SaveGame.h"
+#include "core/UpdateCheck.h"
 #include "core/Version.h"
 
 #include "gui/Hud.h"
@@ -74,6 +75,7 @@
 #include "io/log/Logger.h"
 
 #include "platform/Platform.h"
+#include "platform/Process.h"
 
 #include "scene/GameSound.h"
 
@@ -1696,6 +1698,16 @@ public:
 		}
 		
 		{
+			std::string_view label = getLocalised("system_menus_options_interface_check_updates");
+			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
+			cb->setChecked(config.misc.checkForUpdates);
+			cb->stateChanged = [](bool checked) noexcept {
+				config.misc.checkForUpdates = checked;
+			};
+			addCenter(std::move(cb));
+		}
+		
+		{
 			std::string_view label = getLocalised("system_menus_options_interface_cinematic_widescreen_mode");
 			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
 			cb->valueChanged = [](int pos, std::string_view /* string */) noexcept {
@@ -2399,6 +2411,7 @@ MainMenu::MainMenu()
 	, m_requestedPage(Page_None)
 	, m_background(nullptr)
 	, m_resumeGame(nullptr)
+	, m_updateNotice(nullptr)
 	, m_selected(nullptr)
 { }
 
@@ -2504,6 +2517,23 @@ void MainMenu::init() {
 }
 
 void MainMenu::update() {
+	
+	if(!m_updateNotice) {
+		if(std::optional<updates::Available> release = updates::available()) {
+			// Right-aligned under the version line; clicking opens the release page.
+			std::string text = std::string(getLocalised("system_menus_main_update_available")) + " " + release->tag;
+			float x = g_size.right - 20 * g_sizeRatio.x - hFontControls->getTextSize(text).width();
+			auto txt = std::make_unique<TextWidget>(hFontControls, text);
+			txt->clicked = [url = release->pageUrl](Widget * /* widget */) {
+				if(!url.empty()) {
+					platform::launchDefaultProgram(url);
+				}
+			};
+			txt->setPosition(RATIO_2(Vec2f(x / g_sizeRatio.x, 80)) + Vec2f(0.f, float(hFontControls->getLineHeight())));
+			m_updateNotice = txt.get();
+			m_widgets.add(std::move(txt));
+		}
+	}
 	
 	if(m_resumeGame) {
 		m_resumeGame->setEnabled(g_canResumeGame || !savegames.empty());

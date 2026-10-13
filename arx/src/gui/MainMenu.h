@@ -64,6 +64,7 @@ private:
 	WidgetContainer m_widgets;
 	
 	TextWidget * m_resumeGame;
+	TextWidget * m_updateNotice;
 	
 	Widget * m_selected;
 	

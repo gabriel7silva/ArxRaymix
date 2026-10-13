@@ -6,11 +6,15 @@
     Stages a built arx.exe into dist\ArxRaymix-<version>\ and zips it:
 
       arx.exe and every DLL next to it (SDL2, OpenAL, DXC, Streamline when fetched)
+      ArxRaymix.exe         the launcher: checks GitHub for a newer release, then starts arx.exe
+      package.txt           the version, then every packaged file (the launcher's manifest)
       data\                 arx\data\core (localisation overlays, fonts)
       LICENSE, AUTHORS, README.txt
       licenses\             one file per bundled library (SDL2, OpenAL Soft, FreeType,
                             zlib, DXC, NVIDIA Streamline / DLSS, ...)
       Arx Raymix - DirectX 9.bat
+
+    Next to the zip goes <zip>.sha256, which the launcher checks before installing an update.
 
     arx.exe finds Arx Fatalis through the Steam / GOG registry entries on its own and
     reads data\ from its own folder, so double-clicking it is the whole install.
@@ -64,6 +68,11 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 # Executable and runtime DLLs: CMake already staged everything arx.exe loads next to it.
 Copy-Item -LiteralPath $exe -Destination $stage
+$launcher = Join-Path $binDir 'ArxRaymix.exe'
+if (-not (Test-Path -LiteralPath $launcher)) {
+    throw "ArxRaymix.exe not found next to arx.exe. Rebuild the arx target; it builds the launcher too."
+}
+Copy-Item -LiteralPath $launcher -Destination $stage
 $dlls = Get-ChildItem -LiteralPath $binDir -Filter '*.dll'
 foreach ($dll in $dlls) {
     Copy-Item -LiteralPath $dll.FullName -Destination $stage
@@ -91,7 +100,8 @@ if (-not $haveStreamline) {
 $dataSrc = Join-Path $root 'arx\data\core'
 $dataDst = Join-Path $stage 'data'
 Copy-Item -LiteralPath $dataSrc -Destination $dataDst -Recurse
-Get-ChildItem -LiteralPath $dataDst -Recurse -Include '*.wav', '*.dirs' | Remove-Item -Force
+# -File: on Windows PowerShell 5.1, -Include with -LiteralPath also matches whole folders.
+Get-ChildItem -LiteralPath $dataDst -Recurse -File -Include '*.wav', '*.dirs' | Remove-Item -Force
 Get-ChildItem -LiteralPath $dataDst -Recurse -Directory |
     Sort-Object { $_.FullName.Length } -Descending |
     Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force) } |
@@ -161,7 +171,15 @@ DLSS and Frame Generation. You need your own copy of Arx Fatalis (Steam or GOG).
 Install
   1. Install Arx Fatalis from Steam or GOG and run it once.
   2. Extract this folder anywhere. It does not go inside the game folder.
-  3. Run arx.exe.
+  3. Run ArxRaymix.exe. It checks for a newer Arx Raymix, offers to install it, then starts
+     the game. arx.exe starts the game without that check.
+
+Updates
+  ArxRaymix.exe downloads the new release from GitHub, checks its SHA-256 and replaces only the
+  files listed in package.txt. The previous version goes to the backup folder, and
+  "ArxRaymix.exe --rollback" puts it back. cfg.ini, saves and the Arx Fatalis files are never
+  touched. The main menu also says when a new version is out; Options -> Interface ->
+  Check for updates turns both checks off.
 
 If the game is not found, point at the folder that holds data.pak:
   arx.exe --data-dir "D:\Games\Arx Fatalis"
@@ -189,12 +207,20 @@ start "" "%~dp0arx.exe" %*
 "@
 Set-Content -LiteralPath (Join-Path $stage 'Arx Raymix - DirectX 9.bat') -Value $bat -Encoding ASCII
 
+# The launcher's manifest: the version, then every file it may replace on update.
+$files = Get-ChildItem -LiteralPath $stage -Recurse -File |
+    ForEach-Object { $_.FullName.Substring($stage.Length + 1).Replace([char]92, [char]47) } |
+    Sort-Object
+$manifest = @($Version) + $files
+[System.IO.File]::WriteAllText((Join-Path $stage 'package.txt'), (($manifest -join "`r`n") + "`r`n"))
+
 if (Test-Path -LiteralPath $zip) {
     Remove-Item -LiteralPath $zip -Force
 }
 Compress-Archive -Path $stage -DestinationPath $zip
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 $size = (Get-Item -LiteralPath $zip).Length
+[System.IO.File]::WriteAllText("$zip.sha256", "$hash  $name.zip`n")
 
 Write-Host "folder : $stage"
 Write-Host "zip    : $zip"
