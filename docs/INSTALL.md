@@ -88,7 +88,7 @@ As an alternative, the engine also reads the data folder from the registry value
 | Where | What |
 |---|---|
 | Options → Ray tracing | **Preset** Off / Low / Medium / High / Custom, each effect separately (including **Volumetric fog**), **Ray tracing distance**, **DLSS Ray Reconstruction (Experimental)**. Applies immediately |
-| Options → Video | **Upscaling** (DLSS mode), **Frame Generation**, and the graphics API (DirectX 12 / 9, applies on the next launch) |
+| Options → Video | **Upscaling** (DLSS mode), **Frame Generation**, and the graphics API (DirectX 12 / DirectX 9 / OpenGL, applies on the next launch; ray tracing and DLSS need DirectX 12) |
 | Options → Render | **Render distance**; antialiasing is locked off while DLSS is on |
 | Options → Interface | **Performance overlay**: Off / FPS / FPS + GPU time (new in v1.4) |
 | Options → Language settings | Text and audio language |
@@ -171,6 +171,10 @@ It is experimental. On some GPUs (seen on an RTX 4050 Laptop) NVIDIA's feature c
 ### I want to try Direct3D 9 once
 
 Run `Arx Raymix - DirectX 9.bat`. It starts the D3D9 fallback for that session only and does not change `cfg.ini`.
+
+### I want to try OpenGL
+
+Choose **OpenGL** in **Options → Video → Graphics API** and restart, or start the game once with the environment variable `ARX_RENDERER=opengl`. OpenGL is the Arx Libertatis renderer, kept as an alternative for drivers whose Direct3D misbehaves; it has no ray tracing and no DLSS.
 
 ### The game is in the wrong language
 

@@ -2029,15 +2029,53 @@ void D3D9Renderer::drawIndexed(Primitive primitive, const TexturedVertex * verti
 }
 
 bool D3D9Renderer::getSnapshot(Image & image) {
-	ARX_UNUSED(image);
-	return false;
+	return getSnapshot(image, size_t((std::max)(m_width, 0)), size_t((std::max)(m_height, 0)));
 }
 
+// F10 and the save-game thumbnail: copy the back buffer into system memory and resample it to
+// the requested size, as the D3D12 renderer does. The back buffer is X8R8G8B8, which is B, G, R, X
+// in memory, so it lands in Format_B8G8R8A8 with the alpha byte forced opaque.
 bool D3D9Renderer::getSnapshot(Image & image, size_t width, size_t height) {
-	ARX_UNUSED(image);
-	ARX_UNUSED(width);
-	ARX_UNUSED(height);
-	return false;
+	if(!m_device || width == 0 || height == 0) {
+		return false;
+	}
+	IDirect3DSurface9 * back = nullptr;
+	if(FAILED(m_device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &back)) || !back) {
+		return false;
+	}
+	D3DSURFACE_DESC desc {};
+	IDirect3DSurface9 * sys = nullptr;
+	bool ok = SUCCEEDED(back->GetDesc(&desc))
+	          && (desc.Format == D3DFMT_X8R8G8B8 || desc.Format == D3DFMT_A8R8G8B8)
+	          && SUCCEEDED(m_device->CreateOffscreenPlainSurface(desc.Width, desc.Height, desc.Format,
+	                                                            D3DPOOL_SYSTEMMEM, &sys, nullptr))
+	          && SUCCEEDED(m_device->GetRenderTargetData(back, sys));
+	back->Release();
+	D3DLOCKED_RECT locked {};
+	if(ok) {
+		ok = SUCCEEDED(sys->LockRect(&locked, nullptr, D3DLOCK_READONLY)) && locked.pBits;
+	}
+	if(ok) {
+		const size_t srcW = desc.Width;
+		const size_t srcH = desc.Height;
+		image.create(width, height, Image::Format_B8G8R8A8);
+		unsigned char * out = image.getData();
+		const char * rows = static_cast<const char *>(locked.pBits);
+		for(size_t y = 0; y < height; ++y) {
+			const size_t sy = (height == 1) ? 0 : y * (srcH - 1) / (height - 1);
+			const u32 * srcRow = reinterpret_cast<const u32 *>(rows + sy * size_t(locked.Pitch));
+			u32 * dstRow = reinterpret_cast<u32 *>(out + y * width * 4);
+			for(size_t x = 0; x < width; ++x) {
+				const size_t sx = (width == 1) ? 0 : x * (srcW - 1) / (width - 1);
+				dstRow[x] = srcRow[sx] | 0xff000000u;
+			}
+		}
+		sys->UnlockRect();
+	}
+	if(sys) {
+		sys->Release();
+	}
+	return ok;
 }
 
 void D3D9Renderer::showFrame() {
@@ -2077,8 +2115,12 @@ void D3D9Renderer::showFrame() {
 	if(g_tlFrameStats.draws > 0) {
 		const bool cineLike = g_tlFrameStats.draws >= 8;
 		const bool periodic = tlSamples < 24 && (frameIndex <= 2 || frameIndex % 15 == 0);
-		if((cineLike && cineLikeSamples < 12) || periodic) {
-			if(cineLike) {
+		const bool cineSample = cineLike && cineLikeSamples < 12;
+		if(cineSample || periodic) {
+			// Charge the budget that allowed the line. Charging a cinematic-looking frame to the
+			// cinematic budget after it ran out left the periodic one untouched, so the line was
+			// written every 15 frames for the whole session and the stats were never switched off.
+			if(cineSample) {
 				cineLikeSamples++;
 			} else {
 				tlSamples++;
