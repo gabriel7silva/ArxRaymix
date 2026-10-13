@@ -63,13 +63,15 @@ Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. 
 - **Nexus Mods** (main channel): [NEXUS_URL] <!-- TODO Gabriel: Nexus page URL -->
 - **GitHub Releases**: <https://github.com/gabriel7silva/ArxRaymix/releases>
 
-Both carry the same zip, `ArxRaymix-1.4.zip`. The GitHub release lists its SHA-256. <!-- TODO Gabriel: confirm the SHA-256 is published with the release. -->
+Two downloads, same files: the installer `ArxRaymix-v1.4-setup.exe` (recommended) and the zip `ArxRaymix-v1.4.zip`. Each has a `.sha256` file next to it on the GitHub release.
 
 ## Install
 
 1. Install Arx Fatalis from Steam or GOG.
 2. Run `ArxRaymix-vX.Y-setup.exe` (no administrator prompt; Start menu shortcuts and an uninstaller), **or** extract the zip to its own folder, for example `C:\Games\ArxRaymix`. Never inside the Arx Fatalis folder.
 3. Start *Arx Raymix* from the Start menu, or run `ArxRaymix.exe` (or `arx.exe`).
+
+Arx Raymix is **not digitally signed yet**, so Windows SmartScreen shows "Windows protected your PC" the first time: click **More info → Run anyway**. Signing is planned; until then you can check each download against the `.sha256` on the release page.
 
 Step-by-step instructions for Steam and GOG, and what to do if the game is not found, are in [docs/INSTALL.md](docs/INSTALL.md).
 

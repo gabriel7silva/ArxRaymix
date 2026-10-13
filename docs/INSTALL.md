@@ -52,7 +52,17 @@ Running the original game once first is recommended (the zip's `README.txt` asks
 
 Double-click `ArxRaymix.exe`. It checks for a new version and starts the game. You can also start `arx.exe` directly.
 
-Windows may show a SmartScreen warning for a downloaded program. Choose *More info* → *Run anyway* if you trust the download; compare the SHA-256 with the one on the release page if you want to be sure. <!-- TODO Gabriel: confirm whether the exe is code-signed -->
+#### "Windows protected your PC"
+
+Arx Raymix is **not digitally signed yet**, so Windows SmartScreen warns about the setup, `ArxRaymix.exe` and `arx.exe` the first time ("Windows protected your PC", publisher *Unknown publisher*). Code signing is planned for a later release.
+
+To continue, click **More info**, then **Run anyway**. To make sure the file is the one we published, compare its SHA-256 with the `.sha256` file on the [release page][releases]. In PowerShell:
+
+```powershell
+Get-FileHash .\ArxRaymix-v1.4-setup.exe -Algorithm SHA256
+```
+
+Only download Arx Raymix from Nexus Mods or from the GitHub releases page.
 
 ### 4. If the game data is not found
 
