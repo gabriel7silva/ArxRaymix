@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="Arx Raymix — Arx Fatalis remastered with Direct3D 12" width="100%">
+  <img src="docs/assets/arx-raymix-cover.jpg" alt="Arx Raymix with ray tracing, DLSS and DirectX 12" width="100%">
 </p>
 
 <p align="center">
