@@ -17,6 +17,7 @@
 
 #include <glm/glm.hpp>
 
+#include "graphics/RayBvh.h"
 #include "graphics/Renderer.h"
 #include "graphics/Vertex.h"
 #include "math/Vector.h"
@@ -46,7 +47,7 @@ public:
 	bool init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap, unsigned baseIndex);
 
 	//! Descriptors this module needs inside the shared heap.
-	static constexpr unsigned kHeapDescriptors = 33;
+	static constexpr unsigned kHeapDescriptors = 35;
 	void shutdown();
 	void resize(int width, int height);
 	//! True when resize() would actually release and recreate the targets. Lets the caller pay for
@@ -54,6 +55,9 @@ public:
 	[[nodiscard]] bool needsResize(int width, int height) const;
 	
 	[[nodiscard]] bool supported() const { return m_supported; }
+	//! Rays are traced by a compute shader walking our own BVH: the GPU has no DXR, or
+	//! ARX_DXR_SOFTWARE=1 asked for it. Effects are held at kSoftwareMaxQuality.
+	[[nodiscard]] bool software() const { return m_software; }
 	[[nodiscard]] bool ready() const { return m_ready; }
 	[[nodiscard]] ID3D12Resource * colorCopyResource() const { return m_colorCopy.Get(); }
 	[[nodiscard]] ID3D12Resource * waterMaskResource() const { return m_waterMask.Get(); }
@@ -215,10 +219,15 @@ private:
 	
 	bool compileRayLib();
 	bool createPipeline();
+	bool createRtState();
+	bool createSoftwarePso();
 	bool createMaskPipeline();
 	bool ensureTargets(int width, int height);
 	bool ensureGeometryBuffers(ID3D12GraphicsCommandList * list);
 	bool buildAcceleration(ID3D12GraphicsCommandList * list);
+	//! Software mode's buildAcceleration: BVHs on the CPU (rooms only when they change), uploaded
+	//! as one node buffer and one triangle buffer.
+	bool buildSoftwareBvh();
 	void updateDescriptors();
 	void releaseTargets();
 	void rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
@@ -239,6 +248,19 @@ private:
 	ComPtr<ID3D12RootSignature> m_compositeRoot;
 	ComPtr<ID3D12RootSignature> m_maskRoot;
 	ComPtr<ID3D12StateObject> m_rtState;
+	//! Software mode: the ray pass as a compute pipeline, and its BVH buffers (upload heap,
+	//! rewritten every frame after the previous frame's work has left the GPU).
+	ComPtr<ID3D12PipelineState> m_swPso;
+	ComPtr<ID3D12Resource> m_bvhNodeBuf;
+	ComPtr<ID3D12Resource> m_bvhTriBuf;
+	std::vector<raybvh::Node> m_roomBvhNodes;
+	std::vector<std::uint32_t> m_roomBvhTris;
+	std::vector<raybvh::Node> m_swNodes;
+	std::vector<std::uint32_t> m_swTris;
+	std::vector<raybvh::Node> m_swScratchNodes;
+	std::vector<std::uint32_t> m_swScratchTris;
+	std::uint32_t m_bvhRoots[4] = { ~0u, ~0u, ~0u, ~0u };
+	bool m_software = false;
 	ComPtr<ID3D12PipelineState> m_compositePso;
 	ComPtr<ID3D12PipelineState> m_waterMaskPso;
 	ComPtr<ID3D12PipelineState> m_waterDepthPso;

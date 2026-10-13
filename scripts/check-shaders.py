@@ -22,9 +22,10 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# (file, literal, compiler, [(profile, entry), ...]). Entry None means a library.
+# (file, literal, compiler, [(profile, entry[, defines]), ...]). Entry None means a library.
 SHADERS = [
-    ('arx/src/graphics/dxr/D3D12Rtao.cpp', 'kRayLib', 'dxc', [('lib_6_3', None)]),
+    ('arx/src/graphics/dxr/D3D12Rtao.cpp', 'kRayLib', 'dxc',
+     [('lib_6_3', None), ('cs_6_0', 'CSMain', ['ARX_SOFTWARE_RT=1'])]),
     ('arx/src/graphics/dxr/D3D12Rtao.cpp', 'kComposite', 'fxc',
      [('vs_5_0', 'VSMain'), ('ps_5_0', 'PSMain')]),
     ('arx/src/graphics/dxr/D3D12Rtao.cpp', 'kMask', 'fxc',
@@ -80,13 +81,17 @@ def main():
             hlsl = os.path.join(tmp, literal + '.hlsl')
             with open(hlsl, 'w', encoding='utf-8') as f:
                 f.write(extract(path, literal))
-            for profile, entry in targets:
+            for target in targets:
+                profile, entry = target[0], target[1]
+                defines = target[2] if len(target) > 2 else []
                 out = os.path.join(tmp, '%s_%s.bin' % (literal, entry or profile))
                 cmd = [tools[compiler], '-T', profile, '-Fo', out]
                 if compiler == 'fxc':
                     cmd.append('-nologo')
                 if entry:
                     cmd += ['-E', entry]
+                for define in defines:
+                    cmd += ['-D', define]
                 cmd.append(hlsl)
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 label = '%s %s %s' % (literal, profile, entry or '')

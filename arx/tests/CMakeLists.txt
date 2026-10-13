@@ -23,6 +23,9 @@ set(arxtest_TESTCASES
 	tests/graphics/PrimitiveIndicesTest.h
 	tests/graphics/PrimitiveIndicesTest.cpp
 	
+	tests/graphics/RayBvhTest.h
+	tests/graphics/RayBvhTest.cpp
+	
 	tests/io/fs/FilePathTest.h
 	tests/io/fs/FilePathTest.cpp
 	
