@@ -38,8 +38,10 @@ Sem GPU NVIDIA ou sem DXR, o jogo roda em Direct3D 12 com a imagem raster normal
    - GOG Galaxy: botão de configurações do jogo → *Gerenciar instalação* → *Mostrar pasta*.
    - A pasta certa é a que tem o arquivo `data.pak`. Anote o caminho.
    - É recomendado abrir o jogo original uma vez antes.
-2. **Extraia o zip** do Arx Raymix numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`.
-3. **Execute** `ArxRaymix.exe` (ou `arx.exe`).
+2. **Instale o Arx Raymix**, de um destes jeitos:
+   - **Instalador (recomendado):** execute o `ArxRaymix-vX.Y-setup.exe`. Ele instala só para o seu usuário, sem pedir administrador, em `%LOCALAPPDATA%\Programs\ArxRaymix` (dá para escolher outra pasta). Cria atalhos no Menu Iniciar (e, se quiser, na Área de Trabalho) e aparece em **Configurações → Aplicativos**.
+   - **Zip:** extraia numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`.
+3. **Execute** *Arx Raymix* pelo Menu Iniciar, ou o `ArxRaymix.exe` (ou `arx.exe`).
 
 O Windows pode mostrar um aviso do SmartScreen para programas baixados. Escolha *Mais informações* → *Executar assim mesmo* se confiar no download.
 
@@ -90,7 +92,7 @@ Para atualizar à mão: baixe o zip novo, feche o jogo e extraia por cima da pas
 
 ## Desinstalação
 
-Apague a pasta do Arx Raymix. O Arx Fatalis não foi alterado.
+Instalou pelo instalador: **Configurações → Aplicativos → Arx Raymix → Desinstalar**, ou *Desinstalar o Arx Raymix* no Menu Iniciar. Instalou pelo zip: apague a pasta do Arx Raymix. O Arx Fatalis não foi alterado.
 
 Configurações e **saves** ficam em `%USERPROFILE%\Saved Games\Arx Libertatis` (ou `Documentos\My Games\Arx Libertatis`, se essa pasta já existir). Apague essa pasta só se quiser perder os saves. O Arx Libertatis usa a mesma pasta.
 

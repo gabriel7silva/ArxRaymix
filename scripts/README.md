@@ -15,6 +15,7 @@ These scripts start a built `arx.exe` against your own Arx Fatalis install. They
 | `check-speech-portugues.py` | Report broken or missing PT-BR speech WAVs and subtitles too long for their line (`--english-dir` also compares with the English voices) |
 | `check-shaders.py` | Compile the HLSL embedded in the D3D12 / DXR sources with the Windows SDK's DXC / FXC (CI runs it) |
 | `package.ps1` | Zip a built `arx.exe`, its DLLs and `arx/data/core` into `dist\ArxRaymix-<version>.zip` for players |
+| `build-installer.ps1` | Compile `installer/ArxRaymix.nsi` (NSIS 3) from that staged folder into `dist\ArxRaymix-<version>-setup.exe` |
 | `sweep-plausible-levels.ps1` | Load each level for a few seconds (`--benchmark`) and score Pdxr-5 / F5 from the log; it reports F4 as undecidable |
 
 ```powershell
@@ -65,9 +66,18 @@ WAVs, which are game audio.
 
 1. Set the first line of `arx/VERSION` to the new version (`Arx Raymix 1.5`) and merge it.
 2. Tag that commit and push the tag: `git tag v1.5` then `git push origin v1.5`.
-3. `.github/workflows/release.yml` builds, runs `package.ps1 -Version v1.5` and publishes a
-   GitHub Release with `ArxRaymix-v1.5.zip` and `ArxRaymix-v1.5.zip.sha256`. It stops if the tag
-   and `arx/VERSION` disagree. Upload the same zip to Nexus Mods by hand.
+3. `.github/workflows/release.yml` builds, runs `package.ps1 -Version v1.5` and
+   `build-installer.ps1 -Version v1.5`, and publishes a GitHub Release with
+   `ArxRaymix-v1.5-setup.exe`, `ArxRaymix-v1.5.zip` and a `.sha256` for each. It stops if the tag
+   and `arx/VERSION` disagree. Upload the same zip (and, if you like, the setup) to Nexus Mods by hand.
+
+The installer (`installer/ArxRaymix.nsi`) installs per user into `%LOCALAPPDATA%\Programs\ArxRaymix`
+without an administrator prompt, so `ArxRaymix.exe` can update that folder later. It adds Start menu
+shortcuts, an optional desktop shortcut and a Settings → Apps entry, whose version the launcher keeps
+current after each update. The uninstaller deletes the files `package.txt` lists, `backup\`,
+`update\` and the launcher's own files, and never `cfg.ini`, saves or the Arx Fatalis folder.
+Locally: `winget install NSIS.NSIS`, then `scripts/build-installer.ps1 -Version <tag>` after
+`package.ps1`.
 
 Players who start `ArxRaymix.exe` are offered the new version: it downloads the zip, checks the
 SHA-256, moves the files listed in the old `package.txt` to `backup\` and puts the new ones in

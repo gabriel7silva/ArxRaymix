@@ -39,9 +39,11 @@ The folder you want is the one that contains `data.pak`. Note it down in case yo
 
 Running the original game once first is recommended (the zip's `README.txt` asks for it too).
 
-### 2. Extract Arx Raymix
+### 2. Install Arx Raymix
 
-Extract the zip to a folder of its own, for example `C:\Games\ArxRaymix`.
+**With the installer (recommended).** Run `ArxRaymix-vX.Y-setup.exe` from the [GitHub release][releases]. It installs for your Windows user only, without an administrator prompt, into `%LOCALAPPDATA%\Programs\ArxRaymix` (you can choose another folder), adds *Arx Raymix*, *Arx Raymix (DirectX 9)* and *Uninstall* to the Start menu, optionally a desktop shortcut, and an entry in **Settings → Apps**. It refuses the Arx Fatalis folder. The setup is in English or Brazilian Portuguese, following your Windows language.
+
+**With the zip.** Extract the zip to a folder of its own, for example `C:\Games\ArxRaymix`.
 
 - Do **not** extract it into the Arx Fatalis folder.
 - Avoid `C:\Program Files`: the launcher needs to write to the mod folder when it updates.
@@ -116,7 +118,7 @@ Your settings and saves are in the user folder, not the mod folder, so they carr
 
 ## Uninstall
 
-1. Delete the Arx Raymix folder.
+1. Installed with the setup: **Settings → Apps → Arx Raymix → Uninstall**, or *Uninstall Arx Raymix* in the Start menu. It removes the mod's files, its `backup` folder and the shortcuts. Installed from the zip: delete the Arx Raymix folder.
 2. Optional: delete your user folder (`%USERPROFILE%\Saved Games\Arx Libertatis`, see below) to remove settings and **saves**. Arx Libertatis uses the same folder.
 3. If you added the `DataDir` registry value in step 4 of the install, delete it as well.
 
