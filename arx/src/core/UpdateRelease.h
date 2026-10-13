@@ -25,6 +25,9 @@ namespace updates {
 inline constexpr std::string_view kLatestReleaseApi =
 	"https://api.github.com/repos/gabriel7silva/ArxRaymix/releases/latest";
 
+//! Where players download Arx Raymix: the main-menu "new version available" notice opens it.
+inline constexpr std::string_view kModPageUrl = "https://www.nexusmods.com/arxfatalis/mods/37";
+
 //! kLatestReleaseApi, or ARX_UPDATE_API when set (https only), for testing against another repository.
 inline std::string latestReleaseApi() {
 	const char * override = std::getenv("ARX_UPDATE_API");

@@ -40,6 +40,7 @@
 #include "core/Localisation.h"
 #include "core/SaveGame.h"
 #include "core/UpdateCheck.h"
+#include "core/UpdateRelease.h"
 #include "core/Version.h"
 
 #include "gui/Hud.h"
@@ -2538,14 +2539,13 @@ void MainMenu::update() {
 	
 	if(!m_updateNotice) {
 		if(std::optional<updates::Available> release = updates::available()) {
-			// Right-aligned under the version line; clicking opens the release page.
+			// Right-aligned under the version line; clicking opens the mod's Nexus Mods page, where
+			// players download it (the launcher's own dialog links the GitHub release notes).
 			std::string text = std::string(getLocalised("system_menus_main_update_available")) + " " + release->tag;
 			float x = g_size.right - 20 * g_sizeRatio.x - hFontControls->getTextSize(text).width();
 			auto txt = std::make_unique<TextWidget>(hFontControls, text);
-			txt->clicked = [url = release->pageUrl](Widget * /* widget */) {
-				if(!url.empty()) {
-					platform::launchDefaultProgram(url);
-				}
+			txt->clicked = [](Widget * /* widget */) {
+				platform::launchDefaultProgram(std::string(updates::kModPageUrl));
 			};
 			txt->setPosition(RATIO_2(Vec2f(x / g_sizeRatio.x, 80)) + Vec2f(0.f, float(hFontControls->getLineHeight())));
 			m_updateNotice = txt.get();

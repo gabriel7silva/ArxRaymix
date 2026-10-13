@@ -116,7 +116,7 @@ It never touches `cfg.ini`, your saves, or the Arx Fatalis folder. Without an in
 
 Downloaded the new zip from Nexus Mods instead? `ArxRaymix.exe --install <zip>` installs it the same way, with the same backup. When the `.sha256` file from the GitHub release sits next to the zip, it is checked too.
 
-If you start `arx.exe` directly, the main menu shows a **new version available** notice instead. Clicking it opens the release page. Turn it off in **Options → Interface → Check for updates** (`check_for_updates` in `cfg.ini`).
+If you start `arx.exe` directly, the main menu shows a **new version available** notice instead. Clicking it opens the Arx Raymix page on Nexus Mods. Turn it off in **Options → Interface → Check for updates** (`check_for_updates` in `cfg.ini`).
 
 ### Manual
 
@@ -146,7 +146,7 @@ Run `arx.exe --list-dirs` from a command prompt in the mod folder to print the f
 
 ### Reporting a bug
 
-Attach `arx.log`. It is rewritten on every launch, so copy it right after the problem. Also give your GPU, driver version, Windows version and the settings you used (preset, DLSS mode, Frame Generation). Report on [GitHub Issues](https://github.com/gabriel7silva/ArxRaymix/issues) <!-- TODO Gabriel: or the Nexus Bugs tab --> .
+Attach `arx.log`. It is rewritten on every launch, so copy it right after the problem. Also give your GPU, driver version, Windows version and the settings you used (preset, DLSS mode, Frame Generation). Report on the **Bugs** tab of the [Nexus Mods page](https://www.nexusmods.com/arxfatalis/mods/37) or on [GitHub Issues](https://github.com/gabriel7silva/ArxRaymix/issues).
 
 ### The game starts on DirectX 9
 
@@ -189,10 +189,10 @@ No. The Steam and GOG releases are enough.
 No. It reads the game data and writes only to its own folder and the user folder.
 
 **Can I keep playing my Arx Libertatis saves?**
-Arx Raymix uses the same user folder as Arx Libertatis, so those saves appear in the load menu. <!-- TODO Gabriel: confirm you have tested loading an Arx Libertatis save -->
+Arx Raymix uses the same user folder as Arx Libertatis, so those saves appear in the load menu. Loading an Arx Libertatis save has not been tested yet; keep a copy of the save folder before you try.
 
 **Does it work on AMD or Intel GPUs?**
-The Direct3D 12 renderer and ray tracing use standard DirectX, so any GPU with Direct3D 12 and DXR support can run them. DLSS, Frame Generation, Ray Reconstruction and Reflex are NVIDIA only. <!-- TODO Gabriel: say which non-NVIDIA GPUs have actually been tested, if any -->
+The Direct3D 12 renderer and ray tracing use standard DirectX: GPUs with DXR (AMD Radeon RX 6000 and newer, Intel Arc) trace rays in hardware, other Direct3D 12 GPUs in software at Low. DLSS, Frame Generation, Ray Reconstruction and Reflex are NVIDIA only. So far Arx Raymix has only been tested on an NVIDIA RTX 4050 Laptop; reports from AMD and Intel GPUs are welcome.
 
 **Is there Portuguese voice acting?**
 Not in the download. The Portuguese voice files are Arkane's audio and cannot be redistributed. Text is translated; voices are English.

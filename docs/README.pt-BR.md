@@ -42,7 +42,7 @@ Cada par é o mesmo lugar com **F7** (ray tracing ligado / desligado). RTX 4050 
 | Ray tracing | Qualquer GPU Direct3D 12. Com suporte a DirectX Raytracing (DXR), roda nos núcleos RT, com cada efeito até Alto; sem DXR, roda por software, com cada efeito limitado a Baixo |
 | DLSS Super Resolution / Ray Reconstruction | GPU NVIDIA GeForce RTX |
 | DLSS Frame Generation | GPU NVIDIA GeForce RTX série 40 ou mais nova |
-| GPU mínima / recomendada | <!-- TODO Gabriel: preencher --> |
+| GPU mínima / recomendada | Mínima: qualquer placa com driver Direct3D 12 (ray tracing desligado). Recomendada para ray tracing: NVIDIA GeForce RTX com 6 GB ou mais. Desenvolvido e testado numa RTX 4050 Laptop (6 GB): preset Alto com DLSS Qualidade. Outras placas ainda não foram testadas |
 
 Não é preciso mais nada: nem patch, nem outro mod, nem o Arx Libertatis instalado. As versões da Steam e da GOG já trazem os dados de que o motor precisa.
 
