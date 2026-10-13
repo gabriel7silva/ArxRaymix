@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="assets/arx-raymix-cover.jpg" alt="Arx Raymix com ray tracing, DLSS e DirectX 12" width="100%">
+</p>
+
+<p align="center">
   <a href="../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a>
 </p>
 
