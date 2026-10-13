@@ -4,7 +4,9 @@ Released 2026-10-13.
 
 The first public release of Arx Raymix: *Arx Fatalis* on the Arx Libertatis engine, with a Direct3D 12 renderer, DXR ray tracing, DLSS, DLSS Frame Generation and Reflex.
 
-You need your own copy of Arx Fatalis (Steam or GOG). Nothing else: no patch, no other mod. Install: extract the zip to its own folder and run `ArxRaymix.exe`. Full guide: [INSTALL.md](https://github.com/gabriel7silva/ArxRaymix/blob/main/docs/INSTALL.md).
+You need your own copy of Arx Fatalis (Steam or GOG). Nothing else: no patch, no other mod. Install: run `ArxRaymix-v1.4-setup.exe` (per-user, no administrator prompt, Start menu shortcuts and an uninstaller), or extract the zip to its own folder and run `ArxRaymix.exe`.
+
+Arx Raymix is **not digitally signed yet**: Windows SmartScreen shows "Windows protected your PC" the first time. Click **More info → Run anyway**, and compare the download with its `.sha256` if you want to be sure. Code signing is planned. Full guide: [INSTALL.md](https://github.com/gabriel7silva/ArxRaymix/blob/main/docs/INSTALL.md).
 
 ## New in 1.4
 
@@ -75,6 +77,8 @@ Rays are traced on top of the normal image, so switching ray tracing off leaves 
 
 - GitHub: <https://github.com/gabriel7silva/ArxRaymix/releases/tag/v1.4>
 - Nexus Mods: coming soon.
-- SHA-256: in `ArxRaymix-v1.4.zip.sha256`, next to the zip on the release page.
+- `ArxRaymix-v1.4-setup.exe`: the Windows installer (recommended).
+- `ArxRaymix-v1.4.zip`: the same files, to extract by hand.
+- SHA-256: in the `.sha256` file next to each download on the release page.
 
 Arx Raymix is GPLv3, built on Arx Libertatis. Arx Fatalis is © Arkane Studios / ZeniMax Media / Bethesda Softworks. NVIDIA DLSS / Streamline are under NVIDIA's license. Not affiliated with or endorsed by Arkane Studios, ZeniMax or NVIDIA.
