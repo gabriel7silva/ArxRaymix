@@ -77,6 +77,24 @@ struct ARX_SDL_SysWMinfo {
 
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
+//! The OpenGL renderer of Arx Libertatis, kept as a third choice next to Direct3D 12 and 9 for
+//! drivers whose Direct3D is broken: ARX_RENDERER=opengl, or "OpenGL" in Options -> Video.
+static bool wantsOpenGLRenderer() {
+#if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
+	if(const char * env = std::getenv("ARX_RENDERER")) {
+		if(boost::iequals(env, "opengl") || boost::iequals(env, "gl")) {
+			return true;
+		}
+		if(*env) {
+			return false;
+		}
+	}
+	return config.video.renderer == "OpenGL";
+#else
+	return true;
+#endif
+}
+
 #if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
 static bool wantsD3D9Renderer() {
 	if(const char * env = std::getenv("ARX_RENDERER")) {
@@ -110,8 +128,11 @@ SDL2Window::SDL2Window()
 	, m_sdlVersion(0)
 	, m_sdlSubsystem(ARX_SDL_SYSWM_UNKNOWN)
 {
+	m_openGL = wantsOpenGLRenderer();
 #if ARX_HAVE_D3D12 && ARX_HAVE_D3D9
-	if(wantsD3D9Renderer()) {
+	if(m_openGL) {
+		m_renderer = new OpenGLRenderer;
+	} else if(wantsD3D9Renderer()) {
 		m_renderer = new D3D9Renderer;
 	} else {
 		m_renderer = new D3D12Renderer;
@@ -404,6 +425,7 @@ bool SDL2Window::initialize() {
 	arx_assert(!m_displayModes.empty());
 	
 #if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
+	if(!m_openGL) {
 	int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
 	Uint32 windowFlags = getSDLFlagsForMode(m_mode.resolution, m_fullscreen);
 	windowFlags |= SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
@@ -486,7 +508,8 @@ bool SDL2Window::initialize() {
 	onFocus(true);
 	
 	return true;
-#else
+	}
+#endif
 	
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 	
@@ -500,7 +523,10 @@ bool SDL2Window::initialize() {
 	SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
 	#endif
 	
-	bool autoRenderer = (config.video.renderer == "auto");
+	// cfg.ini may name a Direct3D renderer when OpenGL came from ARX_RENDERER: let OpenGL pick its
+	// own context then, instead of reporting an unknown renderer.
+	bool autoRenderer = (config.video.renderer == "auto") || (config.video.renderer != "OpenGL"
+	                                                          && config.video.renderer != "OpenGL ES");
 	
 	gldebug::Mode debugMode = gldebug::mode();
 	
@@ -713,7 +739,6 @@ bool SDL2Window::initialize() {
 	onFocus(true);
 	
 	return true;
-#endif
 }
 
 void SDL2Window::setTitle(const std::string & title) {
@@ -971,13 +996,11 @@ void SDL2Window::processEvents(bool waitForEvent) {
 
 void SDL2Window::showFrame() {
 	ARX_PROFILE_FUNC();
-#if ARX_HAVE_D3D12 || ARX_HAVE_D3D9
-	if(m_renderer) {
+	if(m_openGL) {
+		SDL_GL_SwapWindow(m_window);
+	} else if(m_renderer) {
 		m_renderer->showFrame();
 	}
-#else
-	SDL_GL_SwapWindow(m_window);
-#endif
 }
 
 void SDL2Window::hide() {

@@ -94,7 +94,7 @@ Com uma GPU com DXR, o jogo escolhe um preset de ray tracing pela memória de v�
 | Onde | O quê |
 |---|---|
 | Opções → Ray tracing | Preset, cada efeito, distância do ray tracing, DLSS Ray Reconstruction (experimental). Vale na hora |
-| Opções → Vídeo | Upscaling (modo do DLSS), Geração de frames (Frame Generation), API gráfica (DirectX 12 / 9, vale no próximo arranque) |
+| Opções → Vídeo | Upscaling (modo do DLSS), Geração de frames (Frame Generation), API gráfica (DirectX 12 / DirectX 9 / OpenGL, vale no próximo arranque; ray tracing e DLSS só no DirectX 12) |
 | Opções → Renderização | Distância de renderização |
 | Opções → Interface | **Mostrar desempenho**: desligado / FPS / FPS + tempo de GPU (novo na v1.4) |
 

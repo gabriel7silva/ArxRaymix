@@ -693,12 +693,24 @@ static const char * activeGraphicsApiName() {
 	return GRenderer ? GRenderer->getGraphicsApiName() : "Unknown";
 }
 
-static bool activeGraphicsApiIsD3D9() {
-	return std::string_view(activeGraphicsApiName()) == "DirectX 9";
+//! Options -> Video graphics API slider: 0 DirectX 12, 1 DirectX 9, 2 OpenGL.
+static int graphicsApiChoice(std::string_view renderer) {
+	if(renderer == "OpenGL") {
+		return 2;
+	}
+	return rendererChoiceIsD3D9(renderer) ? 1 : 0;
 }
 
-static void persistGraphicsApiChoice(bool useD3D9) {
-	config.video.renderer = useD3D9 ? "Direct3D 9" : "Direct3D 12";
+static int activeGraphicsApiChoice() {
+	std::string_view name = activeGraphicsApiName();
+	if(name == "OpenGL") {
+		return 2;
+	}
+	return (name == "DirectX 9") ? 1 : 0;
+}
+
+static void persistGraphicsApiChoice(int choice) {
+	config.video.renderer = (choice == 2) ? "OpenGL" : ((choice == 1) ? "Direct3D 9" : "Direct3D 12");
 	config.save();
 }
 
@@ -763,19 +775,19 @@ public:
 			auto slider = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
 			slider->valueChanged = [](int pos, std::string_view /* string */) {
 				// Saved for the next launch only. The device is created at startup.
-				persistGraphicsApiChoice(pos == 1);
+				persistGraphicsApiChoice(pos);
 				if(g_mainMenu) {
 					g_mainMenu->bReInitAll = true;
 				}
 			};
 			slider->addEntry(getLocalised("system_menus_options_video_api_directx12"));
 			slider->addEntry(getLocalised("system_menus_options_video_api_directx9"));
-			slider->setValue(rendererChoiceIsD3D9(config.video.renderer) ? 1 : 0);
+			slider->addEntry("OpenGL");
+			slider->setValue(graphicsApiChoice(config.video.renderer));
 			addCenter(std::move(slider));
 		}
 		{
-			const bool pendingD3D9 = rendererChoiceIsD3D9(config.video.renderer);
-			if(pendingD3D9 != activeGraphicsApiIsD3D9()) {
+			if(graphicsApiChoice(config.video.renderer) != activeGraphicsApiChoice()) {
 				auto restart = std::make_unique<TextWidget>(hFontControls,
 					getLocalised("system_menus_options_video_api_restart"));
 				restart->setEnabled(false);

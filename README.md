@@ -101,7 +101,7 @@ Step-by-step instructions for Steam and GOG, and what to do if the game is not f
 
 | Where | What |
 |---|---|
-| Options → Video | Graphics API (DirectX 12 / DirectX 9, applies on next launch), resolution, **Upscaling** (DLSS mode), **Frame Generation** |
+| Options → Video | Graphics API (DirectX 12 / DirectX 9 / OpenGL, applies on next launch), resolution, **Upscaling** (DLSS mode), **Frame Generation** |
 | Options → Render | **Render distance**, antialiasing (locked off while DLSS is on), texture filtering |
 | Options → Ray tracing | **Preset** (Off / Low / Medium / High / Custom), per-effect sliders, **Ray tracing distance**, **DLSS Ray Reconstruction (Experimental)** |
 | Options → Interface | **Performance overlay**: Off / FPS / FPS + GPU time (new in v1.4) |

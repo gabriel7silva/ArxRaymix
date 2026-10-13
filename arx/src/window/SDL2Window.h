@@ -85,6 +85,8 @@ private:
 	
 	SDL_Window * m_window;
 	SDL_GLContext m_glcontext;
+	//! The OpenGL renderer was chosen (ARX_RENDERER=opengl or Options -> Video) instead of Direct3D.
+	bool m_openGL = false;
 	
 	SDL2InputBackend * m_input;
 	
