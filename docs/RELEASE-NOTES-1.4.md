@@ -1,10 +1,10 @@
 # Arx Raymix 1.4
 
-<!-- TODO Gabriel: release date. Built from main at 42e55fdb (#25) plus the v1.4 work still in progress (launcher, update notice, F7, performance overlay, language prompt). Re-check the "New in 1.4" list against what is merged before publishing. -->
+Released 2026-10-13.
 
 The first public release of Arx Raymix: *Arx Fatalis* on the Arx Libertatis engine, with a Direct3D 12 renderer, DXR ray tracing, DLSS, DLSS Frame Generation and Reflex.
 
-You need your own copy of Arx Fatalis (Steam or GOG). Nothing else: no patch, no other mod. Install: extract the zip to its own folder and run `ArxRaymix.exe`. Full guide: [INSTALL.md](INSTALL.md).
+You need your own copy of Arx Fatalis (Steam or GOG). Nothing else: no patch, no other mod. Install: extract the zip to its own folder and run `ArxRaymix.exe`. Full guide: [INSTALL.md](https://github.com/gabriel7silva/ArxRaymix/blob/main/docs/INSTALL.md).
 
 ## New in 1.4
 
@@ -15,7 +15,7 @@ You need your own copy of Arx Fatalis (Steam or GOG). Nothing else: no patch, no
 - **Language prompt on first run** (*Language / Idioma*), English listed first. Speech follows the choice only where voice files exist.
 - **Ray tracing preset picked on first run** from your video memory (Low under 5 GiB, High from 9 GiB, Medium in between), with DLSS Quality where supported. Any saved preset is left alone.
 - The Ray Reconstruction option now warns that it costs several ms per frame (about 5 ms more than DLSS alone on an RTX 4050 Laptop). It stays off in every preset.
-- **Bug reports** from the crash dialog point to the Arx Raymix issue tracker. <!-- TODO Gabriel: confirm once merged -->
+- **Bug reports** from the crash dialog point to the Arx Raymix issue tracker.
 
 ## What Arx Raymix adds to Arx Libertatis
 
@@ -70,12 +70,11 @@ Rays are traced on top of the normal image, so switching ray tracing off leaves 
 - **Ray Reconstruction** is experimental. On some GPUs (seen on an RTX 4050 Laptop) NVIDIA's feature cannot start; the option stays On and the built-in denoiser keeps running.
 - Changing the graphics API (DirectX 12 / 9) needs a restart.
 - Portuguese voice acting is not included (Arkane's audio, not redistributable).
-- <!-- TODO Gabriel: add anything found in release testing -->
 
 ## Download
 
-- Nexus Mods: [NEXUS_URL] <!-- TODO Gabriel -->
-- GitHub: <https://github.com/gabriel7silva/ArxRaymix/releases/tag/v1.4> <!-- TODO Gabriel: confirm the tag name -->
-- SHA-256 of `ArxRaymix-1.4.zip`: `<SHA256>` <!-- TODO Gabriel: paste the hash printed by scripts/package.ps1 -->
+- GitHub: <https://github.com/gabriel7silva/ArxRaymix/releases/tag/v1.4>
+- Nexus Mods: coming soon.
+- SHA-256: in `ArxRaymix-v1.4.zip.sha256`, next to the zip on the release page.
 
 Arx Raymix is GPLv3, built on Arx Libertatis. Arx Fatalis is © Arkane Studios / ZeniMax Media / Bethesda Softworks. NVIDIA DLSS / Streamline are under NVIDIA's license. Not affiliated with or endorsed by Arkane Studios, ZeniMax or NVIDIA.
