@@ -31,6 +31,8 @@ Sem GPU NVIDIA ou sem DXR, o jogo roda em Direct3D 12 com a imagem raster normal
 - **Nexus Mods** (canal principal): [NEXUS_URL] <!-- TODO Gabriel: link da página no Nexus -->
 - **GitHub Releases**: <https://github.com/gabriel7silva/ArxRaymix/releases>
 
+Cada versão tem dois downloads com o mesmo conteúdo: o **instalador** `ArxRaymix-vX.Y-setup.exe` (recomendado) e o **zip** `ArxRaymix-vX.Y.zip`, para extrair à mão.
+
 ## Instalação
 
 1. **Instale o Arx Fatalis** pela Steam ou pela GOG.
@@ -43,7 +45,7 @@ Sem GPU NVIDIA ou sem DXR, o jogo roda em Direct3D 12 com a imagem raster normal
    - **Zip:** extraia numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`.
 3. **Execute** *Arx Raymix* pelo Menu Iniciar, ou o `ArxRaymix.exe` (ou `arx.exe`).
 
-O Windows pode mostrar um aviso do SmartScreen para programas baixados. Escolha *Mais informações* → *Executar assim mesmo* se confiar no download.
+**Aviso do Windows (SmartScreen).** O Arx Raymix ainda não tem assinatura digital, então na primeira vez que você abrir o instalador ou o `ArxRaymix.exe` o Windows pode mostrar *"O Windows protegeu o computador"*. Clique em **Mais informações → Executar assim mesmo**. Todos os arquivos são gerados pelo GitHub Actions a partir do código público; para conferir, compare o SHA-256 do arquivo (`Get-FileHash <arquivo>` no PowerShell) com o `.sha256` da página da release. A assinatura digital está nos planos e vai tirar esse aviso.
 
 ### Se o jogo não encontrar os dados
 

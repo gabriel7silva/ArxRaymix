@@ -63,7 +63,14 @@ Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. 
 - **Nexus Mods** (main channel): [NEXUS_URL] <!-- TODO Gabriel: Nexus page URL -->
 - **GitHub Releases**: <https://github.com/gabriel7silva/ArxRaymix/releases>
 
-Both carry the same zip, `ArxRaymix-1.4.zip`. The GitHub release lists its SHA-256. <!-- TODO Gabriel: confirm the SHA-256 is published with the release. -->
+Each release has two downloads with the same content:
+
+- **`ArxRaymix-vX.Y-setup.exe`**: the Windows installer (recommended).
+- **`ArxRaymix-vX.Y.zip`**: the same files to extract by hand.
+
+The GitHub release lists a `.sha256` for each.
+
+> **Windows SmartScreen warning.** Arx Raymix is not digitally signed yet, so Windows may show *"Windows protected your PC"* the first time you run the setup or the game. Click **More info → Run anyway**. The files are built by GitHub Actions from this repository; compare the SHA-256 with the release page if you want to be sure. Code signing is planned and will remove this step.
 
 ## Install
 
