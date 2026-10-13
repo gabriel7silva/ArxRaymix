@@ -134,6 +134,7 @@ public:
 	void applyWorldRayEffects() override;
 	void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) override;
 	[[nodiscard]] bool supportsRayTracing() const override;
+	[[nodiscard]] bool rayTracingInSoftware() const override;
 	[[nodiscard]] unsigned long long videoMemoryMiB() const override { return m_vramMiB; }
 	[[nodiscard]] bool supportsDlss() const override;
 	[[nodiscard]] bool supportsDlssRr() const override;

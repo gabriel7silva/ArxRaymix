@@ -80,7 +80,7 @@ As an alternative, the engine also reads the data folder from the registry value
 ## First run
 
 1. **Language.** The first time, a *Language / Idioma* screen lists the available text languages, English first. Pick one. You can change it later in **Options → Language settings**. Brazilian Portuguese covers the menus and the in-game text; any line without a translation shows in English. Voices stay in English: the Portuguese voice files are Arkane's audio and are not included.
-2. **Graphics.** When ray tracing is available, the game picks a ray tracing preset from your video memory: Low under 5 GiB, High from 9 GiB, Medium in between. Where your GPU supports it, DLSS Quality is turned on too. On Direct3D 9 and OpenGL nothing is changed.
+2. **Graphics.** With a DXR GPU, the game picks a ray tracing preset from your video memory: Low under 5 GiB, High from 9 GiB, Medium in between. Where your GPU supports it, DLSS Quality is turned on too. Without DXR (software ray tracing) or on Direct3D 9 / OpenGL, ray tracing stays Off; turn it on in Options → Ray tracing.
 3. **Play.** New game or load a save. Saves from Arx Libertatis show up too, because both use the same user folder.
 
 ## Settings worth knowing

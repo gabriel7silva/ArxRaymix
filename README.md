@@ -41,7 +41,7 @@ Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 
 
 - **Direct3D 12 renderer**, the default. If D3D12 cannot start, the game falls back to Direct3D 9 for that launch.
 - **Hybrid ray tracing** on top of the raster image (DXR, or software on GPUs without DXR): ambient occlusion, shadows from the level's own lights (soft edges), one bounce of indirect light, water / metal reflections, and **volumetric fog** whose light shafts are cut by the level geometry. Each effect is Off / Low / Medium / High, with a **Ray tracing distance** setting. Switching ray tracing off leaves the complete raster renderer.
-- **First-run preset.** On the first launch with ray tracing available, the game picks Low, Medium or High from your video memory, and DLSS Quality where available.
+- **First-run preset.** On the first launch with a DXR GPU, the game picks Low, Medium or High from your video memory, and DLSS Quality where available.
 - **DLSS Super Resolution** (DLAA, Quality, Balanced, Performance, Ultra Performance).
 - **DLSS Frame Generation** (2×), with **Reflex** low latency switched on alongside it.
 - **DLSS Ray Reconstruction**, experimental.
@@ -52,7 +52,7 @@ Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 
 
 New in v1.5 (see the [release notes](docs/RELEASE-NOTES-1.5.md)):
 
-- **Ray tracing without an RTX card.** GPUs without DXR trace the same effects in software, each held at Low. GPUs with DXR keep hardware ray tracing.
+- **Ray tracing without an RTX card.** GPUs without DXR trace the same effects in software, each held at Low; it starts Off there, turn it on in Options → Ray tracing. GPUs with DXR keep hardware ray tracing.
 - **Volumetric fog** with light shafts cut by the level geometry (Options → Ray tracing).
 - **OpenGL** as a third graphics API in Options → Video.
 - Direct3D 9 fixes: F10 screenshots and save thumbnails work again, and `arx.log` no longer fills up.
@@ -74,7 +74,7 @@ v1.4 added auto-update, F7, the performance overlay and the first-run language p
 
 Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. The Steam and GOG releases already contain the data the engine needs.
 
-**Without DXR** (older GeForce GTX, AMD Radeon RX 5000 and older, older Intel), ray tracing runs in software: the same effects, each held at Low. **Without an NVIDIA RTX GPU**, the DLSS options are grayed out with the reason shown. On Direct3D 9 and OpenGL there is no ray tracing and no DLSS.
+**Without DXR** (older GeForce GTX, AMD Radeon RX 5000 and older, older Intel), ray tracing runs in software: the same effects, each held at Low. It starts Off; turn it on in Options → Ray tracing. **Without an NVIDIA RTX GPU**, the DLSS options are grayed out with the reason shown. On Direct3D 9 and OpenGL there is no ray tracing and no DLSS.
 
 ## Download
 
@@ -96,7 +96,7 @@ Step-by-step instructions for Steam and GOG, and what to do if the game is not f
 ## First run
 
 - The first time you start (when `cfg.ini` has no language yet), a **Language / Idioma** screen lists the available text languages, English first. Pick one; you can change it later in **Options → Language settings**. Voices stay in English: the Portuguese voice files belong to Arkane and are not included.
-- When ray tracing is available, a ray tracing preset is chosen for you from your video memory (Low under 5 GiB, High from 9 GiB, Medium in between), and DLSS Quality is turned on if your GPU supports it. Change either at any time.
+- With a DXR GPU, a ray tracing preset is chosen for you from your video memory (Low under 5 GiB, High from 9 GiB, Medium in between), and DLSS Quality is turned on if your GPU supports it. Change either at any time.
 - Your settings are saved to `cfg.ini` in your user folder (see [Troubleshooting](#troubleshooting)).
 
 ## Settings

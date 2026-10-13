@@ -46,7 +46,7 @@ Cada par é o mesmo lugar com **F7** (ray tracing ligado / desligado). RTX 4050 
 
 Não é preciso mais nada: nem patch, nem outro mod, nem o Arx Libertatis instalado. As versões da Steam e da GOG já trazem os dados de que o motor precisa.
 
-**Sem DXR** (GeForce GTX antigas, AMD Radeon RX 5000 e anteriores, Intel antigas), o ray tracing roda por software: os mesmos efeitos, cada um limitado a Baixo. **Sem GPU NVIDIA RTX**, as opções de DLSS ficam cinza, com o motivo escrito. No Direct3D 9 e no OpenGL não há ray tracing nem DLSS.
+**Sem DXR** (GeForce GTX antigas, AMD Radeon RX 5000 e anteriores, Intel antigas), o ray tracing roda por software: os mesmos efeitos, cada um limitado a Baixo. Ele começa desligado; ligue em Opções → Ray tracing. **Sem GPU NVIDIA RTX**, as opções de DLSS ficam cinza, com o motivo escrito. No Direct3D 9 e no OpenGL não há ray tracing nem DLSS.
 
 ## Download
 
@@ -89,7 +89,7 @@ Para trocar depois: **Options → Language settings** (em português: **Opções
 
 ## Primeira execução
 
-Com o ray tracing disponível, o jogo escolhe um preset de ray tracing pela memória de vídeo: Baixo com menos de 5 GiB, Alto a partir de 9 GiB, Médio no meio. Se a GPU tiver DLSS, liga o DLSS Qualidade. Tudo isso pode ser mudado a qualquer momento.
+Com uma GPU com DXR, o jogo escolhe um preset de ray tracing pela memória de vídeo: Baixo com menos de 5 GiB, Alto a partir de 9 GiB, Médio no meio. Se a GPU tiver DLSS, liga o DLSS Qualidade. Tudo isso pode ser mudado a qualquer momento.
 
 | Onde | O quê |
 |---|---|

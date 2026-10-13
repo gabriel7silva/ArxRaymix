@@ -2074,8 +2074,12 @@ void ArxGame::onRendererInit(Renderer & renderer) {
 		// First run on this cfg.ini: a ray tracing preset sized to the GPU's memory and DLSS
 		// Quality where the GPU has them, instead of everything Off until the player finds
 		// Options -> Ray tracing. Ray Reconstruction stays off (every preset leaves it off).
+		// Software ray tracing (no DXR) starts Off: its cost on older GPUs is not known yet,
+		// so the player turns it on in Options -> Ray tracing.
 		config.video.dxrFirstRun = false;
-		if(renderer.supportsRayTracing()) {
+		if(renderer.rayTracingInSoftware()) {
+			LogInfo << "First run: software ray tracing available, left Off";
+		} else if(renderer.supportsRayTracing()) {
 			const unsigned long long vram = renderer.videoMemoryMiB();
 			const int preset = dxrFirstRunPreset(vram);
 			config.applyDxrPreset(preset);

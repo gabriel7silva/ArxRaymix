@@ -440,6 +440,9 @@ public:
 	//! True when this session's device can run DXR (not D3D9, and RaytracingTier != NOT_SUPPORTED).
 	[[nodiscard]] virtual bool supportsRayTracing() const { return false; }
 	
+	//! True when ray tracing runs as a compute shader over our own BVH (no DXR on this GPU).
+	[[nodiscard]] virtual bool rayTracingInSoftware() const { return false; }
+	
 	//! Dedicated video memory of the adapter in MiB, 0 when the backend does not know it.
 	[[nodiscard]] virtual unsigned long long videoMemoryMiB() const { return 0; }
 	

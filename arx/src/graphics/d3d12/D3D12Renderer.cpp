@@ -3611,6 +3611,10 @@ bool D3D12Renderer::supportsRayTracing() const {
 	return m_rtao && m_rtao->supported();
 }
 
+bool D3D12Renderer::rayTracingInSoftware() const {
+	return supportsRayTracing() && m_rtao->software();
+}
+
 bool D3D12Renderer::supportsDlss() const {
 	return m_sl && m_sl->supportsDlss();
 }
