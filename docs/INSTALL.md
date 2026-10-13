@@ -18,7 +18,7 @@ GPU requirements are in the [README](../README.md#requirements). In short: any D
 
 | File | What it is |
 |---|---|
-| `ArxRaymix.exe` | Launcher: checks for updates, then starts `arx.exe` (new in v1.4) <!-- TODO Gabriel: confirm once the launcher is merged and packaged --> |
+| `ArxRaymix.exe` | Launcher: checks for updates, then starts `arx.exe` (new in v1.4) |
 | `arx.exe` | The game |
 | `*.dll` | SDL2, OpenAL, the DirectX Shader Compiler, and the NVIDIA Streamline / DLSS DLLs |
 | `data\` | Arx Raymix's own text (English and Brazilian Portuguese menus), fonts |
@@ -44,7 +44,7 @@ Running the original game once first is recommended (the zip's `README.txt` asks
 Extract the zip to a folder of its own, for example `C:\Games\ArxRaymix`.
 
 - Do **not** extract it into the Arx Fatalis folder.
-- Avoid `C:\Program Files`: the launcher needs to write to the mod folder when it updates. <!-- TODO Gabriel: keep this line only if the launcher updates in place -->
+- Avoid `C:\Program Files`: the launcher needs to write to the mod folder when it updates.
 
 ### 3. Run
 
@@ -93,18 +93,18 @@ If the game runs slowly, in this order: lower the DLSS mode (Quality → Balance
 
 ### Automatic (v1.4 and later)
 
-<!-- TODO Gabriel: details below follow the planned launcher; check them against the merged code. -->
-
 When `ArxRaymix.exe` starts, it checks the latest release on GitHub. If there is a newer version:
 
-1. It asks **"Update now?"**.
-2. On yes, it downloads the release zip and checks its SHA-256.
-3. It replaces only Arx Raymix's own files and keeps a backup of the old ones. <!-- TODO Gabriel: backup folder name and how to roll back -->
+1. It asks whether to update: **Update now**, **Not now**, or **Skip this version**.
+2. On *Update now*, it downloads the release zip with a progress bar and checks its SHA-256. A download that does not match is refused and nothing changes.
+3. It replaces only the files listed in `package.txt` and moves the old ones to the `backup` folder next to it. `ArxRaymix.exe --rollback` puts the previous version back.
 4. It starts `arx.exe`.
 
-It never touches `cfg.ini`, your saves, or the Arx Fatalis folder. On no, or without an internet connection, the game starts as usual. <!-- TODO Gabriel: confirm offline behaviour -->
+It never touches `cfg.ini`, your saves, or the Arx Fatalis folder. Without an internet connection, or if anything fails, it starts the installed version as usual. `ArxRaymix.exe --no-update` skips the check.
 
-If you start `arx.exe` directly, the main menu shows a **new version available** notice instead. It can be turned off. <!-- TODO Gabriel: where it is turned off (menu option name or cfg.ini key) -->
+Downloaded the new zip from Nexus Mods instead? `ArxRaymix.exe --install <zip>` installs it the same way, with the same backup. When the `.sha256` file from the GitHub release sits next to the zip, it is checked too.
+
+If you start `arx.exe` directly, the main menu shows a **new version available** notice instead. Clicking it opens the release page. Turn it off in **Options → Interface → Check for updates** (`check_for_updates` in `cfg.ini`).
 
 ### Manual
 

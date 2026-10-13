@@ -8,8 +8,8 @@ You need your own copy of Arx Fatalis (Steam or GOG). Nothing else: no patch, no
 
 ## New in 1.4
 
-- **Auto-update.** `ArxRaymix.exe` checks the latest GitHub Release when it starts, asks "Update now?", checks the download's SHA-256, replaces only the mod's files (keeping a backup) and starts the game. It never touches `cfg.ini`, saves or the Arx Fatalis folder. <!-- TODO Gabriel: confirm once merged -->
-- **"New version available" notice** in the main menu when you start `arx.exe` directly. It can be turned off. <!-- TODO Gabriel: confirm once merged; where to turn it off -->
+- **Auto-update.** `ArxRaymix.exe` checks the latest GitHub Release when it starts, asks "Update now?", checks the download's SHA-256, replaces only the mod's files (keeping a backup) and starts the game. It never touches `cfg.ini`, saves or the Arx Fatalis folder. `ArxRaymix.exe --rollback` restores the previous version and `--install <zip>` installs a zip downloaded by hand.
+- **"New version available" notice** in the main menu when you start `arx.exe` directly. Turn it off in Options → Interface → Check for updates.
 - **F7** switches ray tracing on and off instantly, for comparisons and screenshots. A short notice shows the state; saved settings are not changed.
 - **Performance overlay** in Options → Interface: Off, FPS, or FPS + GPU time.
 - **Language prompt on first run** (*Language / Idioma*), English listed first. Speech follows the choice only where voice files exist.

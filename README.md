@@ -34,14 +34,13 @@ It is the same game. You need your own copy of Arx Fatalis (Steam or GOG); no ga
 - **Performance overlay**: F11 shows FPS, the DLSS mode and GPU time per pass.
 - Everything Arx Libertatis already does: widescreen, modern resolutions, bug fixes, and so on.
 
-New in v1.4 (still being finished; see [release notes](docs/RELEASE-NOTES-1.4.md)):
+New in v1.4 (see the [release notes](docs/RELEASE-NOTES-1.4.md)):
 
 - **Auto-update** through an `ArxRaymix.exe` launcher, plus an in-game "new version available" notice that can be turned off.
 - **F7** switches ray tracing on and off instantly, for comparisons and screenshots. Your saved settings are not changed.
 - **Options → Interface → Performance overlay**: Off, FPS, or FPS + GPU time.
 - A **language prompt** on the first run (English or Português (Brasil)).
 
-<!-- TODO Gabriel: the launcher and the update notice are still being built; drop that line if they miss v1.4. -->
 
 ## Requirements
 
@@ -102,9 +101,7 @@ The `cfg.ini` keys behind these settings are listed in [docs/CONFIGURATION.md](d
 
 ## Updating
 
-From v1.4, `ArxRaymix.exe` checks the latest GitHub Release when it starts. If there is a newer version it asks "Update now?". On yes, it downloads the zip, checks its SHA-256, replaces only the mod's own files (keeping a backup) and starts the game. It never touches `cfg.ini`, your saves or the Arx Fatalis folder. If you start `arx.exe` directly, the main menu shows a "new version available" notice instead, which can be turned off.
-
-<!-- TODO Gabriel: confirm launcher behaviour, backup folder name, behaviour without internet, and where the in-game notice is turned off, once the launcher PR is merged. -->
+From v1.4, `ArxRaymix.exe` checks the latest GitHub Release when it starts. If there is a newer version it offers to update. On yes, it downloads the zip, checks its SHA-256, replaces only the mod's own files (the old ones go to `backup`, and `ArxRaymix.exe --rollback` restores them) and starts the game. Offline or on any error it just starts the game. It never touches `cfg.ini`, your saves or the Arx Fatalis folder. If you start `arx.exe` directly, the main menu shows a "new version available" notice instead; turn it off in Options → Interface → Check for updates. Details in [docs/INSTALL.md](docs/INSTALL.md#updating).
 
 To update by hand: download the new zip and extract it over the old folder, or into a new folder. Settings and saves are not in the mod folder, so they carry over.
 

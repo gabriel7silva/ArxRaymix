@@ -38,7 +38,7 @@ Sem GPU NVIDIA ou sem DXR, o jogo roda em Direct3D 12 com a imagem raster normal
    - GOG Galaxy: botão de configurações do jogo → *Gerenciar instalação* → *Mostrar pasta*.
    - A pasta certa é a que tem o arquivo `data.pak`. Anote o caminho.
    - É recomendado abrir o jogo original uma vez antes.
-2. **Extraia o zip** do Arx Raymix numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`. <!-- TODO Gabriel: manter só se o launcher atualizar na própria pasta -->
+2. **Extraia o zip** do Arx Raymix numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`.
 3. **Execute** `ArxRaymix.exe` (ou `arx.exe`).
 
 O Windows pode mostrar um aviso do SmartScreen para programas baixados. Escolha *Mais informações* → *Executar assim mesmo* se confiar no download.
@@ -82,11 +82,9 @@ Com uma GPU com DXR, o jogo escolhe um preset de ray tracing pela memória de v�
 
 ## Atualização
 
-<!-- TODO Gabriel: confirmar estes detalhes quando o launcher estiver pronto. -->
+A partir da v1.4, o `ArxRaymix.exe` consulta a última versão no GitHub ao abrir. Se houver versão nova, oferece **Atualizar agora**, **Agora não** ou **Pular esta versão**. Se você aceitar, ele baixa o zip, confere o SHA-256, troca só os arquivos do mod e abre o jogo. A versão anterior fica na pasta `backup`, e `ArxRaymix.exe --rollback` volta para ela. Sem internet ou com erro, ele só abre o jogo. Baixou o zip pelo Nexus? `ArxRaymix.exe --install <zip>` instala do mesmo jeito. Ele **nunca** mexe no `cfg.ini`, nos saves nem na pasta do Arx Fatalis.
 
-A partir da v1.4, o `ArxRaymix.exe` consulta a última versão no GitHub ao abrir. Se houver versão nova, pergunta **"Atualizar agora?"**. Se você aceitar, ele baixa o zip, confere o SHA-256, troca só os arquivos do mod (guardando um backup) e abre o jogo. Ele **nunca** mexe no `cfg.ini`, nos saves nem na pasta do Arx Fatalis.
-
-Quem abre o `arx.exe` direto vê um aviso de **nova versão disponível** no menu principal. Esse aviso pode ser desligado. <!-- TODO Gabriel: onde desligar -->
+Quem abre o `arx.exe` direto vê um aviso de **nova versão disponível** no menu principal. Para desligar: **Opções → Interface → Verificar atualizações**.
 
 Para atualizar à mão: baixe o zip novo, feche o jogo e extraia por cima da pasta antiga (ou numa pasta nova). Configurações e saves ficam na pasta do usuário e continuam valendo.
 
