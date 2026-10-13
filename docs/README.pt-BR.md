@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="assets/gallery/key-art.jpg" alt="Arx Raymix: Arx Fatalis com ray tracing, DLSS e DirectX 12" width="100%">
+</p>
+
+<p align="center">
   <a href="../README.md">English</a> · <a href="README.pt-BR.md">Português (Brasil)</a>
 </p>
 
@@ -7,6 +11,14 @@
 **Arx Raymix** é um remaster de *Arx Fatalis* (Arkane Studios, 2002) para Windows, feito sobre o motor [Arx Libertatis](https://arx-libertatis.org/). Acrescenta um renderizador **Direct3D 12** com **ray tracing DXR** opcional, mais NVIDIA **DLSS** (Super Resolution, Ray Reconstruction), **DLSS Frame Generation** e **Reflex**. O Direct3D 9 continua como alternativa.
 
 É o mesmo jogo. Você precisa ter o seu próprio *Arx Fatalis* (Steam ou GOG). Os dados do jogo não vêm no download e nunca são redistribuídos.
+
+| Ray tracing desligado | Ray tracing ligado |
+|---|---|
+| ![Pântano, RT desligado](assets/gallery/swamp-rt-off.jpg) | ![Pântano, RT ligado](assets/gallery/swamp-rt-on.jpg) |
+| ![Salão, RT desligado](assets/gallery/hall-rt-off.jpg) | ![Salão, RT ligado](assets/gallery/hall-rt-on.jpg) |
+| ![Corredor, sombras desligadas](assets/gallery/shadows-off.jpg) | ![Corredor, sombras ligadas](assets/gallery/shadows-on.jpg) |
+
+Mais imagens, incluindo as telas de opções, no [README em inglês](../README.md#screenshots).
 
 A documentação oficial é a em inglês: [README](../README.md) e [INSTALL.md](INSTALL.md). Para compilar a partir do código, veja [pt-BR/README.md](pt-BR/README.md).
 
