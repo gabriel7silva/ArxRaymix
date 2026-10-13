@@ -39,18 +39,18 @@ Cada par é o mesmo lugar com **F7** (ray tracing ligado / desligado). RTX 4050 
 | Sistema | Windows 10 ou 11, 64 bits |
 | Jogo | Sua cópia de **Arx Fatalis** da Steam ou da GOG |
 | GPU básica | Uma GPU com driver Direct3D 12. GPUs antigas usam o Direct3D 9 |
-| Ray tracing | GPU e driver com suporte a DirectX Raytracing (DXR) |
+| Ray tracing | Qualquer GPU Direct3D 12. Com suporte a DirectX Raytracing (DXR), roda nos núcleos RT, com cada efeito até Alto; sem DXR, roda por software, com cada efeito limitado a Baixo |
 | DLSS Super Resolution / Ray Reconstruction | GPU NVIDIA GeForce RTX |
 | DLSS Frame Generation | GPU NVIDIA GeForce RTX série 40 ou mais nova |
 | GPU mínima / recomendada | <!-- TODO Gabriel: preencher --> |
 
 Não é preciso mais nada: nem patch, nem outro mod, nem o Arx Libertatis instalado. As versões da Steam e da GOG já trazem os dados de que o motor precisa.
 
-Sem GPU NVIDIA ou sem DXR, o jogo roda em Direct3D 12 com a imagem raster normal. A página de Ray tracing e as opções de DLSS ficam cinza, com o motivo escrito.
+**Sem DXR** (GeForce GTX antigas, AMD Radeon RX 5000 e anteriores, Intel antigas), o ray tracing roda por software: os mesmos efeitos, cada um limitado a Baixo. **Sem GPU NVIDIA RTX**, as opções de DLSS ficam cinza, com o motivo escrito. No Direct3D 9 e no OpenGL não há ray tracing nem DLSS.
 
 ## Download
 
-- **Nexus Mods** (canal principal): [NEXUS_URL] <!-- TODO Gabriel: link da página no Nexus -->
+- **Nexus Mods** (canal principal): <https://www.nexusmods.com/arxfatalis/mods/37>
 - **GitHub Releases**: <https://github.com/gabriel7silva/ArxRaymix/releases>
 
 ## Instalação
@@ -65,7 +65,7 @@ Sem GPU NVIDIA ou sem DXR, o jogo roda em Direct3D 12 com a imagem raster normal
    - **Zip:** extraia numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`.
 3. **Execute** *Arx Raymix* pelo Menu Iniciar, ou o `ArxRaymix.exe` (ou `arx.exe`).
 
-**Aviso "O Windows protegeu o computador":** o Arx Raymix **ainda não tem assinatura digital**, então o SmartScreen do Windows avisa na primeira vez que você abre o instalador, o `ArxRaymix.exe` ou o `arx.exe` ("Editor desconhecido"). A assinatura digital está planejada para uma próxima versão. Para continuar, clique em **Mais informações** e depois em **Executar assim mesmo**. Para conferir que o arquivo é o original, compare o SHA-256 com o arquivo `.sha256` da página da release (no PowerShell: `Get-FileHash .\ArxRaymix-v1.4-setup.exe -Algorithm SHA256`). Baixe o Arx Raymix só pelo Nexus Mods ou pela página de releases do GitHub.
+**Aviso "O Windows protegeu o computador":** o Arx Raymix **ainda não tem assinatura digital**, então o SmartScreen do Windows avisa na primeira vez que você abre o instalador, o `ArxRaymix.exe` ou o `arx.exe` ("Editor desconhecido"). A assinatura digital está planejada para uma próxima versão. Para continuar, clique em **Mais informações** e depois em **Executar assim mesmo**. Para conferir que o arquivo é o original, compare o SHA-256 com o arquivo `.sha256` da página da release (no PowerShell: `Get-FileHash .\ArxRaymix-v1.5-setup.exe -Algorithm SHA256`). Baixe o Arx Raymix só pelo Nexus Mods ou pela página de releases do GitHub.
 
 ### Se o jogo não encontrar os dados
 
@@ -89,7 +89,7 @@ Para trocar depois: **Options → Language settings** (em português: **Opções
 
 ## Primeira execução
 
-Com uma GPU com DXR, o jogo escolhe um preset de ray tracing pela memória de vídeo: Baixo com menos de 5 GiB, Alto a partir de 9 GiB, Médio no meio. Se a GPU tiver DLSS, liga o DLSS Qualidade. Tudo isso pode ser mudado a qualquer momento.
+Com o ray tracing disponível, o jogo escolhe um preset de ray tracing pela memória de vídeo: Baixo com menos de 5 GiB, Alto a partir de 9 GiB, Médio no meio. Se a GPU tiver DLSS, liga o DLSS Qualidade. Tudo isso pode ser mudado a qualquer momento.
 
 | Onde | O quê |
 |---|---|

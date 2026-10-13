@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.4-c2521a">
+  <img alt="version" src="https://img.shields.io/badge/version-1.5-c2521a">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20x64-2b579a">
   <img alt="base" src="https://img.shields.io/badge/base-Arx%20Libertatis%201.3--dev-6f42c1">
   <img alt="renderer" src="https://img.shields.io/badge/renderer-Direct3D%2012-0078d4">
@@ -40,8 +40,8 @@ Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 
 ## Features
 
 - **Direct3D 12 renderer**, the default. If D3D12 cannot start, the game falls back to Direct3D 9 for that launch.
-- **Hybrid ray tracing (DXR)** on top of the raster image: ambient occlusion, shadows from the level's own lights (soft edges), one bounce of indirect light, water / metal reflections, and **volumetric fog** whose light shafts are cut by the level geometry. Each effect is Off / Low / Medium / High, with a **Ray tracing distance** setting. Switching ray tracing off leaves the complete raster renderer.
-- **First-run preset.** On the first launch with a DXR GPU, the game picks Low, Medium or High from your video memory, and DLSS Quality where available.
+- **Hybrid ray tracing** on top of the raster image (DXR, or software on GPUs without DXR): ambient occlusion, shadows from the level's own lights (soft edges), one bounce of indirect light, water / metal reflections, and **volumetric fog** whose light shafts are cut by the level geometry. Each effect is Off / Low / Medium / High, with a **Ray tracing distance** setting. Switching ray tracing off leaves the complete raster renderer.
+- **First-run preset.** On the first launch with ray tracing available, the game picks Low, Medium or High from your video memory, and DLSS Quality where available.
 - **DLSS Super Resolution** (DLAA, Quality, Balanced, Performance, Ultra Performance).
 - **DLSS Frame Generation** (2×), with **Reflex** low latency switched on alongside it.
 - **DLSS Ray Reconstruction**, experimental.
@@ -50,12 +50,14 @@ Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 
 - **Performance overlay**: F11 shows FPS, the DLSS mode and GPU time per pass.
 - Everything Arx Libertatis already does: widescreen, modern resolutions, bug fixes, and so on.
 
-New in v1.4 (see the [release notes](docs/RELEASE-NOTES-1.4.md)):
+New in v1.5 (see the [release notes](docs/RELEASE-NOTES-1.5.md)):
 
-- **Auto-update** through an `ArxRaymix.exe` launcher, plus an in-game "new version available" notice that can be turned off.
-- **F7** switches ray tracing on and off instantly, for comparisons and screenshots. Your saved settings are not changed.
-- **Options → Interface → Performance overlay**: Off, FPS, or FPS + GPU time.
-- A **language prompt** on the first run (English or Português (Brasil)).
+- **Ray tracing without an RTX card.** GPUs without DXR trace the same effects in software, each held at Low. GPUs with DXR keep hardware ray tracing.
+- **Volumetric fog** with light shafts cut by the level geometry (Options → Ray tracing).
+- **OpenGL** as a third graphics API in Options → Video.
+- Direct3D 9 fixes: F10 screenshots and save thumbnails work again, and `arx.log` no longer fills up.
+
+v1.4 added auto-update, F7, the performance overlay and the first-run language prompt ([release notes 1.4](docs/RELEASE-NOTES-1.4.md)).
 
 
 ## Requirements
@@ -65,21 +67,21 @@ New in v1.4 (see the [release notes](docs/RELEASE-NOTES-1.4.md)):
 | OS | Windows 10 or 11, 64-bit |
 | Game | Your own copy of **Arx Fatalis** from Steam or GOG |
 | GPU (basic) | A GPU with a Direct3D 12 driver. Older GPUs use the Direct3D 9 fallback |
-| Ray tracing | A GPU and driver with DirectX Raytracing (DXR) support |
+| Ray tracing | Any Direct3D 12 GPU. With DirectX Raytracing (DXR) support it runs on the RT cores, every effect up to High; without DXR it runs in software, each effect held at Low |
 | DLSS Super Resolution / Ray Reconstruction | An NVIDIA GeForce RTX GPU |
 | DLSS Frame Generation | An NVIDIA GeForce RTX 40 series GPU or newer |
 | Minimum / recommended GPU | <!-- TODO Gabriel: fill in tested GPUs and VRAM (development hardware: RTX 4050 Laptop) --> |
 
 Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. The Steam and GOG releases already contain the data the engine needs.
 
-**Without an NVIDIA GPU or without DXR**, the game still runs on Direct3D 12 with the normal raster image. The Ray tracing page and the DLSS options are grayed out with the reason shown ("Requires DirectX 12 and a GPU with DXR", "Requires an NVIDIA GPU with DLSS"). On Direct3D 9 there is no ray tracing and no DLSS.
+**Without DXR** (older GeForce GTX, AMD Radeon RX 5000 and older, older Intel), ray tracing runs in software: the same effects, each held at Low. **Without an NVIDIA RTX GPU**, the DLSS options are grayed out with the reason shown. On Direct3D 9 and OpenGL there is no ray tracing and no DLSS.
 
 ## Download
 
-- **Nexus Mods** (main channel): [NEXUS_URL] <!-- TODO Gabriel: Nexus page URL -->
+- **Nexus Mods** (main channel): <https://www.nexusmods.com/arxfatalis/mods/37>
 - **GitHub Releases**: <https://github.com/gabriel7silva/ArxRaymix/releases>
 
-Two downloads, same files: the installer `ArxRaymix-v1.4-setup.exe` (recommended) and the zip `ArxRaymix-v1.4.zip`. Each has a `.sha256` file next to it on the GitHub release.
+Two downloads, same files: the installer `ArxRaymix-v1.5-setup.exe` (recommended) and the zip `ArxRaymix-v1.5.zip`. Each has a `.sha256` file next to it on the GitHub release.
 
 ## Install
 
@@ -94,7 +96,7 @@ Step-by-step instructions for Steam and GOG, and what to do if the game is not f
 ## First run
 
 - The first time you start (when `cfg.ini` has no language yet), a **Language / Idioma** screen lists the available text languages, English first. Pick one; you can change it later in **Options → Language settings**. Voices stay in English: the Portuguese voice files belong to Arkane and are not included.
-- With a DXR GPU, a ray tracing preset is chosen for you from your video memory (Low under 5 GiB, High from 9 GiB, Medium in between), and DLSS Quality is turned on if your GPU supports it. Change either at any time.
+- When ray tracing is available, a ray tracing preset is chosen for you from your video memory (Low under 5 GiB, High from 9 GiB, Medium in between), and DLSS Quality is turned on if your GPU supports it. Change either at any time.
 - Your settings are saved to `cfg.ini` in your user folder (see [Troubleshooting](#troubleshooting)).
 
 ## Settings
