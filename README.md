@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/gallery/key-art.jpg" alt="Arx Raymix: Arx Fatalis with ray tracing, DLSS and DirectX 12" width="100%">
+  <img src="docs/assets/banner.svg" alt="Arx Raymix — Arx Fatalis remastered with Direct3D 12" width="100%">
 </p>
 
 <p align="center">
@@ -19,23 +19,7 @@
 
 It is the same game. You need your own copy of Arx Fatalis (Steam or GOG); no game data is included or redistributed.
 
-## Screenshots
-
-Same place, ray tracing off and on (F7 switches it in game). RTX 4050 Laptop, High preset, DLSS Quality.
-
-| Ray tracing off | Ray tracing on |
-|---|---|
-| ![Swamp, ray tracing off](docs/assets/gallery/swamp-rt-off.jpg) | ![Swamp, ray tracing on](docs/assets/gallery/swamp-rt-on.jpg) |
-| ![Hall, ray tracing off](docs/assets/gallery/hall-rt-off.jpg) | ![Hall, ray tracing on](docs/assets/gallery/hall-rt-on.jpg) |
-| ![Corridor, ray traced shadows off](docs/assets/gallery/shadows-off.jpg) | ![Corridor, ray traced shadows on](docs/assets/gallery/shadows-on.jpg) |
-
-<p align="center">
-  <img src="docs/assets/gallery/sewer-corridor-rt.jpg" alt="Sewer corridor with ray traced lighting and water reflections" width="100%">
-</p>
-
-| Options → Ray tracing | Options → Video (DirectX 12, DLSS, Frame Generation) | Options |
-|---|---|---|
-| ![Ray tracing options](docs/assets/gallery/options-ray-tracing.jpg) | ![Video options](docs/assets/gallery/options-video-dlss-fg.jpg) | ![Options menu](docs/assets/gallery/options-menu.jpg) |
+<!-- TODO Gabriel: add 3–4 screenshots here (RT on/off comparison, water reflection, torch shadows, Options → Ray tracing page). Suggested path: docs/assets/screenshots/*.jpg -->
 
 ## Features
 
