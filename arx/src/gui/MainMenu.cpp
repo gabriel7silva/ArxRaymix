@@ -767,6 +767,10 @@ public:
 			std::string current = std::string(getLocalised("system_menus_options_video_graphics_api"));
 			current += ": ";
 			current += activeGraphicsApiName();
+			if(g_rendererFellBackToD3D9) {
+				current += " ";
+				current += getLocalised("system_menus_options_video_api_fallback");
+			}
 			auto currentApi = std::make_unique<TextWidget>(hFontMenu, current);
 			currentApi->setEnabled(false);
 			addCenter(std::move(currentApi), false);
@@ -788,7 +792,10 @@ public:
 			addCenter(std::move(slider));
 		}
 		{
-			if(graphicsApiChoice(config.video.renderer) != activeGraphicsApiChoice()) {
+			// After a failed Direct3D 12 start the choice and the API differ, but a restart would
+			// not change that; the line above already says what happened.
+			if(graphicsApiChoice(config.video.renderer) != activeGraphicsApiChoice()
+			   && !(g_rendererFellBackToD3D9 && graphicsApiChoice(config.video.renderer) == 0)) {
 				auto restart = std::make_unique<TextWidget>(hFontControls,
 					getLocalised("system_menus_options_video_api_restart"));
 				restart->setEnabled(false);

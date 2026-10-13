@@ -146,7 +146,9 @@ inline void build(const float * verts4, size_t triCount, std::vector<Node> & nod
 		float bestCost = std::numeric_limits<float>::max();
 		for(int axis = 0; axis < 3; axis++) {
 			float extent = cbox.hi[axis] - cbox.lo[axis];
-			if(!(extent > 1e-6f)) {
+			// Also skips an infinite or NaN extent: a corrupt vertex would turn the bin index
+			// into int(NaN) and write outside the bins.
+			if(!(extent > 1e-6f) || !std::isfinite(extent)) {
 				continue;
 			}
 			Aabb binBox[kBins];
@@ -154,7 +156,7 @@ inline void build(const float * verts4, size_t triCount, std::vector<Node> & nod
 			float scale = float(kBins) / extent;
 			for(std::uint32_t i = task.first; i < task.first + task.count; i++) {
 				std::uint32_t t = triIndex[i];
-				int b = (std::min)(kBins - 1, int((centroid[size_t(t) * 3 + size_t(axis)] - cbox.lo[axis]) * scale));
+				int b = (std::max)(0, (std::min)(kBins - 1, int((centroid[size_t(t) * 3 + size_t(axis)] - cbox.lo[axis]) * scale)));
 				binBox[b].grow(triBox[t]);
 				binCount[b]++;
 			}
@@ -197,7 +199,7 @@ inline void build(const float * verts4, size_t triCount, std::vector<Node> & nod
 			auto begin = triIndex.begin() + task.first;
 			auto end = begin + task.count;
 			auto split = std::partition(begin, end, [&](std::uint32_t t) {
-				int b = (std::min)(kBins - 1, int((centroid[size_t(t) * 3 + size_t(bestAxis)] - cbox.lo[bestAxis]) * scale));
+				int b = (std::max)(0, (std::min)(kBins - 1, int((centroid[size_t(t) * 3 + size_t(bestAxis)] - cbox.lo[bestAxis]) * scale)));
 				return b < bestSplit;
 			});
 			mid = std::uint32_t(split - triIndex.begin());

@@ -526,7 +526,10 @@ bool Config::save() {
 	writer.writeKey(Key::rtao, video.rtao);
 	writer.writeKey(Key::dxrShadows, video.dxrShadows);
 	writer.writeKey(Key::dxrGi, video.dxrGi);
-	writer.writeKey(Key::dxrPreset, video.dxrPreset);
+	// While the first-run preset is still pending, writing dxr_preset=0 would settle it as Off.
+	if(!video.dxrFirstRun) {
+		writer.writeKey(Key::dxrPreset, video.dxrPreset);
+	}
 	writer.writeKey(Key::dxrReflections, video.dxrReflections);
 	writer.writeKey(Key::dxrTransReflections, video.dxrTransReflections);
 	writer.writeKey(Key::dxrShadowDenoise, video.dxrShadowDenoise);
@@ -712,7 +715,8 @@ bool Config::init(const fs::path & file) {
 		if(video.dxrPreset <= 3) {
 			applyDxrPreset(video.dxrPreset);
 		}
-	} else if(video.rtao || video.dxrShadows || video.dxrGi) {
+	} else if(dxrValuesEnabled(currentDxrValues())) {
+		// A cfg.ini from before presets, with any effect switched on: keep the player's values.
 		video.dxrPreset = 4;
 	} else {
 		video.dxrPreset = 0;
@@ -815,17 +819,26 @@ void Config::applyDxrPreset(int preset) {
 	video.dxrFog = v.dxrFog;
 }
 
-bool Config::dxrEffectsEnabled() const {
-	if(video.dxrCompareOff) {
-		return false;
-	}
+DxrPresetValues Config::currentDxrValues() const {
 	DxrPresetValues v {};
 	v.rtao = video.rtao;
 	v.dxrShadows = video.dxrShadows;
 	v.dxrGi = video.dxrGi;
 	v.dxrReflections = video.dxrReflections;
 	v.dxrTransReflections = video.dxrTransReflections;
+	v.dxrShadowDenoise = video.dxrShadowDenoise;
+	v.dxrGiDenoise = video.dxrGiDenoise;
 	v.dxrContact = video.dxrContact;
+	v.dxrDebris = video.dxrDebris;
+	v.dxrTransparency = video.dxrTransparency;
+	v.dxrRr = video.dxrRr;
 	v.dxrFog = video.dxrFog;
-	return dxrValuesEnabled(v);
+	return v;
+}
+
+bool Config::dxrEffectsEnabled() const {
+	if(video.dxrCompareOff) {
+		return false;
+	}
+	return dxrValuesEnabled(currentDxrValues());
 }

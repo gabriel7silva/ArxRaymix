@@ -29,6 +29,11 @@ namespace {
 struct State {
 	std::mutex mutex;
 	std::optional<Available> available;
+	//! What the check found, logged by the main thread: the detached thread may still be waiting
+	//! on the network when the game exits, and must not touch the logger (or any other static)
+	//! once static destruction has begun.
+	std::string message;
+	bool logged = false;
 };
 
 // Shared with the detached thread so that neither side outlives the other's data.
@@ -57,30 +62,32 @@ void startCheck() {
 		return;
 	}
 
-	std::thread([state = g_state]() {
-		http::Request request;
-		request.url = latestReleaseApi();
-		request.userAgent = "ArxRaymix/" + arx_version;
-		request.accept = "application/vnd.github+json";
-		request.maxBytes = 1024 * 1024;
+	// Everything the thread needs is copied in: arx_version is a static string.
+	http::Request request;
+	request.url = latestReleaseApi();
+	request.userAgent = "ArxRaymix/" + arx_version;
+	request.accept = "application/vnd.github+json";
+	request.maxBytes = 1024 * 1024;
+	const std::uint64_t thisVersion = arx_version_number;
+	
+	std::thread([state = g_state, request = std::move(request), thisVersion]() {
 		std::string body;
 		std::string error;
+		std::optional<Available> found;
+		std::string message;
 		if(!http::get(request, body, error)) {
-			LogInfo << "Update check: " << error;
-			return;
+			message = "Update check: " + error;
+		} else if(std::optional<Release> release = parseRelease(body); !release) {
+			message = "Update check: no usable release";
+		} else if(release->version <= thisVersion) {
+			message = "Update check: " + release->tag + " is not newer than this build";
+		} else {
+			message = "Update check: " + release->tag + " is available";
+			found = Available { release->tag, release->pageUrl };
 		}
-		std::optional<Release> release = parseRelease(body);
-		if(!release) {
-			LogInfo << "Update check: no usable release";
-			return;
-		}
-		if(release->version <= arx_version_number) {
-			LogInfo << "Update check: " << release->tag << " is not newer than this build";
-			return;
-		}
-		LogInfo << "Update check: " << release->tag << " is available";
 		std::lock_guard<std::mutex> lock(state->mutex);
-		state->available = Available { release->tag, release->pageUrl };
+		state->available = std::move(found);
+		state->message = std::move(message);
 	}).detach();
 
 	#endif
@@ -89,6 +96,10 @@ void startCheck() {
 
 std::optional<Available> available() {
 	std::lock_guard<std::mutex> lock(g_state->mutex);
+	if(!g_state->logged && !g_state->message.empty()) {
+		g_state->logged = true;
+		LogInfo << g_state->message;
+	}
 	return g_state->available;
 }
 

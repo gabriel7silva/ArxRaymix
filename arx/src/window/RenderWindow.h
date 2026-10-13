@@ -92,4 +92,8 @@ protected:
 	
 };
 
+//! Direct3D 12 could not start this session and the game runs on the Direct3D 9 fallback, while
+//! cfg.ini still asks for Direct3D 12. Options -> Video says so instead of asking for a restart.
+extern bool g_rendererFellBackToD3D9;
+
 #endif // ARX_WINDOW_RENDERWINDOW_H

@@ -77,6 +77,8 @@ struct ARX_SDL_SysWMinfo {
 
 SDL2Window * SDL2Window::s_mainWindow = nullptr;
 
+bool g_rendererFellBackToD3D9 = false;
+
 //! The OpenGL renderer of Arx Libertatis, kept as a third choice next to Direct3D 12 and 9 for
 //! drivers whose Direct3D is broken: ARX_RENDERER=opengl, or "OpenGL" in Options -> Video.
 static bool wantsOpenGLRenderer() {
@@ -85,8 +87,12 @@ static bool wantsOpenGLRenderer() {
 		if(boost::iequals(env, "opengl") || boost::iequals(env, "gl")) {
 			return true;
 		}
-		if(*env) {
-			return false;
+		// A Direct3D name picks Direct3D; anything else (a typo, "auto") leaves cfg.ini in charge.
+		for(const char * d3d : { "d3d9", "dx9", "Direct3D 9", "DirectX 9", "d3d12", "dx12",
+		                         "Direct3D 12", "DirectX 12" }) {
+			if(boost::iequals(env, d3d)) {
+				return false;
+			}
 		}
 	}
 	return config.video.renderer == "OpenGL";
@@ -477,6 +483,7 @@ bool SDL2Window::initialize() {
 		created = static_cast<D3D12Renderer *>(m_renderer)->createDevice(hwnd, backbufferW, backbufferH);
 		if(!created) {
 			LogWarning << "D3D12 createDevice failed, falling back to D3D9";
+			g_rendererFellBackToD3D9 = true;
 #if ARX_HAVE_D3D9
 			auto * fallback = new D3D9Renderer;
 			fallback->adoptListeners(*m_renderer);
