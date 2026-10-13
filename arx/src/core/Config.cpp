@@ -101,6 +101,7 @@ constexpr const int
 	dxrTransReflections = 0,
 	dxrShadowDenoise = 0,
 	dxrGiDenoise = 0,
+	dxrFog = 0,
 	dxrContact = 0,
 	dxrDebris = 0,
 	dxrTransparency = 0,
@@ -252,6 +253,7 @@ constexpr const std::string_view
 	dxrTransReflections = "dxr_trans_reflections",
 	dxrShadowDenoise = "dxr_shadow_denoise",
 	dxrGiDenoise = "dxr_gi_denoise",
+	dxrFog = "dxr_fog",
 	dxrContact = "dxr_contact",
 	dxrDebris = "dxr_debris",
 	dxrTransparency = "dxr_transparency",
@@ -529,6 +531,7 @@ bool Config::save() {
 	writer.writeKey(Key::dxrTransReflections, video.dxrTransReflections);
 	writer.writeKey(Key::dxrShadowDenoise, video.dxrShadowDenoise);
 	writer.writeKey(Key::dxrGiDenoise, video.dxrGiDenoise);
+	writer.writeKey(Key::dxrFog, video.dxrFog);
 	writer.writeKey(Key::dxrContact, video.dxrContact);
 	writer.writeKey(Key::dxrDebris, video.dxrDebris);
 	writer.writeKey(Key::dxrTransparency, video.dxrTransparency);
@@ -683,6 +686,7 @@ bool Config::init(const fs::path & file) {
 	video.dxrShadowDenoise = glm::clamp(reader.getKey(Section::Video, Key::dxrShadowDenoise,
 	                                                 Default::dxrShadowDenoise), 0, 1);
 	video.dxrGiDenoise = glm::clamp(reader.getKey(Section::Video, Key::dxrGiDenoise, Default::dxrGiDenoise), 0, 2);
+	video.dxrFog = glm::clamp(reader.getKey(Section::Video, Key::dxrFog, Default::dxrFog), 0, 3);
 	video.dxrContact = reader.getKey(Section::Video, Key::dxrContact, Default::dxrContact) ? 1 : 0;
 	video.dxrDebris = reader.getKey(Section::Video, Key::dxrDebris, Default::dxrDebris) ? 1 : 0;
 	video.dxrTransparency = glm::clamp(reader.getKey(Section::Video, Key::dxrTransparency,
@@ -808,6 +812,7 @@ void Config::applyDxrPreset(int preset) {
 	video.dxrDebris = v.dxrDebris;
 	video.dxrTransparency = v.dxrTransparency;
 	video.dxrRr = v.dxrRr;
+	video.dxrFog = v.dxrFog;
 }
 
 bool Config::dxrEffectsEnabled() const {
@@ -821,5 +826,6 @@ bool Config::dxrEffectsEnabled() const {
 	v.dxrReflections = video.dxrReflections;
 	v.dxrTransReflections = video.dxrTransReflections;
 	v.dxrContact = video.dxrContact;
+	v.dxrFog = video.dxrFog;
 	return dxrValuesEnabled(v);
 }

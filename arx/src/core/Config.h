@@ -171,6 +171,8 @@ public:
 		int dxrShadowDenoise;
 		//! Indirect denoise. 0 = Low, 1 = Medium, 2 = High.
 		int dxrGiDenoise;
+		//! Volumetric haze traced in the ray pass: 0 Off, 1 Low, 2 Medium, 3 High.
+		int dxrFog;
 		//! Short silhouette contact rays. 0 = Off, 1 = On.
 		int dxrContact;
 		//! Include small props in the TLAS. 0 = Off, 1 = On.

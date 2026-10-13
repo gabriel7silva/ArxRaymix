@@ -4111,6 +4111,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 	const bool transOn = config.video.dxrTransReflections > 0;
 	const bool metalOn = config.video.dxrReflections > 0;
 	const bool contactOn = config.video.dxrContact > 0;
+	const bool fogOn = config.video.dxrFog > 0;
 	if(!aoOn) {
 		if(!m_loggedRtaoOff) {
 			LogInfo << "RTAO disabled";
@@ -4159,7 +4160,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 	const float casterDist = (std::min)(dist.caster, renderFar);
 	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
 	size_t nlights = 0;
-	if(shadowsOn || giOn || transOn || metalOn || contactOn) {
+	if(shadowsOn || giOn || transOn || metalOn || contactOn || fogOn) {
 		const glm::vec3 cam(glm::inverse(m_view)[3]);
 		nlights = fillShadowLights(cam, lights, D3D12Rtao::kMaxShadowLights, dist.lightHops);
 	}
@@ -4230,6 +4231,11 @@ void D3D12Renderer::applyWorldRayEffects() {
 		m_loggedShadowsOn = true;
 		m_loggedShadowsOff = false;
 	}
+	if(fogOn != m_loggedFogOn) {
+		LogInfo << "DXR volumetric haze " << (fogOn ? "enabled" : "disabled")
+		        << " quality=" << config.video.dxrFog;
+		m_loggedFogOn = fogOn;
+	}
 	if(giOn && !m_loggedGiOn) {
 		LogInfo << "DXR GI enabled quality=" << config.video.dxrGi;
 		m_loggedGiOn = true;
@@ -4253,6 +4259,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 	dxr.shadowDenoise = config.video.dxrShadowDenoise;
 	dxr.giDenoise = config.video.dxrGiDenoise;
 	dxr.contact = config.video.dxrContact;
+	dxr.fogQuality = config.video.dxrFog;
 	dxr.distance = config.video.dxrDistance;
 	dxr.range = casterDist;
 	const bool wantRr = config.video.dxrRr > 0 && supportsDlssRr() && config.dxrEffectsEnabled();

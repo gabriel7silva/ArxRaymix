@@ -40,7 +40,7 @@ Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 
 ## Features
 
 - **Direct3D 12 renderer**, the default. If D3D12 cannot start, the game falls back to Direct3D 9 for that launch.
-- **Hybrid ray tracing (DXR)** on top of the raster image: ambient occlusion, shadows from the level's own lights (soft edges), one bounce of indirect light, and water / metal reflections. Each effect is Off / Low / Medium / High, with a **Ray tracing distance** setting. Switching ray tracing off leaves the complete raster renderer.
+- **Hybrid ray tracing (DXR)** on top of the raster image: ambient occlusion, shadows from the level's own lights (soft edges), one bounce of indirect light, water / metal reflections, and **volumetric fog** whose light shafts are cut by the level geometry. Each effect is Off / Low / Medium / High, with a **Ray tracing distance** setting. Switching ray tracing off leaves the complete raster renderer.
 - **First-run preset.** On the first launch with a DXR GPU, the game picks Low, Medium or High from your video memory, and DLSS Quality where available.
 - **DLSS Super Resolution** (DLAA, Quality, Balanced, Performance, Ultra Performance).
 - **DLSS Frame Generation** (2×), with **Reflex** low latency switched on alongside it.
@@ -182,6 +182,7 @@ Portuguese developer docs: [docs/pt-BR/README.md](docs/pt-BR/README.md).
 - **[Arx Libertatis](https://arx-libertatis.org/) team and contributors**: the engine this is built on. See [`arx/AUTHORS`](arx/AUTHORS) and [`arx/CHANGELOG`](arx/CHANGELOG).
 - **NVIDIA**: Streamline SDK, DLSS, DLSS Frame Generation and Reflex.
 - **Microsoft**: DirectX Shader Compiler (`dxcompiler.dll`, `dxil.dll`).
+- **Parricidium**: the volumetric fog follows the haze of [ArxCoop](https://github.com/Parricidium/ArxCoop) (GPLv3), adapted to traced shadows.
 - Libraries from [ArxWindows](https://github.com/arx/ArxWindows): SDL2, OpenAL Soft, Boost, FreeType, GLM, zlib.
 - **Arx Raymix**: Gabriel Silva ([gabriel7silva](https://github.com/gabriel7silva)). <!-- TODO Gabriel: confirm how you want to be credited -->
 

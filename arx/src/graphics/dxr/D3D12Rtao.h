@@ -46,7 +46,7 @@ public:
 	bool init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap, unsigned baseIndex);
 
 	//! Descriptors this module needs inside the shared heap.
-	static constexpr unsigned kHeapDescriptors = 30;
+	static constexpr unsigned kHeapDescriptors = 33;
 	void shutdown();
 	void resize(int width, int height);
 	//! True when resize() would actually release and recreate the targets. Lets the caller pay for
@@ -127,6 +127,7 @@ public:
 		int shadowDenoise = 0;
 		int giDenoise = 0;
 		int contact = 0;
+		int fogQuality = 0; //!< volumetric haze, 0 Off .. 3 High
 		int distance = 2;
 		float range = 0.f;
 		bool skipTemporal = false;
@@ -307,6 +308,9 @@ private:
 	ComPtr<ID3D12Resource> m_giPrev;
 	ComPtr<ID3D12Resource> m_spec;
 	ComPtr<ID3D12Resource> m_specPrev;
+	//! Volumetric haze at half resolution (rgb in-scatter, a transmittance) and its history.
+	ComPtr<ID3D12Resource> m_fog;
+	ComPtr<ID3D12Resource> m_fogPrev;
 	ComPtr<ID3D12Resource> m_waterMask;
 	ComPtr<ID3D12Resource> m_waterDepth;
 	ComPtr<ID3D12Resource> m_metalMask;

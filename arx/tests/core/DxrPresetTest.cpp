@@ -13,7 +13,7 @@ CppUnit::AutoRegisterSuite<DxrPresetTest> g_registerDxrPresetTest;
 namespace {
 
 // The ranges Config::init clamps each key to when it reads cfg.ini.
-constexpr DxrPresetValues kSliderMax = { 3, 3, 3, 3, 3, 1, 2, 1, 1, 2, 1 };
+constexpr DxrPresetValues kSliderMax = { 3, 3, 3, 3, 3, 1, 2, 1, 1, 2, 1, 3 };
 
 template <typename F>
 void forEachField(const DxrPresetValues & a, const DxrPresetValues & b, F && f) {
@@ -28,6 +28,7 @@ void forEachField(const DxrPresetValues & a, const DxrPresetValues & b, F && f) 
 	f("dxrDebris", a.dxrDebris, b.dxrDebris);
 	f("dxrTransparency", a.dxrTransparency, b.dxrTransparency);
 	f("dxrRr", a.dxrRr, b.dxrRr);
+	f("dxrFog", a.dxrFog, b.dxrFog);
 }
 
 } // anonymous namespace
@@ -77,6 +78,9 @@ void DxrPresetTest::shapingSlidersDoNotEnableTest() {
 	v.dxrRr = 1;
 	CPPUNIT_ASSERT(!dxrValuesEnabled(v));
 	v.dxrContact = 1;
+	CPPUNIT_ASSERT(dxrValuesEnabled(v));
+	v.dxrContact = 0;
+	v.dxrFog = 1;
 	CPPUNIT_ASSERT(dxrValuesEnabled(v));
 }
 

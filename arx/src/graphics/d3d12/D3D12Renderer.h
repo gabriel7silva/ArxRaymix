@@ -205,6 +205,7 @@ private:
 	bool m_loggedShadowsOn = false;
 	bool m_loggedGiOff = false;
 	bool m_loggedGiOn = false;
+	bool m_loggedFogOn = false;
 	bool m_loggedReflOff = false;
 	bool m_loggedReflOn = false;
 	
