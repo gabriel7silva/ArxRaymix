@@ -108,6 +108,6 @@ Mais detalhes, em inglês: [INSTALL.md](INSTALL.md#troubleshooting).
 - O **código do motor** é GPLv3 ([LICENSE](../LICENSE)): Copyright (C) 2011-2023 Arx Libertatis Team and Contributors, com as mudanças do Arx Raymix por Gabriel Silva, baseado no código-fonte GPLv3 de Arx Fatalis, Copyright (C) 1999-2010 Arkane Studios SA, uma empresa ZeniMax Media.
 - **Arx Fatalis** e os dados do jogo são © Arkane Studios / ZeniMax Media / Bethesda Softworks. Não vêm no download.
 - As DLLs de **NVIDIA DLSS, Streamline e Reflex** são © NVIDIA Corporation e seguem a licença da própria NVIDIA, não a GPLv3.
-- As bibliotecas de terceiros mantêm as suas licenças.
+- As bibliotecas de terceiros mantêm as suas licenças: veja [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md). O zip traz todos os textos de licença na pasta `licenses\`.
 
 O Arx Raymix não tem vínculo com a Arkane Studios, a ZeniMax Media, a Bethesda Softworks nem a NVIDIA, e não é endossado por elas.
