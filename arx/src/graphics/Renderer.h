@@ -440,6 +440,9 @@ public:
 	//! True when this session's device can run DXR (not D3D9, and RaytracingTier != NOT_SUPPORTED).
 	[[nodiscard]] virtual bool supportsRayTracing() const { return false; }
 	
+	//! Dedicated video memory of the adapter in MiB, 0 when the backend does not know it.
+	[[nodiscard]] virtual unsigned long long videoMemoryMiB() const { return 0; }
+	
 	//! True when Streamline loaded and DLSS Super Resolution / DLAA is supported.
 	[[nodiscard]] virtual bool supportsDlss() const { return false; }
 	

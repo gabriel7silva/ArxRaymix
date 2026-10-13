@@ -2739,6 +2739,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	if(adapter) {
 		adapter->GetDesc1(&ad);
 	}
+	m_vramMiB = static_cast<unsigned long long>(ad.DedicatedVideoMemory) / (1024 * 1024);
 	if(FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(m->device.put())))) {
 		LogError << "D3D12: D3D12CreateDevice failed";
 		return false;
@@ -2794,7 +2795,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	char name[128] {};
 	WideCharToMultiByte(CP_UTF8, 0, ad.Description, -1, name, int(sizeof(name)), nullptr, nullptr);
 	LogInfo << "Using D3D12 renderer " << width << "x" << height
-	        << " (raster + optional RTAO, adapter=" << name << ")";
+	        << " (raster + optional RTAO, adapter=" << name << ", " << m_vramMiB << " MiB)";
 	
 	delete m_rtao;
 	m_rtao = new D3D12Rtao();

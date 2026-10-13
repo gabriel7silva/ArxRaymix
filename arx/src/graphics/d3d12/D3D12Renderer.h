@@ -134,6 +134,7 @@ public:
 	void applyWorldRayEffects() override;
 	void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) override;
 	[[nodiscard]] bool supportsRayTracing() const override;
+	[[nodiscard]] unsigned long long videoMemoryMiB() const override { return m_vramMiB; }
 	[[nodiscard]] bool supportsDlss() const override;
 	[[nodiscard]] bool supportsDlssRr() const override;
 	[[nodiscard]] bool supportsDlssG() const override;
@@ -216,6 +217,7 @@ private:
 	float m_fogEnd = 1.f;
 	float m_anisotropy = 1.f;
 	int m_vsync = 1;
+	unsigned long long m_vramMiB = 0;
 	FillMode m_fillMode = FillSolid;
 	int m_width = 0;
 	int m_height = 0;

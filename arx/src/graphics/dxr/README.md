@@ -102,7 +102,7 @@ Cbuffer: `pad0` / `pad1` keep `prevViewProj` on a float4 boundary. Extra spec / 
 
 **Options → Render → Render distance** is the far plane (`fog=`). See Phase 5 notes above.
 
-First run: when `cfg.ini` has no ray tracing keys at all (new install, or a plain Arx Libertatis config), the game picks **Medium** and, where Streamline offers it, **DLSS Quality** once the D3D12 device is up, logs `First run: ray tracing preset Medium, DLSS Quality` and saves. Without DXR (D3D9, older GPUs) nothing changes. Any saved `dxr_preset` turns this off for good.
+First run: when `cfg.ini` has no ray tracing keys at all (new install, or a plain Arx Libertatis config), the game picks a preset from the adapter's dedicated memory once the D3D12 device is up: **Low** under 5 GiB, **High** from 9 GiB (10 GB cards and up), **Medium** in between or when the size is unknown. Where Streamline offers it, it also sets **DLSS Quality**, logs `First run: ray tracing preset Medium (5958 MiB VRAM), DLSS Quality` and saves. Ray Reconstruction stays off: on an RTX 4050 Laptop it costs about 5 ms per frame more than DLSS alone, and the menu says so. Without DXR (D3D9, older GPUs) nothing changes. Any saved `dxr_preset` turns this off for good.
 
 `cfg.ini` keys: `dxr_preset`, `rtao`, `dxr_shadows`, `dxr_shadow_denoise`, `dxr_contact`, `dxr_gi`, `dxr_gi_denoise`, `dxr_reflections`, `dxr_trans_reflections`, `dxr_transparency`, `dxr_debris`, `dxr_distance`, `dxr_dlss`, `dxr_rr`, `dxr_fg`. Render distance stays `fog=`.
 

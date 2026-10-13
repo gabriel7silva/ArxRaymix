@@ -19,6 +19,7 @@ class DxrPresetTest final : public CppUnit::TestFixture {
 	CPPUNIT_TEST(presetsLeaveRayReconstructionOffTest);
 	CPPUNIT_TEST(valuesStayInSliderRangeTest);
 	CPPUNIT_TEST(shapingSlidersDoNotEnableTest);
+	CPPUNIT_TEST(firstRunPresetFollowsVramTest);
 	CPPUNIT_TEST_SUITE_END();
 	
 public:
@@ -29,6 +30,7 @@ public:
 	void presetsLeaveRayReconstructionOffTest();
 	void valuesStayInSliderRangeTest();
 	void shapingSlidersDoNotEnableTest();
+	void firstRunPresetFollowsVramTest();
 	
 };
 

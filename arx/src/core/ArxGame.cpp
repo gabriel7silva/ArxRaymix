@@ -2054,15 +2054,19 @@ void ArxGame::onRendererInit(Renderer & renderer) {
 	ARX_PLAYER_Restore_Skin();
 	
 	if(config.video.dxrFirstRun) {
-		// First run on this cfg.ini: ray tracing Medium and DLSS Quality where the GPU has them,
-		// instead of everything Off until the player finds Options -> Ray tracing.
+		// First run on this cfg.ini: a ray tracing preset sized to the GPU's memory and DLSS
+		// Quality where the GPU has them, instead of everything Off until the player finds
+		// Options -> Ray tracing. Ray Reconstruction stays off (every preset leaves it off).
 		config.video.dxrFirstRun = false;
 		if(renderer.supportsRayTracing()) {
-			config.applyDxrPreset(kDxrPresetMedium);
+			const unsigned long long vram = renderer.videoMemoryMiB();
+			const int preset = dxrFirstRunPreset(vram);
+			config.applyDxrPreset(preset);
 			if(renderer.supportsDlss() && config.video.dxrDlss <= 0) {
 				config.video.dxrDlss = 2; // Quality
 			}
-			LogInfo << "First run: ray tracing preset Medium"
+			const char * names[] = { "Off", "Low", "Medium", "High" };
+			LogInfo << "First run: ray tracing preset " << names[preset] << " (" << vram << " MiB VRAM)"
 			        << (config.video.dxrDlss > 0 ? ", DLSS Quality" : "");
 			config.save();
 		}

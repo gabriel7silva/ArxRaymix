@@ -79,3 +79,17 @@ void DxrPresetTest::shapingSlidersDoNotEnableTest() {
 	v.dxrContact = 1;
 	CPPUNIT_ASSERT(dxrValuesEnabled(v));
 }
+
+void DxrPresetTest::firstRunPresetFollowsVramTest() {
+	CPPUNIT_ASSERT_EQUAL(kDxrPresetMedium, dxrFirstRunPreset(0));    // unknown
+	CPPUNIT_ASSERT_EQUAL(kDxrPresetLow, dxrFirstRunPreset(3968));    // 4 GB card
+	CPPUNIT_ASSERT_EQUAL(kDxrPresetMedium, dxrFirstRunPreset(5958)); // 6 GB laptop card
+	CPPUNIT_ASSERT_EQUAL(kDxrPresetMedium, dxrFirstRunPreset(7920)); // 8 GB card
+	CPPUNIT_ASSERT_EQUAL(kDxrPresetHigh, dxrFirstRunPreset(9970));   // 10 GB card
+	CPPUNIT_ASSERT_EQUAL(kDxrPresetHigh, dxrFirstRunPreset(12010));  // 12 GB card
+	for(unsigned long long mib = 0; mib <= 32 * 1024; mib += 256) {
+		const int preset = dxrFirstRunPreset(mib);
+		CPPUNIT_ASSERT(preset > kDxrPresetOff && preset <= kDxrPresetHigh);
+		CPPUNIT_ASSERT(kDxrPresets[preset].dxrRr == 0);
+	}
+}

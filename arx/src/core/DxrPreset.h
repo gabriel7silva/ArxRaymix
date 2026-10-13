@@ -25,6 +25,7 @@ struct DxrPresetValues {
 
 //! Preset slider positions: Off, Low, Medium, High, then Custom, which writes nothing.
 constexpr int kDxrPresetOff = 0;
+constexpr int kDxrPresetLow = 1;
 constexpr int kDxrPresetMedium = 2;
 constexpr int kDxrPresetHigh = 3;
 constexpr int kDxrPresetCustom = 4;
@@ -44,6 +45,23 @@ static_assert(sizeof(kDxrPresets) / sizeof(kDxrPresets[0]) == kDxrPresetHigh + 1
 constexpr bool dxrValuesEnabled(const DxrPresetValues & v) {
 	return v.rtao > 0 || v.dxrShadows > 0 || v.dxrGi > 0 || v.dxrReflections > 0
 	       || v.dxrTransReflections > 0 || v.dxrContact > 0;
+}
+
+//! Preset the first run picks from the GPU's dedicated memory in MiB (0 when unknown).
+//! DXGI reports a little under the label (a 6 GB card shows about 5.9 GiB), so the cut-offs
+//! sit below 6 GB and 10 GB: under that Low, 10 GB cards and up High, Medium in between
+//! and when the size is unknown.
+constexpr int dxrFirstRunPreset(unsigned long long vramMiB) {
+	if(vramMiB == 0) {
+		return kDxrPresetMedium;
+	}
+	if(vramMiB < 5 * 1024) {
+		return kDxrPresetLow;
+	}
+	if(vramMiB >= 9 * 1024) {
+		return kDxrPresetHigh;
+	}
+	return kDxrPresetMedium;
 }
 
 #endif // ARX_CORE_DXRPRESET_H
