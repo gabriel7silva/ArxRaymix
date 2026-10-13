@@ -517,6 +517,67 @@ public:
 	
 };
 
+class FirstRunLanguageMenuPage final : public MenuPage {
+	
+public:
+	
+	FirstRunLanguageMenuPage()
+		: MenuPage(Page_FirstRunLanguage)
+	{
+		m_rowSpacing = 8;
+	}
+	
+	void init() override {
+		
+		reserveTop();
+		reserveBottom();
+		
+		{
+			// Shown before any language is chosen, so the title is in every language offered.
+			auto txt = std::make_unique<TextWidget>(hFontMenu, "Language / Idioma");
+			txt->setEnabled(false);
+			addCenter(std::move(txt));
+		}
+		
+		addCenter(std::make_unique<Spacer>(hFontControls->getLineHeight()));
+		
+		const Languages audioLanguages = getAvailableAudioLanguages();
+		Languages textLanguages = getAvailableTextLanguages();
+		// English first: it is the default and what most players pick.
+		std::vector<std::pair<std::string, Language>> ordered;
+		if(auto english = textLanguages.find("english"); english != textLanguages.end()) {
+			ordered.push_back(*english);
+			textLanguages.erase(english);
+		}
+		ordered.insert(ordered.end(), textLanguages.begin(), textLanguages.end());
+		
+		for(const auto & language : ordered) {
+			auto txt = std::make_unique<TextWidget>(hFontMenu, language.second.name);
+			const std::string id = language.first;
+			const bool hasSpeech = audioLanguages.find(id) != audioLanguages.end();
+			txt->clicked = [id, hasSpeech](Widget * /* widget */) {
+				if(config.interface.language != id) {
+					config.interface.language = id;
+					g_playerBook.questBook.clear();
+					initLocalisation();
+					ARX_Text_Init(true);
+					g_mainMenu->bReInitAll = true;
+				}
+				// Speech follows only where the voice files exist (the PT-BR ones are not shipped).
+				if(hasSpeech) {
+					config.audio.language = id;
+				}
+				config.save();
+				LogInfo << "First run: language " << id << (hasSpeech ? " (text and speech)" : " (text)");
+			};
+			txt->setTargetPage(Page_None);
+			addCenter(std::move(txt));
+		}
+		
+	}
+	
+};
+
 class LocalizationMenuPage final : public MenuPage {
 	
 	std::vector<std::string> m_textLanguages;
@@ -1612,6 +1673,19 @@ public:
 		}
 		
 		{
+			std::string_view label = getLocalised("system_menus_options_interface_performance");
+			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu, label, hFontControls);
+			cb->valueChanged = [](int pos, std::string_view /* string */) noexcept {
+				config.interface.showPerformance = pos;
+			};
+			cb->addEntry(getLocalised("system_menus_options_raytracing_off"));
+			cb->addEntry(getLocalised("system_menus_options_interface_performance_fps"));
+			cb->addEntry(getLocalised("system_menus_options_interface_performance_gpu"));
+			cb->setValue(config.interface.showPerformance);
+			addCenter(std::move(cb));
+		}
+		
+		{
 			std::string_view label = getLocalised("system_menus_options_interface_limit_speech_width");
 			auto cb = std::make_unique<CheckboxWidget>(checkboxSize(), hFontMenu, label);
 			cb->setChecked(config.interface.limitSpeechWidth);
@@ -2315,6 +2389,7 @@ void MainMenu::initWindowPages() {
 	
 	m_window->add(std::make_unique<QuitConfirmMenuPage>());
 	m_window->add(std::make_unique<LocalizationMenuPage>());
+	m_window->add(std::make_unique<FirstRunLanguageMenuPage>());
 	
 }
 

@@ -171,6 +171,13 @@ void MainMenuDoFrame() {
 		g_mainMenu->init();
 		
 		g_mainMenu->requestPage(page);
+		if(page == Page_None && config.interface.languageFirstRun) {
+			// First run on this cfg.ini: ask for the language once, English listed first.
+			config.interface.languageFirstRun = false;
+			if(getAvailableTextLanguages().size() > 1) {
+				g_mainMenu->requestPage(Page_FirstRunLanguage);
+			}
+		}
 		if(page != Page_None) {
 			g_mainMenu->initWindowPages();
 			g_mainMenu->m_window->setScroll(scroll);

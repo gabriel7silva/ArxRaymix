@@ -267,17 +267,16 @@ void CrashHandlerImpl::processCrash() {
 			if(!description.empty()) {
 				oss << description << "\n\n";
 			}
-			oss << "Please install arxcrashreporter or manually report the crash to "
-			    << url::bug_report << "\n\n";
-			oss << "Include the files contained in the following directory in your report:\n";
-			oss << " " << m_crashReportDir;
+			oss << "arx.log, cfg.ini and the crash dump were saved to:\n";
+			oss << " " << m_crashReportDir << "\n\n";
+			oss << "Please attach them to a bug report at " << url::bug_report;
 		} else {
 			oss << "Additionally, we encountered an unexpected error while collecting"
 			       " crash information!\n\n";
 		}
 		std::cout << "\n\n" << oss.str() << '\n';
 		if(m_pCrashInfo) {
-			oss << "\n\nClick OK to open that directory now.";
+			oss << "\n\nClick OK to open that folder now.";
 		}
 		platform::showErrorDialog(oss.str(), "Fatal Error - " + arx_name);
 		if(m_pCrashInfo) {

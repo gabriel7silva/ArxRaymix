@@ -326,6 +326,14 @@ std::vector<path> SystemPaths::getSearchPaths(bool filter) const {
 		}
 	}
 	
+	// Steam and GOG installs, so the release zip runs from any folder without --data-dir
+	for(const std::string & store : platform::findStoreGameDirs()) {
+		path dir = canonical(store);
+		if(addSearchRoot(result, dir, filter)) {
+			LogDebug("got data dir from Steam / GOG: " << dir);
+		}
+	}
+	
 	// Search standard locations
 	std::vector<path> prefixes = parsePathList(data_dir_prefixes);
 	std::vector<path> suffixes = parsePathList(data_dir);

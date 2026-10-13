@@ -8,6 +8,8 @@
       arx.exe and every DLL next to it (SDL2, OpenAL, DXC, Streamline when fetched)
       data\                 arx\data\core (localisation overlays, fonts)
       LICENSE, AUTHORS, README.txt
+      licenses\             one file per bundled library (SDL2, OpenAL Soft, FreeType,
+                            zlib, DXC, NVIDIA Streamline / DLSS, ...)
       Arx Raymix - DirectX 9.bat
 
     arx.exe finds Arx Fatalis through the Steam / GOG registry entries on its own and
@@ -98,6 +100,57 @@ Get-ChildItem -LiteralPath $dataDst -Recurse -Directory |
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'arx\AUTHORS') -Destination $stage
 
+# Third-party licences: every library whose code or DLL ends up in the zip.
+$licDir = Join-Path $stage 'licenses'
+New-Item -ItemType Directory -Force -Path $licDir | Out-Null
+$licenses = [ordered]@{
+    'SDL2.txt'           = 'libs\sdl\COPYING.txt'
+    'OpenAL-Soft.txt'    = 'libs\openal\COPYING'
+    'FreeType.txt'       = 'libs\freetype\LICENSE'
+    'zlib.txt'           = 'libs\zlib\README.txt'
+    'Boost.txt'          = 'libs\boost\LICENSE_1_0.txt'
+    'GLM.txt'            = 'libs\glm\copying.txt'
+    'libepoxy.txt'       = 'libs\libepoxy\COPYING'
+    'DejaVu-fonts.txt'   = 'arx\LICENSE.DejaVu'
+    'fast_float.txt'     = 'arx\LICENSE.fast_float'
+    'stb.txt'            = 'arx\LICENSE.stb'
+}
+foreach ($entry in $licenses.GetEnumerator()) {
+    $src = Join-Path $root $entry.Value
+    if (-not (Test-Path -LiteralPath $src)) {
+        throw "Licence file missing: $($entry.Value)"
+    }
+    Copy-Item -LiteralPath $src -Destination (Join-Path $licDir $entry.Key)
+}
+$dxcNotice = @"
+dxcompiler.dll and dxil.dll are the Microsoft DirectX Shader Compiler redistributables from the
+Windows 10 SDK, shipped under the redistribution terms of that SDK.
+Source and licence of the compiler: https://github.com/microsoft/DirectXShaderCompiler
+"@
+Set-Content -LiteralPath (Join-Path $licDir 'DirectXShaderCompiler.txt') -Value $dxcNotice -Encoding UTF8
+if ($haveStreamline) {
+    # Written by scripts/fetch-streamline.ps1 from the official SDK zip.
+    $slLicenses = Join-Path $root 'arx\third_party\streamline\licenses'
+    $slDst = Join-Path $licDir 'NVIDIA-Streamline'
+    New-Item -ItemType Directory -Force -Path $slDst | Out-Null
+    $slFiles = @()
+    if (Test-Path -LiteralPath $slLicenses) {
+        $slFiles = @(Get-ChildItem -LiteralPath $slLicenses -File)
+    }
+    foreach ($file in $slFiles) {
+        Copy-Item -LiteralPath $file.FullName -Destination $slDst
+    }
+    if ($slFiles.Count -eq 0) {
+        Write-Warning 'No Streamline licence files (re-run scripts/fetch-streamline.ps1); shipping a pointer instead.'
+    }
+    $slNotice = @"
+sl.*.dll and nvngx_*.dll are NVIDIA Streamline 2.12.0 and DLSS binaries, (c) NVIDIA Corporation,
+redistributed unmodified under NVIDIA's terms. They are not covered by the GPLv3.
+Streamline SDK and its licence: https://github.com/NVIDIA-RTX/Streamline
+"@
+    Set-Content -LiteralPath (Join-Path $slDst 'README.txt') -Value $slNotice -Encoding UTF8
+}
+
 $readme = @"
 Arx Raymix $Version
 ===================
@@ -116,12 +169,14 @@ If the game is not found, point at the folder that holds data.pak:
 "Arx Raymix - DirectX 9.bat" starts the Direct3D 9 fallback for one session.
 
 Settings live in Options -> Video, Options -> Ray tracing and Options -> Render.
-Saves, cfg.ini and arx.log are usually in Documents\My Games\Arx Libertatis. Attach arx.log to
+Saves, cfg.ini and arx.log are in Saved Games\Arx Libertatis (or Documents\My Games\Arx Libertatis
+if that folder already exists). Attach arx.log to
 any bug report; it is overwritten on every launch.
 
 Uninstall: delete this folder.
 
 Source and license (GPLv3): https://github.com/gabriel7silva/ArxRaymix
+Bundled libraries and NVIDIA DLSS keep their own licences: see the licenses folder.
 Not affiliated with or endorsed by Arkane Studios or ZeniMax.
 "@
 Set-Content -LiteralPath (Join-Path $stage 'README.txt') -Value $readme -Encoding UTF8

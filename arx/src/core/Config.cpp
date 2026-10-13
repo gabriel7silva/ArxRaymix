@@ -107,7 +107,8 @@ constexpr const int
 	dxrDlss = 0,
 	dxrRr = 0,
 	dxrFg = 0,
-	dxrDistance = 2;
+	dxrDistance = 2,
+	showPerformance = 0;
 
 constexpr const bool
 	fullscreen = true,
@@ -262,6 +263,7 @@ constexpr const std::string_view
 // Interface options
 constexpr const std::string_view
 	showCrosshair = "show_crosshair",
+	showPerformance = "show_performance",
 	limitSpeechWidth = "limit_speech_width",
 	cinematicWidescreenMode = "cinematic_widescreen_mode",
 	hudScale = "hud_scale",
@@ -537,6 +539,7 @@ bool Config::save() {
 	// interface
 	writer.beginSection(Section::Interface);
 	writer.writeKey(Key::showCrosshair, interface.showCrosshair);
+	writer.writeKey(Key::showPerformance, interface.showPerformance);
 	writer.writeKey(Key::limitSpeechWidth, interface.limitSpeechWidth);
 	writer.writeKey(Key::cinematicWidescreenMode, int(interface.cinematicWidescreenMode));
 	writer.writeKey(Key::hudScale, interface.hudScale);
@@ -635,6 +638,7 @@ bool Config::init(const fs::path & file) {
 	
 	// Get locale language
 	interface.language = util::toLowercase(reader.getKey(Section::Language, Key::language, Default::language));
+	interface.languageFirstRun = reader.getKey(Section::Language, Key::language) == nullptr;
 	audio.language = util::toLowercase(reader.getKey(Section::Language, Key::audio, Default::audio));
 	
 	// Get video settings
@@ -711,6 +715,8 @@ bool Config::init(const fs::path & file) {
 	// Get interface settings
 	bool oldCrosshair = reader.getKey(Section::Video, Key::showCrosshair, Default::showCrosshair);
 	interface.showCrosshair = reader.getKey(Section::Interface, Key::showCrosshair, oldCrosshair);
+	interface.showPerformance = glm::clamp(reader.getKey(Section::Interface, Key::showPerformance,
+	                                                     Default::showPerformance), 0, 2);
 	interface.limitSpeechWidth = reader.getKey(Section::Interface, Key::limitSpeechWidth, Default::limitSpeechWidth);
 	int cinematicMode = reader.getKey(Section::Interface, Key::cinematicWidescreenMode, Default::cinematicWidescreenMode);
 	interface.cinematicWidescreenMode = CinematicWidescreenMode(glm::clamp(cinematicMode, 0, 2));
@@ -801,6 +807,9 @@ void Config::applyDxrPreset(int preset) {
 }
 
 bool Config::dxrEffectsEnabled() const {
+	if(video.dxrCompareOff) {
+		return false;
+	}
 	DxrPresetValues v {};
 	v.rtao = video.rtao;
 	v.dxrShadows = video.dxrShadows;

@@ -31,7 +31,7 @@ static str_t help_get_data = "https://arx.vg/data";
 static str_t help_install_data = "https://arx.vg/paths";
 
 //! Where users can report bugs
-static str_t bug_report = "https://arx.vg/bug";
+static str_t bug_report = "https://github.com/gabriel7silva/ArxRaymix/issues";
 
 } // namespace url
 

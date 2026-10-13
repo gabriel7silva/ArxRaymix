@@ -160,6 +160,9 @@ public:
 		//! cfg.ini had no ray tracing settings at all: the first run picks them once the renderer
 		//! knows what the GPU supports (ArxGame::onRendererInit). Not saved.
 		bool dxrFirstRun = false;
+		//! F7 comparison: ray tracing effects off for this session without touching the saved
+		//! settings. Not saved.
+		bool dxrCompareOff = false;
 		//! Opaque / metal reflections. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
 		int dxrReflections;
 		//! Water / transparent reflections. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
@@ -193,8 +196,13 @@ public:
 	struct {
 		
 		std::string language;
+		//! cfg.ini had no language key: the main menu asks for one once. Not saved.
+		bool languageFirstRun = false;
 		
 		bool showCrosshair;
+		
+		//! Performance overlay for players: 0 = Off, 1 = FPS, 2 = FPS + GPU time.
+		int showPerformance;
 		
 		bool limitSpeechWidth;
 		CinematicWidescreenMode cinematicWidescreenMode;

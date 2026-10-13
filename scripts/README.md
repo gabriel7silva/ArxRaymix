@@ -12,6 +12,7 @@ These scripts start a built `arx.exe` against your own Arx Fatalis install. They
 | `fetch-streamline.ps1` | Fetch the NVIDIA Streamline SDK once into `arx/third_party/streamline/` |
 | `Check-MaintenanceDocs.ps1` | Fail if a grep in `docs/maintenance/` matches nothing |
 | `import-speech-portugues.ps1` | Copy PT-BR speech WAVs into `arx/data/core/speech/portugues/` |
+| `check-speech-portugues.py` | Report broken or missing PT-BR speech WAVs and subtitles too long for their line (`--english-dir` also compares with the English voices) |
 | `check-shaders.py` | Compile the HLSL embedded in the D3D12 / DXR sources with the Windows SDK's DXC / FXC (CI runs it) |
 | `package.ps1` | Zip a built `arx.exe`, its DLLs and `arx/data/core` into `dist\ArxRaymix-<version>.zip` for players |
 | `sweep-plausible-levels.ps1` | Load each level for a few seconds (`--benchmark`) and score Pdxr-5 / F5 from the log; it reports F4 as undecidable |

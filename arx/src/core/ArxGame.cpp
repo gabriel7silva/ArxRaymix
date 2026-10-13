@@ -1588,6 +1588,14 @@ void ArxGame::updateInput() {
 	if(GInput->isKeyPressedNowPressed(Keyboard::Key_F10)) {
 		GetSnapShot();
 	}
+	
+	if(GInput->isKeyPressedNowPressed(Keyboard::Key_F7) && GRenderer && GRenderer->supportsRayTracing()) {
+		// Instant ray tracing on / off for comparisons and captures. Leaves cfg.ini alone.
+		config.video.dxrCompareOff = !config.video.dxrCompareOff;
+		notification_add(std::string(getLocalised(config.video.dxrCompareOff
+		                                          ? "system_raytracing_compare_off"
+		                                          : "system_raytracing_compare_on")));
+	}
 
 	if(GInput->actionNowPressed(CONTROLS_CUST_DEBUG)) {
 		drawDebugCycleViews();
@@ -1985,6 +1993,11 @@ void ArxGame::render() {
 			renderLevel();
 		}
 		#endif
+	}
+	
+	if(g_debugInfo == InfoPanelNone && config.interface.showPerformance > 0) {
+		g_fpsCounter.CalcFPS();
+		ShowPerformanceOverlay(config.interface.showPerformance);
 	}
 	
 	if(g_debugInfo != InfoPanelNone) {

@@ -20,6 +20,7 @@
 #include "platform/Environment.h"
 
 #include <cctype>
+#include <iterator>
 #include <algorithm>
 #include <mutex>
 #include <sstream>
@@ -228,6 +229,78 @@ std::optional<std::string> getSystemConfiguration(std::string_view name) {
 #endif
 	
 	return { };
+}
+
+std::vector<std::string> findStoreGameDirs() {
+	
+	std::vector<std::string> result;
+	
+#if ARX_PLATFORM == ARX_PLATFORM_WIN32
+	
+	// Steam: the main install plus every library folder listed in libraryfolders.vdf.
+	if(auto steam = getRegistryValue(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath")) {
+		std::vector<std::string> roots = { steam.value() };
+		fs::path vdf = fs::path(steam.value()) / "steamapps" / "libraryfolders.vdf";
+		if(fs::is_regular_file(vdf)) {
+			std::string data = fs::read(vdf);
+			for(std::string_view line : util::splitIgnoreEmpty(data, '\n')) {
+				line = util::trim(line);
+				// "path"		"D:\\SteamLibrary"
+				if(line.substr(0, 6) != "\"path\"") {
+					continue;
+				}
+				line = line.substr(6);
+				size_t begin = line.find('"');
+				size_t end = line.rfind('"');
+				if(begin == std::string_view::npos || end <= begin) {
+					continue;
+				}
+				std::string root(line.substr(begin + 1, end - begin - 1));
+				size_t pos = 0;
+				while((pos = root.find("\\\\", pos)) != std::string::npos) {
+					root.erase(pos, 1);
+					pos++;
+				}
+				roots.push_back(std::move(root));
+			}
+		}
+		for(std::string & root : roots) {
+			std::replace(root.begin(), root.end(), '\\', '/');
+			result.push_back(root + "/steamapps/common/Arx Fatalis");
+		}
+	}
+	
+	// GOG: one key per game under SOFTWARE\GOG.com\Games (32-bit view on 64-bit Windows).
+	for(REGSAM view : { REGSAM(KEY_WOW64_32KEY), REGSAM(KEY_WOW64_64KEY) }) {
+		const std::wstring games = L"SOFTWARE\\GOG.com\\Games";
+		HKEY handle = 0;
+		if(RegOpenKeyExW(HKEY_LOCAL_MACHINE, games.c_str(), 0, KEY_ENUMERATE_SUB_KEYS | view, &handle)
+		   != ERROR_SUCCESS) {
+			continue;
+		}
+		WCHAR name[256];
+		for(DWORD i = 0; ; i++) {
+			DWORD length = DWORD(std::size(name));
+			if(RegEnumKeyExW(handle, i, name, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
+				break;
+			}
+			const std::wstring game = games + L"\\" + name;
+			auto title = getRegistryValue(HKEY_LOCAL_MACHINE, game.c_str(), L"gameName", view);
+			if(!title || title->find("Arx Fatalis") == std::string::npos) {
+				continue;
+			}
+			if(auto path = getRegistryValue(HKEY_LOCAL_MACHINE, game.c_str(), L"path", view)) {
+				std::string dir = path.value();
+				std::replace(dir.begin(), dir.end(), '\\', '/');
+				result.push_back(std::move(dir));
+			}
+		}
+		RegCloseKey(handle);
+	}
+	
+#endif
+	
+	return result;
 }
 
 #if ARX_PLATFORM == ARX_PLATFORM_WIN32

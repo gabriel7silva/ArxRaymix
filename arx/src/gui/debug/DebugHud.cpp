@@ -390,6 +390,25 @@ void ShowFPS() {
 }
 
 
+void ShowPerformanceOverlay(int level) {
+	if(level <= 0 || !hFontDebug || !mainApp || !mainApp->getWindow()) {
+		return;
+	}
+	std::ostringstream oss;
+	oss << std::fixed << std::setprecision(0) << g_fpsCounter.FPS << " FPS";
+	if(level >= 2 && GRenderer) {
+		const Renderer::GpuTimings gpu = GRenderer->gpuTimings();
+		if(gpu.valid) {
+			oss << std::setprecision(1) << "  GPU " << gpu.frameMs << " ms";
+		}
+	}
+	const std::string text = oss.str();
+	const int width = hFontDebug->getTextSize(text).width();
+	const int x = mainApp->getWindow()->getSize().x - width - 10;
+	hFontDebug->draw(Vec2i(x + 1, 11), text, Color::black);
+	hFontDebug->draw(Vec2i(x, 10), text, Color::white);
+}
+
 static boost::circular_buffer<float> frameDurationPlotValues;
 static std::vector<TexturedVertex> frameDurationPlotVertices;
 

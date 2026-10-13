@@ -22,6 +22,9 @@
 
 void ShowInfoText();
 void ShowFPS();
+
+//! Options -> Interface -> Performance: 1 = FPS, 2 = FPS + GPU time, top right corner.
+void ShowPerformanceOverlay(int level);
 void ShowFrameDurationPlot();
 
 #endif // ARX_GUI_DEBUG_DEBUGHUD_H

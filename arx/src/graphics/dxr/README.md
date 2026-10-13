@@ -134,6 +134,8 @@ Preset Medium should turn on shadow / AO / GI and water reflections without open
 
 GPU cost: **F11** (first panel) shows FPS, the DLSS line and `GPU … ms  ray … (build …  trace …)  upscale …`, read from D3D12 timestamp queries and smoothed over about half a second. `GPU` is the whole command list from first draw to Present, `ray` is `D3D12Rtao::apply`, of which `build` is the geometry upload and BLAS / TLAS builds and `trace` is the one `DispatchRays` that traces every effect (AO, shadows, GI, reflections; compare them by switching effects off), the rest being masks, colour copy, composite and history copies and `upscale` is DLSS / RR evaluate; 0 means that pass did not run. The same two passes are named regions (`DXR ray effects`, `DLSS / Ray Reconstruction`) in PIX and Nsight captures. Compare presets with these numbers rather than FPS, which Frame Generation and V-Sync hide.
 
+For players, **Options → Interface → Performance overlay** (`show_performance`: 0 Off, 1 FPS, 2 FPS + GPU time) draws a one-line counter in the top right corner while F11 is off. **F7** switches every ray tracing effect off and back on instantly, for side-by-side captures; it only lasts for the session and never changes `cfg.ini`.
+
 Flicker diagnostics (rate limited, always on):
 
 - `DXR lights set changed #n n=… cands=… added=… removed=…` followed by one `DXR light +/-` line per light (static index or dyn pointer, pos, dist, intensity, falloff). Standing still this must not repeat; if it does, a light is straddling a cut.

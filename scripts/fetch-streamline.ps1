@@ -144,12 +144,30 @@ foreach ($dll in $dlls) {
     Copy-Item -Force $dll.FullName $binDst
 }
 
+# Licence texts from the SDK root (MIT for Streamline, NVIDIA's terms for DLSS and the
+# third-party notices): scripts/package.ps1 ships them in licenses\NVIDIA-Streamline.
+$licDst = Join-Path $dest 'licenses'
+if (Test-Path $licDst) {
+    Remove-Item -Recurse -Force $licDst
+}
+New-Item -ItemType Directory -Force -Path $licDst | Out-Null
+$licFiles = Get-ChildItem -Path $unpack -Recurse -File |
+    Where-Object { $_.Name -match '(?i)licen[cs]e|notice|third.?party' -and $_.Extension -match '(?i)^\.(txt|md|pdf)$' }
+if (-not $licFiles) {
+    Write-Warning 'Streamline zip has no licence files; scripts/package.ps1 will ship a pointer to them instead.'
+    $licFiles = @()
+}
+foreach ($file in $licFiles) {
+    Copy-Item -Force $file.FullName (Join-Path $licDst $file.Name)
+}
+
 Remove-Item -Recurse -Force $unpack
 
 Write-Host "Streamline $Version ready:"
 Write-Host "  include : $includeDst"
 Write-Host "  lib     : $libDst"
 Write-Host "  bin     : $binDst"
+Write-Host "  licences: $licDst ($($licFiles.Count) files)"
 Get-ChildItem $binDst -Filter '*.dll' | ForEach-Object { Write-Host "    $($_.Name)" }
 Write-Host ''
 Write-Host 'Reconfigure CMake so ARX_HAVE_STREAMLINE is set, then rebuild arx.'

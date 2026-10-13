@@ -26,6 +26,7 @@
 #include "io/fs/SystemPaths.h"
 #include "platform/Dialog.h"
 #include "platform/Platform.h"
+#include "platform/Process.h"
 
 namespace logger {
 
@@ -52,6 +53,11 @@ CriticalErrorDialog::~CriticalErrorDialog() {
 		if(g_exitQuestion && g_exitCommand) {
 			message << "\n\n-> " << g_exitQuestion;
 			runExitCommand = platform::askYesNoWarning(message.str(), "Error - " + arx_name);
+		} else if(fs::exists(logfile)) {
+			message << "\n\nOpen the folder with arx.log now?";
+			if(platform::askYesNoWarning(message.str(), "Critical Error - " + arx_name)) {
+				platform::launchDefaultProgram(fs::getUserDir().string());
+			}
 		} else {
 			platform::showErrorDialog(message.str(), "Critical Error - " + arx_name);
 		}

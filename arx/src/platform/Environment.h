@@ -77,6 +77,16 @@ std::vector<fs::path> getSystemPaths(SystemPathId id);
 std::optional<std::string> getSystemConfiguration(std::string_view name);
 
 /*!
+ * \brief Arx Fatalis installs from the Steam library folders and the GOG registry keys
+ *
+ * Lets a release zip extracted anywhere find the game without --data-dir.
+ * This does nothing on non-Windows systems.
+ *
+ * \return candidate data directories, which may not exist.
+ */
+std::vector<std::string> findStoreGameDirs();
+
+/*!
  * \brief Get the path to the current running executable
  *
  * \return the executable path if possible or an empty string otherwise
