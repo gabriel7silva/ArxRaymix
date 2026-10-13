@@ -1402,6 +1402,7 @@ public:
 			CycleTextWidget * giDenoise = nullptr;
 			CycleTextWidget * refl = nullptr;
 			CycleTextWidget * transRefl = nullptr;
+			CycleTextWidget * fog = nullptr;
 			CycleTextWidget * trans = nullptr;
 			CycleTextWidget * debris = nullptr;
 			CycleTextWidget * distance = nullptr;
@@ -1426,6 +1427,7 @@ public:
 			enable(w->giDenoise, dxr && !presetOff && config.video.dxrGi > 0 && !rrOn);
 			enable(w->refl, dxr && !presetOff);
 			enable(w->transRefl, dxr && !presetOff);
+			enable(w->fog, dxr && !presetOff);
 			enable(w->trans, dxr && !presetOff);
 			enable(w->debris, dxr && !presetOff);
 			enable(w->distance, dxr && !presetOff);
@@ -1459,6 +1461,9 @@ public:
 			}
 			if(w->transRefl) {
 				w->transRefl->setValue(config.video.dxrTransReflections);
+			}
+			if(w->fog) {
+				w->fog->setValue(config.video.dxrFog);
 			}
 			if(w->trans) {
 				w->trans->setValue(config.video.dxrTransparency);
@@ -1594,6 +1599,7 @@ public:
 		                 config.video.dxrReflections, w->refl);
 		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_trans_reflections"),
 		                 config.video.dxrTransReflections, w->transRefl);
+		addOffLowMedHigh(getLocalised("system_menus_options_raytracing_fog"), config.video.dxrFog, w->fog);
 		{
 			auto cb = std::make_unique<CycleTextWidget>(sliderSize(), hFontMenu,
 				getLocalised("system_menus_options_raytracing_transparency"));

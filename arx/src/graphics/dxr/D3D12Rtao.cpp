@@ -41,15 +41,16 @@ constexpr size_t kMaxWaterTriangles = 20000;
 constexpr size_t kMaxMetalTriangles = 30000;
 constexpr UINT kIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 constexpr UINT kShaderRecord = 64;
-// Heap: [0..16] RT SRVs t0-t16, [17..21] RT UAVs u0-u4,
-// [22..29] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask).
-// t15 / t16 are the per-triangle attribute buffers. Growing the SRV range shifts the UAV and
-// composite ranges after it: INV-02 is one equation, so these five move together or not at all.
-constexpr UINT kRtSrvCount = 17;
-constexpr UINT kRtUavBase = 17;
-constexpr UINT kRtUavCount = 5;
-constexpr UINT kCompositeBase = 22;
-constexpr UINT kCompositeSrvCount = 8;
+// Heap: [0..17] RT SRVs t0-t17, [18..23] RT UAVs u0-u5,
+// [24..32] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask, fog).
+// t15 / t16 are the per-triangle attribute buffers, t17 / u5 the volumetric haze history and
+// output. Growing the SRV range shifts the UAV and composite ranges after it: INV-02 is one
+// equation, so these five move together or not at all.
+constexpr UINT kRtSrvCount = 18;
+constexpr UINT kRtUavBase = 18;
+constexpr UINT kRtUavCount = 6;
+constexpr UINT kCompositeBase = 24;
+constexpr UINT kCompositeSrvCount = 9;
 constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
 static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAVs follow the SRV range");
 static_assert(kCompositeBase == kRtUavBase + kRtUavCount, "INV-02: composite follows the UAVs");
@@ -152,6 +153,13 @@ static constexpr float reflectFill[] = { 0.f, 0.70f, 0.95f, 1.25f };
 static constexpr float metalFacing[] = { 0.f, 0.18f, 0.35f, 0.60f };
 static constexpr float shadowAlpha[] = { kTemporalAlphaLow, kTemporalAlphaHigh };
 static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
+// Volumetric haze: samples along each view ray, per quality level. Every sample traces one
+// shadow ray, to a light picked in proportion to what it adds there.
+static constexpr UINT fogSteps[] = { 0u, 8u, 12u, 16u };
+// How far in front of the camera the haze reaches, in world units (it thins out over the far
+// half), and how much of the current frame goes into its history.
+constexpr float kFogRange = 3000.f;
+constexpr float kFogAlpha = 0.15f;
 static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
 static_assert(std::size(aoRayCount) == kMaxRtQuality + 1);
 static_assert(std::size(shadowRays) == kMaxRtQuality + 1);
@@ -163,6 +171,7 @@ static_assert(std::size(reflectFill) == kMaxRtQuality + 1);
 static_assert(std::size(metalFacing) == kMaxRtQuality + 1);
 static_assert(std::size(shadowAlpha) == kMaxShadowDenoise + 1);
 static_assert(std::size(giAlpha) == kMaxGiDenoise + 1);
+static_assert(std::size(fogSteps) == kMaxRtQuality + 1 && fogSteps[0] == 0u);
 static_assert(aoRayCount[0] == 0u && shadowRays[0] == 0u && giRayCount[0] == 0u
               && transRays[0] == 0u && metalRayCount[0] == 0u && aoRadius[0] == 0.f,
               "Off (index 0) must launch no rays");
@@ -227,12 +236,17 @@ struct DxrViewCbuf {
 	float metalFill;
 	float metalFacingF0;
 	float pad1;
+	UINT fogSteps;
+	float fogDensity;
+	float fogRange;
+	float fogAlpha;
 };
 static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
 static_assert(offsetof(DxrViewCbuf, specTMax) == 64);
 static_assert(offsetof(DxrViewCbuf, waterFill) == 80,
               "ViewParams must stay float4-aligned to match the HLSL cbuffer");
-static_assert(sizeof(DxrViewCbuf) == 96);
+static_assert(offsetof(DxrViewCbuf, fogSteps) == 96);
+static_assert(sizeof(DxrViewCbuf) == 112);
 
 constexpr UINT kLightFloat4s = 3;
 static_assert(sizeof(D3D12Rtao::GpuLight) == kLightFloat4s * 16, "DXR light record is three float4s");
@@ -266,6 +280,7 @@ struct TriAttr {
 };
 StructuredBuffer<TriAttr> g_dynAttr : register(t15);
 StructuredBuffer<TriAttr> g_roomAttr : register(t16);
+Texture2D<float4> g_fogPrev : register(t17);
 // Every game texture, indexed by the descriptor index the renderer assigned it. space1 keeps
 // it clear of the pass's own t registers. Index 0 is a 1x1 white texture, so a face with no
 // material needs no branch.
@@ -276,6 +291,8 @@ RWTexture2D<float> g_shadow : register(u1);
 RWTexture2D<float4> g_gi : register(u2);
 RWTexture2D<float> g_depthOut : register(u3);
 RWTexture2D<float4> g_spec : register(u4);
+// Volumetric haze at half resolution: rgb light scattered towards the camera, a transmittance.
+RWTexture2D<float4> g_fog : register(u5);
 
 // pad0/pad1 keep prevViewProj on a float4 boundary; the CPU struct mirrors this.
 cbuffer Params : register(b0) {
@@ -336,6 +353,11 @@ cbuffer ViewParams : register(b1) {
 	float metalFill;
 	float metalFacingF0;
 	float padView1;
+	// Volumetric haze: samples per ray (0 = off), density, reach and history blend.
+	uint fogSteps;
+	float fogDensity;
+	float fogRange;
+	float fogAlpha;
 };
 
 // Cleared D24_UNORM depth is exactly 1.0 (INV-04). A value just below 1.0 is a
@@ -517,6 +539,165 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 )"
 R"(
 
+// Volumetric haze, after ArxCoop's post_volume.frag (Parricidium, GPLv3, built on Arx
+// Libertatis like this file): along the ray of a pixel the light of the scene's lights is
+// scattered towards the camera (shafts and halos) and what lies behind is dimmed. There the
+// shafts are shadowed with cube maps; here each sample traces one real shadow ray, so grates,
+// pillars and roots cut the beams. The constants are ArxCoop's, in the same world units.
+static const float FOG_EXTINCTION = 0.00015;  // per world unit at density 1: dims what is behind
+static const float FOG_SCATTER = 0.0008;      // per world unit at density 1: light thrown back
+static const float FOG_AMBIENT = 0.006;       // faint glow where no light reaches
+static const float FOG_ANISOTROPY = 0.35;     // Henyey-Greenstein g: halos round the lights
+static const float FOG_NOISE_SCALE = 0.0035;  // world units -> noise: smaller is larger wisps
+static const float FOG_NOISE_AMOUNT = 0.75;   // 0 uniform haze, 1 strongly wispy
+static const float FOG_GLOW_COMPRESSION = 2.0;
+static const float FOG_MIN_FALLOFF = 0.35;    // fraction of a light's range it fades over at least
+
+float fogHash(float3 p) {
+	p = frac(p * 0.3183099 + float3(0.1, 0.17, 0.23));
+	p *= 17.0;
+	return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float fogNoise(float3 p) {
+	float3 i = floor(p);
+	float3 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return lerp(lerp(lerp(fogHash(i), fogHash(i + float3(1, 0, 0)), f.x),
+	                 lerp(fogHash(i + float3(0, 1, 0)), fogHash(i + float3(1, 1, 0)), f.x), f.y),
+	            lerp(lerp(fogHash(i + float3(0, 0, 1)), fogHash(i + float3(1, 0, 1)), f.x),
+	                 lerp(fogHash(i + float3(0, 1, 1)), fogHash(i + float3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+float fogDensityAt(float3 p) {
+	float3 q = p * FOG_NOISE_SCALE;
+	float nz = fogNoise(q) * 0.65 + fogNoise(q * 2.7 + 3.1) * 0.35;
+	return fogDensity * lerp(1.0, nz * 1.6, FOG_NOISE_AMOUNT);
+}
+
+float fogPhase(float cosTheta) {
+	float g = FOG_ANISOTROPY;
+	float d = 1.0 + g * g - 2.0 * g * cosTheta;
+	return (1.0 - g * g) / (12.566371 * d * sqrt(d));
+}
+
+// The engine's falloff, never steeper than over a third of the range: a light whose fallstart
+// sits at its fallend would hang a hard-edged ball of haze in the air. Eased, because a linear
+// edge integrates into a visible rim.
+float fogFalloff(float dist, float fallstart, float fallend) {
+	float w = max(fallend - fallstart, fallend * FOG_MIN_FALLOFF);
+	float f = saturate((fallend - dist) / max(w, 1e-3));
+	return f * f * (3.0 - 2.0 * f);
+}
+
+// What light i adds to the haze at p, before its shadow, seen along dir.
+float3 fogLight(uint i, float3 p, float3 dir) {
+	float4 a = g_lights[i * 3 + 0];
+	float4 b = g_lights[i * 3 + 1];
+	float4 col = g_lights[i * 3 + 2];
+	float3 toL = a.xyz - p;
+	float d = length(toL);
+	if(d < 1.0 || d >= b.y) {
+		return float3(0, 0, 0);
+	}
+	float att = fogFalloff(d, b.x, b.y);
+	// Closer to the source than fallstart it brightens further: a flame is small.
+	att *= 1.0 + 2.0 * saturate(1.0 - d / max(b.x, 1.0));
+	return col.rgb * (a.w * b.w * att * fogPhase(dot(toL / d, -dir)));
+}
+
+// rgb: light scattered towards the camera along this pixel's ray, a: transmittance.
+float4 traceFog(uint2 pixel, float z, float rot) {
+	if(fogSteps == 0u) {
+		return float4(0, 0, 0, 1);
+	}
+	float2 uv = (float2(pixel) + 0.5) / float2(width, height);
+	float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+	float4 midH = mul(invViewProj, float4(ndc, 0.5, 1.0));
+	float3 dir = normalize(midH.xyz / max(midH.w, 1e-6) - cameraPos);
+	float range = fogRange;
+	if(z > 0.0 && z < SKY_Z) {
+		float4 sH = mul(invViewProj, float4(ndc, z, 1.0));
+		range = min(range, length(sH.xyz / max(sH.w, 1e-6) - cameraPos));
+	}
+	float dt = range / float(fogSteps);
+	float jitter = rot * 0.15915494;
+	float transmittance = 1.0;
+	float3 inscatter = float3(0, 0, 0);
+	for(uint s = 0; s < fogSteps; ++s) {
+		float t = (float(s) + jitter) * dt;
+		float3 p = cameraPos + dir * t;
+		// Thins out over the far half of its reach instead of stopping dead: a light just past
+		// the range showed as a hard disc of glow.
+		float rho = fogDensityAt(p) * (1.0 - smoothstep(fogRange * 0.5, fogRange, t));
+		float3 light = float3(FOG_AMBIENT, FOG_AMBIENT, FOG_AMBIENT);
+		float wsum = 0.0;
+		for(uint i = 0; i < lightCount; ++i) {
+			wsum += dot(fogLight(i, p, dir), float3(0.299, 0.587, 0.114));
+		}
+		if(wsum > 1e-6 && rho > 1e-6) {
+			// One shadow ray per sample, to a light picked in proportion to its share; dividing
+			// by that share keeps the sum right on average, and the history does the averaging.
+			float pick = frac(jitter * 7.0 + float(s) * 0.618034) * wsum;
+			float acc = 0.0;
+			uint chosen = 0u;
+			float3 cChosen = float3(0, 0, 0);
+			float wChosen = 0.0;
+			for(uint k = 0; k < lightCount; ++k) {
+				float3 c = fogLight(k, p, dir);
+				float w = dot(c, float3(0.299, 0.587, 0.114));
+				if(w <= 0.0) {
+					continue;
+				}
+				chosen = k;
+				cChosen = c;
+				wChosen = w;
+				acc += w;
+				if(acc >= pick) {
+					break;
+				}
+			}
+			if(wChosen > 0.0) {
+				float4 la = g_lights[chosen * 3 + 0];
+				float4 lb = g_lights[chosen * 3 + 1];
+				float3 toL = la.xyz - p;
+				float dist = length(toL);
+				RayDesc sr;
+				sr.Origin = p;
+				sr.Direction = toL / max(dist, 1e-3);
+				sr.TMin = 1.0;
+				// Stop short of the light: a flame sits inside its sconce or brazier.
+				sr.TMax = max(dist - max(lb.z, 10.0), 1.5);
+				RayPayload sp;
+				sp.t = 1e7;
+				sp.n = float3(0, 0, 0);
+				sp.wantMat = 0u;
+				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, 0, 1, 0, sr, sp);
+				if(sp.t >= sr.TMax) {
+					light += cChosen * (wsum / wChosen);
+				}
+			}
+		}
+		inscatter += transmittance * light * (rho * FOG_SCATTER * dt);
+		transmittance *= exp(-rho * FOG_EXTINCTION * dt);
+	}
+	// Many lights add up: compress the glow so a lit hall never washes out to white.
+	inscatter = inscatter / (1.0 + inscatter * FOG_GLOW_COMPRESSION) * (1.0 + FOG_GLOW_COMPRESSION);
+	return float4(inscatter, transmittance);
+}
+
+// Pixels that leave RayGen early (sky, past the ray tracing range) still have haze in front of
+// them; they get this frame's value with no history.
+void writeFogRaw(uint2 pixel, float z) {
+	if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
+		uint2 gp = pixel / 2;
+		if(gp.x < giWidth && gp.y < giHeight) {
+			g_fog[gp] = traceFog(pixel, z, pixelRotation(pixel));
+		}
+	}
+}
+)"
+R"(
 [shader("raygeneration")]
 void RayGen() {
 	uint2 pixel = DispatchRaysIndex().xy;
@@ -529,6 +710,7 @@ void RayGen() {
 		g_shadow[pixel] = 1.0;
 		g_depthOut[pixel] = z;
 		g_spec[pixel] = float4(0, 0, 0, 0);
+		writeFogRaw(pixel, z);
 		if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
 			uint2 gp = pixel / 2;
 			if(gp.x < giWidth && gp.y < giHeight) {
@@ -548,6 +730,7 @@ void RayGen() {
 		g_shadow[pixel] = 1.0;
 		g_depthOut[pixel] = z;
 		g_spec[pixel] = float4(0, 0, 0, 0);
+		writeFogRaw(pixel, z);
 		if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
 			uint2 gp = pixel / 2;
 			if(gp.x < giWidth && gp.y < giHeight) {
@@ -924,6 +1107,12 @@ R"(
 		if(gp.x >= giWidth || gp.y >= giHeight) {
 			return;
 		}
+		// The haze is the same at the reprojected surface as the history of GI is: blend there.
+		float4 fog = traceFog(pixel, z, rot);
+		if(histOk && fogAlpha > 0.0 && fogSteps > 0u) {
+			fog = lerp(g_fogPrev.Load(int3(histPix / 2, 0)), fog, fogAlpha);
+		}
+		g_fog[gp] = fog;
 		if(giOn == 0) {
 			g_gi[gp] = float4(0, 0, 0, 0);
 			return;
@@ -1118,6 +1307,7 @@ Texture2D giTex : register(t4);
 Texture2D specTex : register(t5);
 Texture2D<float> waterMaskTex : register(t6);
 Texture2D<float> metalMaskTex : register(t7);
+Texture2D fogTex : register(t8);
 SamplerState samp : register(s0);
 cbuffer CompParams : register(b0) {
 	int shadowRadius;
@@ -1189,6 +1379,33 @@ float3 giUpsample(int2 pix, float zCenter) {
 	}
 	return s / wsum;
 }
+// The half-resolution haze, taken from the neighbours at this pixel's depth so it does not
+// bleed across a silhouette (a lit beam behind a pillar must not halo the pillar's edge).
+float4 fogUpsample(int2 pix, float zCenter) {
+	int2 gp = pix / 2;
+	float4 s = float4(0, 0, 0, 0);
+	float wsum = 0.0;
+	[unroll] for(int y = -1; y <= 1; ++y) {
+		[unroll] for(int x = -1; x <= 1; ++x) {
+			int2 p = gp + int2(x, y);
+			float z = depthTex.Load(int3(p * 2, 0)).r;
+			if(abs(z - zCenter) >= 0.002) {
+				continue;
+			}
+			float w = (x == 0 && y == 0) ? 2.0 : 1.0;
+			s += fogTex.Load(int3(p, 0)) * w;
+			wsum += w;
+		}
+	}
+	if(wsum < 1e-5) {
+		return fogTex.Load(int3(gp, 0));
+	}
+	return s / wsum;
+}
+float3 applyFog(float3 c, int2 pix, float zCenter) {
+	float4 fog = fogUpsample(pix, zCenter);
+	return c * saturate(fog.a) + max(fog.rgb, 0.0);
+}
 float4 PSMain(VSOut i) : SV_Target {
 	float3 c = colorTex.SampleLevel(samp, i.uv, 0).rgb;
 	int2 pix = int2(i.pos.xy);
@@ -1220,7 +1437,8 @@ float4 PSMain(VSOut i) : SV_Target {
 	}
 	// Water keeps the raster enviro and is not multiplied by the floor's ao * sh.
 	if(water > 0.5) {
-		return float4(saturate(lerp(colorTex.SampleLevel(samp, i.uv, 0).rgb, specS.rgb, specS.a)), 1);
+		float3 w = saturate(lerp(colorTex.SampleLevel(samp, i.uv, 0).rgb, specS.rgb, specS.a));
+		return float4(saturate(applyFog(w, pix, zCenter)), 1);
 	}
 	c = saturate(c) * max(ao * sh, 0.08);
 	if(metal > 0.5) {
@@ -1230,7 +1448,7 @@ float4 PSMain(VSOut i) : SV_Target {
 		// is. Fixed factors of 0.35 and 0.45 capped it below a mirror no matter the setting.
 		c = saturate(c * (1.0 - specS.a * 0.85) + specS.rgb * specS.a * 0.95);
 	}
-	return float4(saturate(c), 1);
+	return float4(saturate(applyFog(saturate(c), pix, zCenter)), 1);
 }
 )";
 
@@ -1420,6 +1638,8 @@ void D3D12Rtao::shutdown() {
 	m_giPrev.reset();
 	m_spec.reset();
 	m_specPrev.reset();
+	m_fog.reset();
+	m_fogPrev.reset();
 	m_waterMask.reset();
 	m_waterDepth.reset();
 	m_metalMask.reset();
@@ -1978,6 +2198,8 @@ void D3D12Rtao::releaseTargets() {
 	m_giPrev.reset();
 	m_spec.reset();
 	m_specPrev.reset();
+	m_fog.reset();
+	m_fogPrev.reset();
 	m_waterMask.reset();
 	m_waterDepth.reset();
 	m_metalMask.reset();
@@ -1992,7 +2214,7 @@ bool D3D12Rtao::needsResize(int width, int height) const {
 		return false;
 	}
 	return !(width == m_width && height == m_height && m_ao && m_shadow && m_gi && m_depthPrev
-	         && m_spec && m_waterMask && m_metalMask);
+	         && m_spec && m_fog && m_waterMask && m_metalMask);
 }
 
 void D3D12Rtao::resize(int width, int height) {
@@ -2086,7 +2308,10 @@ void D3D12Rtao::resize(int width, int height) {
 	   || !makeTex(gi, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_giPrev)
 	   || !makeTex(color, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, m_spec)
-	   || !makeTex(color, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_specPrev)) {
+	   || !makeTex(color, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_specPrev)
+	   || !makeTex(gi, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, m_fog)
+	   || !makeTex(gi, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE, srvState, m_fogPrev)) {
 		LogError << "RTAO: history targets failed";
 		failAlloc();
 		return;
@@ -2152,7 +2377,7 @@ bool D3D12Rtao::ensureTargets(int width, int height) {
 	}
 	return m_ao && m_shadow && m_gi && m_colorCopy
 	       && m_aoPrev && m_shadowPrev && m_depthCur && m_depthPrev && m_giPrev
-	       && m_spec && m_specPrev && m_waterMask && m_waterDepth && m_metalMask;
+	       && m_spec && m_specPrev && m_fog && m_fogPrev && m_waterMask && m_waterDepth && m_metalMask;
 }
 
 void D3D12Rtao::updateDescriptors() {
@@ -2298,6 +2523,21 @@ void D3D12Rtao::updateDescriptors() {
 		m_device->CreateShaderResourceView(m_spec.Get(), &specSrv, slot(kCompositeBase + 5));
 		if(m_specPrev) {
 			m_device->CreateShaderResourceView(m_specPrev.Get(), &specSrv, slot(12));
+		}
+	}
+	if(m_fog) {
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uavF {};
+		uavF.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		uavF.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		D3D12_SHADER_RESOURCE_VIEW_DESC fogSrv {};
+		fogSrv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		fogSrv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		fogSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		fogSrv.Texture2D.MipLevels = 1;
+		m_device->CreateUnorderedAccessView(m_fog.Get(), nullptr, &uavF, slot(kRtUavBase + 5));
+		m_device->CreateShaderResourceView(m_fog.Get(), &fogSrv, slot(kCompositeBase + 8));
+		if(m_fogPrev) {
+			m_device->CreateShaderResourceView(m_fogPrev.Get(), &fogSrv, slot(17));
 		}
 	}
 	if(m_waterMask) {
@@ -2995,6 +3235,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	const int shadowDenoise = (std::max)(0, (std::min)(settings.shadowDenoise, kMaxShadowDenoise));
 	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, kMaxGiDenoise));
 	const int contact = settings.contact ? 1 : 0;
+	const int fogQuality = (std::max)(0, (std::min)(settings.fogQuality, kMaxRtQuality));
 	const bool skipTemporal = settings.skipTemporal;
 	// Ray Reconstruction takes over both the accumulation and the spatial blur, so toggling it
 	// swaps denoisers mid-flight. Log the swap and the history state: a reflection that fades in
@@ -3013,7 +3254,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		}
 	}
 	if(aoQuality <= 0 && shadowQuality <= 0 && giQuality <= 0 && transRefl <= 0 && metalRefl <= 0
-	   && contact <= 0) {
+	   && contact <= 0 && fogQuality <= 0) {
 		return false;
 	}
 	if(!ensureTargets(width, height) || !m_lights) {
@@ -3071,6 +3312,8 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
 		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		transition(list, m_fog.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
 		           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		m_aoIsUav = true;
 	}
@@ -3167,6 +3410,10 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 			viewCb.waterFill = reflectFill[transRefl];
 			viewCb.metalFill = reflectFill[metalRefl];
 			viewCb.metalFacingF0 = metalFacing[metalRefl];
+			viewCb.fogSteps = fogSteps[fogQuality];
+			viewCb.fogDensity = 1.f;
+			viewCb.fogRange = kFogRange;
+			viewCb.fogAlpha = (m_histValid && !skipTemporal) ? kFogAlpha : 0.f;
 			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
 		}
@@ -3196,6 +3443,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	uavBarrier(list, m_gi.Get());
 	uavBarrier(list, m_depthCur.Get());
 	uavBarrier(list, m_spec.Get());
+	uavBarrier(list, m_fog.Get());
 
 	transition(list, m_ao.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -3204,6 +3452,8 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(list, m_fog.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
 	           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	m_aoIsUav = false;
 	
@@ -3239,25 +3489,30 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	transition(list, m_depthCur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	transition(list, m_fog.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	transition(list, m_aoPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_shadowPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_depthPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_giPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	transition(list, m_specPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
+	transition(list, m_fogPrev.Get(), histRead, D3D12_RESOURCE_STATE_COPY_DEST);
 	list->CopyResource(m_aoPrev.Get(), m_ao.Get());
 	list->CopyResource(m_shadowPrev.Get(), m_shadow.Get());
 	list->CopyResource(m_depthPrev.Get(), m_depthCur.Get());
 	list->CopyResource(m_giPrev.Get(), m_gi.Get());
 	list->CopyResource(m_specPrev.Get(), m_spec.Get());
+	list->CopyResource(m_fogPrev.Get(), m_fog.Get());
 	transition(list, m_aoPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_shadowPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_depthPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_giPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_specPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
+	transition(list, m_fogPrev.Get(), D3D12_RESOURCE_STATE_COPY_DEST, histRead);
 	transition(list, m_ao.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_shadow.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_gi.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_spec.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	transition(list, m_fog.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 	transition(list, m_depthCur.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	m_prevViewProj = viewProj;
 	m_histValid = true;

@@ -87,7 +87,7 @@ As an alternative, the engine also reads the data folder from the registry value
 
 | Where | What |
 |---|---|
-| Options → Ray tracing | **Preset** Off / Low / Medium / High / Custom, each effect separately, **Ray tracing distance**, **DLSS Ray Reconstruction (Experimental)**. Applies immediately |
+| Options → Ray tracing | **Preset** Off / Low / Medium / High / Custom, each effect separately (including **Volumetric fog**), **Ray tracing distance**, **DLSS Ray Reconstruction (Experimental)**. Applies immediately |
 | Options → Video | **Upscaling** (DLSS mode), **Frame Generation**, and the graphics API (DirectX 12 / 9, applies on the next launch) |
 | Options → Render | **Render distance**; antialiasing is locked off while DLSS is on |
 | Options → Interface | **Performance overlay**: Off / FPS / FPS + GPU time (new in v1.4) |

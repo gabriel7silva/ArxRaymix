@@ -21,6 +21,7 @@ struct DxrPresetValues {
 	int dxrDebris;
 	int dxrTransparency;
 	int dxrRr;
+	int dxrFog; //!< volumetric haze, Off / Low / Medium / High
 };
 
 //! Preset slider positions: Off, Low, Medium, High, then Custom, which writes nothing.
@@ -32,11 +33,11 @@ constexpr int kDxrPresetCustom = 4;
 
 //! Every preset turns Ray Reconstruction off: it is an experimental opt-in, not a quality step.
 constexpr DxrPresetValues kDxrPresets[] = {
-	//  ao sh gi metal trans shDn giDn contact debris transp rr
-	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // Off
-	{ 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0 }, // Low
-	{ 2, 2, 2, 1, 2, 1, 1, 1, 0, 0, 0 }, // Medium
-	{ 3, 3, 3, 2, 3, 1, 2, 1, 1, 0, 0 }, // High
+	//  ao sh gi metal trans shDn giDn contact debris transp rr fog
+	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, // Off
+	{ 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0 }, // Low
+	{ 2, 2, 2, 1, 2, 1, 1, 1, 0, 0, 0, 1 }, // Medium
+	{ 3, 3, 3, 2, 3, 1, 2, 1, 1, 0, 0, 2 }, // High
 };
 static_assert(sizeof(kDxrPresets) / sizeof(kDxrPresets[0]) == kDxrPresetHigh + 1);
 
@@ -44,7 +45,7 @@ static_assert(sizeof(kDxrPresets) / sizeof(kDxrPresets[0]) == kDxrPresetHigh + 1
 //! transparency only shape effects that are already on, so they do not count.
 constexpr bool dxrValuesEnabled(const DxrPresetValues & v) {
 	return v.rtao > 0 || v.dxrShadows > 0 || v.dxrGi > 0 || v.dxrReflections > 0
-	       || v.dxrTransReflections > 0 || v.dxrContact > 0;
+	       || v.dxrTransReflections > 0 || v.dxrContact > 0 || v.dxrFog > 0;
 }
 
 //! Preset the first run picks from the GPU's dedicated memory in MiB (0 when unknown).
