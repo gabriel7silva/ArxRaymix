@@ -40,6 +40,10 @@ frame instead of refitting them; use it to rule refitting out when a moving shad
 `ARX_DXR_STATIC_NOISE=1` keeps the penumbra / AO / GI noise fixed in screen space instead of
 stepping it every frame under the temporal history.
 
+`ARX_D3D12_NO_EARLY_SUBMIT=1` keeps each frame in one command list. By default the raster work
+is submitted before the ray tracing pass waits for the previous frame, so the GPU is not idle
+during that wait; use the switch to rule the split out if something renders wrong.
+
 `ARX_SL_NO_VERIFY=1` loads an `sl.interposer.dll` that is not signed by NVIDIA (a development
 build of the Streamline SDK). Release DLLs are signed and need nothing.
 

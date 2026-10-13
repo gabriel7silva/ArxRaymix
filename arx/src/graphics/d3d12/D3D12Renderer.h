@@ -191,6 +191,7 @@ private:
 	void retireSubmitted(std::uint64_t value);
 	bool waitFence(std::uint64_t value);
 	bool waitForSubmittedWork();
+	bool submitRasterThenWaitForPreviousFrame();
 	void resizeRayTargets(int width, int height);
 	
 	struct Impl;

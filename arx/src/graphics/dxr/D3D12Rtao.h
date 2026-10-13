@@ -147,7 +147,27 @@ public:
 	           int width, int height, const Settings & settings,
 	           const GpuLight * lights, size_t lightCount, std::uint64_t rtvPtr);
 	
+	//! Points inside apply() where the renderer may write a GPU timestamp (F11 timings).
+	enum TimestampPoint : unsigned {
+		kTsAccelEnd,  //!< geometry upload and BLAS / TLAS builds done
+		kTsTraceStart, //!< masks rasterized and colour copied, DispatchRays next
+		kTsTraceEnd   //!< DispatchRays done, composite and history copies next
+	};
+	using TimestampFn = void (*)(void * user, TimestampPoint point);
+	void setTimestampHook(TimestampFn fn, void * user) {
+		m_tsFn = fn;
+		m_tsUser = user;
+	}
+	
 private:
+	
+	void timestamp(TimestampPoint point) {
+		if(m_tsFn) {
+			m_tsFn(m_tsUser, point);
+		}
+	}
+	TimestampFn m_tsFn = nullptr;
+	void * m_tsUser = nullptr;
 	
 	struct Pos {
 		float x, y, z, w;

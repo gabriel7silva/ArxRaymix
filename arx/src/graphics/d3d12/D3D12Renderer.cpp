@@ -99,6 +99,9 @@ enum TimestampMark : unsigned {
 	kTsRayEnd,
 	kTsUpscaleStart,
 	kTsUpscaleEnd,
+	kTsAccelEnd,
+	kTsTraceStart,
+	kTsTraceEnd,
 	kTsMarks
 };
 
@@ -2250,6 +2253,46 @@ bool D3D12Renderer::waitForSubmittedWork() {
 	return waitFence(m->fenceValue);
 }
 
+//! Hand the raster work recorded so far to the GPU, then wait for the previous frame only.
+//!
+//! The ray tracing pass still needs the previous frame off the GPU (see waitForSubmittedWork),
+//! but this frame's raster does not. Submitting it first keeps the GPU busy with it while the CPU
+//! waits, instead of idling from the end of the previous frame until this one's single list is
+//! submitted at Present. The list is reopened on the same allocator, which is only reset once this
+//! frame slot's fence has passed (ensureCommandList). ARX_D3D12_NO_EARLY_SUBMIT=1 restores the
+//! one-list frame.
+bool D3D12Renderer::submitRasterThenWaitForPreviousFrame() {
+	static const bool disabled = [] {
+		const char * env = std::getenv("ARX_D3D12_NO_EARLY_SUBMIT");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	const UINT64 previous = m->fenceValue;
+	if(!disabled && m->recording && m->fence && m->fence->GetCompletedValue() < previous) {
+		if(FAILED(m->list->Close())) {
+			LogError << "D3D12: Close command list failed (early submit)";
+			m->recording = false;
+			return false;
+		}
+		ID3D12CommandList * lists[] = { m->list.Get() };
+		m->queue->ExecuteCommandLists(1, lists);
+		const UINT64 value = ++m->fenceValue;
+		retireSubmitted(value);
+		if(FAILED(m->queue->Signal(m->fence.Get(), value))) {
+			markUnusable();
+			m->recording = false;
+			return false;
+		}
+		if(FAILED(m->list->Reset(m->allocators[m->frame].Get(), nullptr))) {
+			LogError << "D3D12: Reset command list failed (early submit)";
+			markUnusable();
+			m->recording = false;
+			return false;
+		}
+		restoreRasterBind();
+	}
+	return waitFence(previous);
+}
+
 //! Rebuild the ray tracing targets at a new resolution, once the GPU has let go of the old ones.
 //!
 //! resize() releases those targets outright and the previous frame read them, so the release is
@@ -2756,6 +2799,9 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	delete m_rtao;
 	m_rtao = new D3D12Rtao();
 	m_rtao->init(m->device.Get(), m->srvHeap.Get(), kRtaoSrvBase);
+	m_rtao->setTimestampHook([](void * user, D3D12Rtao::TimestampPoint point) {
+		static_cast<D3D12Renderer *>(user)->markTimestamp(kTsAccelEnd + unsigned(point));
+	}, this);
 	m_rtao->resize(width, height);
 	if(m_sl) {
 		m_sl->setDevice(m->device.Get(), adapter.Get());
@@ -3686,12 +3732,16 @@ void D3D12Renderer::readTimestamps() {
 	const float frame = span(kTsFrameStart, kTsFrameEnd);
 	const float ray = span(kTsRayStart, kTsRayEnd);
 	const float upscale = span(kTsUpscaleStart, kTsUpscaleEnd);
+	const float build = span(kTsRayStart, kTsAccelEnd);
+	const float trace = span(kTsTraceStart, kTsTraceEnd);
 	// About half a second of smoothing at 60 fps, so the numbers are readable.
 	Renderer::GpuTimings & t = m->gpuTimes;
 	const float k = t.valid ? 0.06f : 1.f;
 	t.frameMs += (frame - t.frameMs) * k;
 	t.rayMs += (ray - t.rayMs) * k;
 	t.upscaleMs += (upscale - t.upscaleMs) * k;
+	t.buildMs += (build - t.buildMs) * k;
+	t.traceMs += (trace - t.traceMs) * k;
 	t.valid = true;
 }
 
@@ -4221,7 +4271,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 	// which are only safe once the previous frame's work has left the GPU. See waitForSubmittedWork.
 	// If that wait fails the GPU is hung or gone, and running apply() anyway would free memory it
 	// is still reading — the exact fault this guard exists to prevent.
-	if(!waitForSubmittedWork()) {
+	if(!submitRasterThenWaitForPreviousFrame()) {
 		m->worldPass = false;
 		return;
 	}

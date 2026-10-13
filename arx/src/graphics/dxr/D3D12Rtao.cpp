@@ -3032,6 +3032,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 		list4->Release();
 		return false;
 	}
+	timestamp(kTsAccelEnd);
 	const glm::mat4x4 viewProjEarly = proj * view;
 	rasterizeMasks(list, viewProjEarly, depth, settings.jitterNdcX, settings.jitterNdcY);
 	D3D12_SHADER_RESOURCE_VIEW_DESC depthSrv {};
@@ -3186,7 +3187,9 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	rays.Height = UINT(m_height);
 	rays.Depth = 1;
 	list4->SetPipelineState1(m_rtState.Get());
+	timestamp(kTsTraceStart);
 	list4->DispatchRays(&rays);
+	timestamp(kTsTraceEnd);
 	list4->Release();
 	uavBarrier(list, m_ao.Get());
 	uavBarrier(list, m_shadow.Get());

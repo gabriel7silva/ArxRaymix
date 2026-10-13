@@ -420,6 +420,10 @@ public:
 		float frameMs = 0.f;
 		float rayMs = 0.f;
 		float upscaleMs = 0.f;
+		//! Parts of rayMs: BLAS / TLAS builds, DispatchRays (every effect traces in that one
+		//! dispatch), and the rest (masks, colour copy, composite, history copies).
+		float buildMs = 0.f;
+		float traceMs = 0.f;
 	};
 	[[nodiscard]] virtual GpuTimings gpuTimings() const { return { }; }
 	

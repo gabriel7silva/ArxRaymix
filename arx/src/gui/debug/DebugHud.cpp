@@ -382,7 +382,8 @@ void ShowFPS() {
 		if(gpu.valid) {
 			std::ostringstream line;
 			line << std::fixed << std::setprecision(2) << "GPU " << gpu.frameMs << " ms"
-			     << "  ray " << gpu.rayMs << "  upscale " << gpu.upscaleMs;
+			     << "  ray " << gpu.rayMs << " (build " << gpu.buildMs << "  trace " << gpu.traceMs
+			     << ")  upscale " << gpu.upscaleMs;
 			hFontDebug->draw(Vec2i(10, 10 + 2 * lineStep), line.str(), Color::white);
 		}
 	}
