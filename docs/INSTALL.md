@@ -12,7 +12,7 @@ You need:
 
 You do not need anything else: no game patch, no Arx Libertatis install, no other mod. Arx Raymix never changes the Arx Fatalis folder; it only reads the game data from it.
 
-GPU requirements are in the [README](../README.md#requirements). In short: any Direct3D 12 GPU runs the game, ray tracing needs DXR support, DLSS needs an NVIDIA RTX GPU, and Frame Generation needs an RTX 40 series GPU or newer.
+GPU requirements are in the [README](../README.md#requirements). In short: any Direct3D 12 GPU runs the game and ray tracing (in software, at Low, without DXR support), DLSS needs an NVIDIA RTX GPU, and Frame Generation needs an RTX 40 series GPU or newer.
 
 ## What is in the zip
 
@@ -59,7 +59,7 @@ Arx Raymix is **not digitally signed yet**, so Windows SmartScreen warns about t
 To continue, click **More info**, then **Run anyway**. To make sure the file is the one we published, compare its SHA-256 with the `.sha256` file on the [release page][releases]. In PowerShell:
 
 ```powershell
-Get-FileHash .\ArxRaymix-v1.4-setup.exe -Algorithm SHA256
+Get-FileHash .\ArxRaymix-v1.5-setup.exe -Algorithm SHA256
 ```
 
 Only download Arx Raymix from Nexus Mods or from the GitHub releases page.
@@ -80,7 +80,7 @@ As an alternative, the engine also reads the data folder from the registry value
 ## First run
 
 1. **Language.** The first time, a *Language / Idioma* screen lists the available text languages, English first. Pick one. You can change it later in **Options → Language settings**. Brazilian Portuguese covers the menus and the in-game text; any line without a translation shows in English. Voices stay in English: the Portuguese voice files are Arkane's audio and are not included.
-2. **Graphics.** With a DXR GPU, the game picks a ray tracing preset from your video memory: Low under 5 GiB, High from 9 GiB, Medium in between. Where your GPU supports it, DLSS Quality is turned on too. Without DXR nothing is changed.
+2. **Graphics.** With a DXR GPU, the game picks a ray tracing preset from your video memory: Low under 5 GiB, High from 9 GiB, Medium in between. Where your GPU supports it, DLSS Quality is turned on too. Without DXR (software ray tracing) or on Direct3D 9 / OpenGL, ray tracing stays Off; turn it on in Options → Ray tracing.
 3. **Play.** New game or load a save. Saves from Arx Libertatis show up too, because both use the same user folder.
 
 ## Settings worth knowing
@@ -203,5 +203,5 @@ Arx Raymix is a Windows build. For other systems, use [Arx Libertatis](https://a
 **Is it free? Can I see the source?**
 Yes. The engine is GPLv3 and the source is at <https://github.com/gabriel7silva/ArxRaymix>.
 
-[nexus]: NEXUS_URL "TODO Gabriel: Nexus page URL"
+[nexus]: https://www.nexusmods.com/arxfatalis/mods/37
 [releases]: https://github.com/gabriel7silva/ArxRaymix/releases

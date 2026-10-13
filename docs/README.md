@@ -7,6 +7,7 @@ English is the default language for this repository. Portuguese (Brazil) lives u
 | Project overview | [../README.md](../README.md) | [pt-BR/README.md](pt-BR/README.md) |
 | Install, update, uninstall (players) | [INSTALL.md](INSTALL.md) | [README.pt-BR.md](README.pt-BR.md) |
 | Building from source | [BUILDING.md](BUILDING.md) | (English only) |
+| Release notes 1.5 | [RELEASE-NOTES-1.5.md](RELEASE-NOTES-1.5.md) | (English only) |
 | Release notes 1.4 | [RELEASE-NOTES-1.4.md](RELEASE-NOTES-1.4.md) | (English only) |
 | Architecture | [ARCHITECTURE.md](ARCHITECTURE.md) | [pt-BR/ARCHITECTURE.md](pt-BR/ARCHITECTURE.md) |
 | Configuration | [CONFIGURATION.md](CONFIGURATION.md) | [pt-BR/CONFIGURATION.md](pt-BR/CONFIGURATION.md) |
