@@ -171,7 +171,7 @@ Portuguese developer docs: [docs/pt-BR/README.md](docs/pt-BR/README.md).
 
 - **Engine code** is GPLv3 ([LICENSE](LICENSE)): Copyright (C) 2011-2023 Arx Libertatis Team and Contributors, with Arx Raymix changes by Gabriel Silva, based on the Arx Fatalis GPLv3 source code, Copyright (C) 1999-2010 Arkane Studios SA, a ZeniMax Media company. Some files are under more permissive licenses; each file's header is authoritative. See also [`arx/COPYING`](arx/COPYING).
 - **Arx Fatalis** and its game data are © Arkane Studios / ZeniMax Media / Bethesda Softworks. They are not included or redistributed.
-- **NVIDIA DLSS, Streamline and Reflex** binaries are © NVIDIA Corporation and distributed under NVIDIA's own license terms, not the GPLv3. <!-- TODO Gabriel: confirm the notice NVIDIA's DLSS / Streamline license requires in the release zip. -->
-- Third-party libraries keep their own licenses (see `libs/`).
+- **NVIDIA DLSS, Streamline and Reflex** binaries are © NVIDIA Corporation and distributed under NVIDIA's own license terms, not the GPLv3.
+- Third-party libraries keep their own licenses: see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The release zip carries every license text in its `licenses\` folder.
 
 Arx Raymix is not affiliated with or endorsed by Arkane Studios, ZeniMax Media, Bethesda Softworks or NVIDIA.

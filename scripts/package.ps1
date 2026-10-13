@@ -11,7 +11,8 @@
       data\                 arx\data\core (localisation overlays, fonts)
       LICENSE, AUTHORS, README.txt
       licenses\             one file per bundled library (SDL2, OpenAL Soft, FreeType,
-                            zlib, DXC, NVIDIA Streamline / DLSS, ...)
+                            zlib, DXC, NVIDIA Streamline / DLSS, ...), and README.txt from
+                            THIRD-PARTY-NOTICES.md listing them all
       Arx Raymix - DirectX 9.bat
 
     Next to the zip goes <zip>.sha256, which the launcher checks before installing an update.
@@ -114,6 +115,7 @@ Copy-Item -LiteralPath (Join-Path $root 'arx\AUTHORS') -Destination $stage
 $licDir = Join-Path $stage 'licenses'
 New-Item -ItemType Directory -Force -Path $licDir | Out-Null
 $licenses = [ordered]@{
+    'README.txt'         = 'THIRD-PARTY-NOTICES.md'
     'SDL2.txt'           = 'libs\sdl\COPYING.txt'
     'OpenAL-Soft.txt'    = 'libs\openal\COPYING'
     'FreeType.txt'       = 'libs\freetype\LICENSE'
