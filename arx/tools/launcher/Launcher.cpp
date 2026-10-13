@@ -19,6 +19,7 @@
  */
 
 #include <atomic>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -45,6 +46,7 @@
 #include <bcrypt.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 
 #include "core/UpdateRelease.h"
 #include "platform/HttpGet.h"
@@ -225,7 +227,9 @@ std::vector<std::string> filesUnder(const fs::path & folder) {
  * puts everything back as it was.
  */
 bool swapIn(const fs::path & incoming, const std::vector<std::string> & installed,
-            const fs::path & aside, std::string & error) {
+            const fs::path & aside, std::string & error, bool & incomplete) {
+
+	incomplete = false;
 
 	std::set<std::string> outgoing(installed.begin(), installed.end());
 	outgoing.insert(std::string(updates::kPackageManifest));
@@ -239,13 +243,17 @@ bool swapIn(const fs::path & incoming, const std::vector<std::string> & installe
 
 	std::vector<std::string> movedOut;
 	std::vector<std::string> movedIn;
+	// Puts every moved file back. False when that did not fully work: the folder is then a mix of
+	// both versions and the caller must not claim that nothing changed.
 	auto undo = [&]() {
+		bool restored = true;
 		for(const std::string & file : movedIn) {
 			fs::remove(g_dir / pathFromUtf8(file), ec);
 		}
 		for(const std::string & file : movedOut) {
-			moveFile(aside / pathFromUtf8(file), g_dir / pathFromUtf8(file));
+			restored = moveFile(aside / pathFromUtf8(file), g_dir / pathFromUtf8(file)) && restored;
 		}
+		return restored;
 	};
 
 	for(const std::string & file : outgoing) {
@@ -255,7 +263,10 @@ bool swapIn(const fs::path & incoming, const std::vector<std::string> & installe
 		}
 		if(!moveFile(path, aside / pathFromUtf8(file))) {
 			error = "could not move " + file;
-			undo();
+			if(!undo()) {
+				error += "; restoring the previous files also failed";
+				incomplete = true;
+			}
 			return false;
 		}
 		movedOut.push_back(file);
@@ -263,7 +274,10 @@ bool swapIn(const fs::path & incoming, const std::vector<std::string> & installe
 	for(const std::string & file : newFiles) {
 		if(!moveFile(incoming / pathFromUtf8(file), g_dir / pathFromUtf8(file))) {
 			error = "could not install " + file;
-			undo();
+			if(!undo()) {
+				error += "; restoring the previous files also failed";
+				incomplete = true;
+			}
 			return false;
 		}
 		movedIn.push_back(file);
@@ -483,11 +497,11 @@ HRESULT CALLBACK progressCallback(HWND window, UINT notification, WPARAM wParam,
 
 bool downloadWithProgress(Job & job) {
 
-	std::thread worker([&job]() { job.run(); });
-
+	// Built before the worker starts, which may write to the job while it runs.
 	std::wstring title = job.zipFile.empty()
 	                     ? std::wstring(tr(L"Downloading Arx Raymix ", L"Baixando Arx Raymix ")) + widen(job.release.tag)
 	                     : std::wstring(tr(L"Installing ", L"Instalando ")) + job.zipFile.filename().wstring();
+	std::thread worker([&job]() { job.run(); });
 	TASKDIALOGCONFIG config = {};
 	config.cbSize = sizeof(config);
 	config.dwFlags = TDF_SHOW_PROGRESS_BAR | TDF_CALLBACK_TIMER | TDF_ALLOW_DIALOG_CANCELLATION;
@@ -531,9 +545,94 @@ void setInstalledVersion(const std::string & version) {
 	RegCloseKey(key);
 }
 
+// The launcher's own folders. Dot-prefixed and named after the mod, so that a "backup" or
+// "update" folder the player keeps in the install folder is never touched. The 1.4 and 1.5
+// launchers used those plain names; they are only removed when they hold what a launcher put there.
+const wchar_t kBackupDir[] = L".arxraymix-backup";
+const wchar_t kUpdateDir[] = L".arxraymix-update";
+
+bool legacyBackupIsOurs() {
+	std::error_code ec;
+	return fs::exists(g_dir / "backup" / std::string(updates::kPackageManifest), ec);
+}
+
 void cleanLeftovers() {
 	std::error_code ec;
-	fs::remove_all(g_dir / "update", ec);
+	fs::remove_all(g_dir / kUpdateDir, ec);
+	const fs::path legacy = g_dir / "update";
+	if(fs::exists(legacy / "staging", ec) || fs::exists(legacy / "rolled-back", ec)) {
+		std::vector<fs::path> children;
+		for(const fs::directory_entry & entry : fs::directory_iterator(legacy, ec)) {
+			children.push_back(entry.path().filename());
+		}
+		bool onlyOurs = true;
+		for(const fs::path & child : children) {
+			if(child != "staging" && child != "rolled-back" && child.extension() != ".zip"
+			   && child.extension() != ".sha256") {
+				onlyOurs = false;
+			}
+		}
+		if(onlyOurs) {
+			fs::remove_all(legacy, ec);
+		}
+	}
+}
+
+//! True when ARX_NO_UPDATE_CHECK is set or cfg.ini (in either user folder Arx Libertatis uses)
+//! has check_for_updates off: the menu option turns off the launcher's check as well.
+bool updatesDisabled() {
+	if(const char * env = std::getenv("ARX_NO_UPDATE_CHECK")) {
+		if(*env && *env != '0') {
+			log("update check off: ARX_NO_UPDATE_CHECK");
+			return true;
+		}
+	}
+	std::vector<fs::path> candidates;
+	auto known = [&](REFKNOWNFOLDERID id, const wchar_t * sub) {
+		PWSTR path = nullptr;
+		if(SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &path)) && path) {
+			candidates.push_back(fs::path(path) / sub / L"cfg.ini");
+		}
+		CoTaskMemFree(path);
+	};
+	known(FOLDERID_SavedGames, L"Arx Libertatis");
+	known(FOLDERID_Documents, L"My Games\\Arx Libertatis");
+	for(const fs::path & cfg : candidates) {
+		std::optional<std::string> text = readFile(cfg);
+		if(!text) {
+			continue;
+		}
+		std::istringstream lines(*text);
+		std::string line;
+		while(std::getline(lines, line)) {
+			std::string compact;
+			for(char c : line) {
+				if(c != ' ' && c != '\t' && c != '\r' && c != '"') {
+					compact += c;
+				}
+			}
+			if(compact == "check_for_updates=0" || compact == "check_for_updates=false") {
+				log("update check off in cfg.ini");
+				return true;
+			}
+		}
+		// Arx Libertatis reads the first cfg.ini it finds.
+		break;
+	}
+	return false;
+}
+
+//! Waits until arx.exe is closed. False when the player gives up.
+bool waitForGameToClose() {
+	while(gameIsRunning()) {
+		int answer = MessageBoxW(nullptr, tr(L"Arx Raymix is running. Close the game, then press Retry.",
+		                                     L"O Arx Raymix está aberto. Feche o jogo e clique em Repetir."),
+		                         L"Arx Raymix", MB_RETRYCANCEL | MB_ICONWARNING);
+		if(answer != IDRETRY) {
+			return false;
+		}
+	}
+	return true;
 }
 
 void install(Job & job, const updates::PackageManifest & installed);
@@ -585,13 +684,8 @@ void checkForUpdate() {
 		return;
 	}
 
-	while(gameIsRunning()) {
-		int answer = MessageBoxW(nullptr, tr(L"Arx Raymix is running. Close the game, then press Retry.",
-		                                     L"O Arx Raymix está aberto. Feche o jogo e clique em Repetir."),
-		                         L"Arx Raymix", MB_RETRYCANCEL | MB_ICONWARNING);
-		if(answer != IDRETRY) {
-			return;
-		}
+	if(!waitForGameToClose()) {
+		return;
 	}
 
 	Job job;
@@ -602,7 +696,7 @@ void checkForUpdate() {
 //! Download (or check, for --install) and unpack \a job, then swap it in. Messages on failure.
 void install(Job & job, const updates::PackageManifest & installed) {
 	
-	job.work = g_dir / "update";
+	job.work = g_dir / kUpdateDir;
 	job.staging = job.work / "staging";
 	if(!downloadWithProgress(job)) {
 		log("update failed: " + (job.progress.cancel ? std::string("cancelled") : job.error));
@@ -616,14 +710,32 @@ void install(Job & job, const updates::PackageManifest & installed) {
 		return;
 	}
 
+	// The download can take minutes: the game may have been started from another shortcut in the
+	// meantime, and its files must not be swapped under it.
+	if(!waitForGameToClose()) {
+		log("update cancelled: the game is running");
+		cleanLeftovers();
+		return;
+	}
+
 	std::string error;
-	if(!swapIn(job.staging, installed.files, g_dir / "backup", error)) {
+	bool incomplete = false;
+	if(!swapIn(job.staging, installed.files, g_dir / kBackupDir, error, incomplete)) {
 		log("swap failed: " + error);
 		message(std::wstring(tr(L"The update could not be installed:\n", L"Não foi possível atualizar:\n"))
-		        + widen(error) + tr(L"\n\nNothing was changed.", L"\n\nNada foi alterado."), MB_ICONWARNING);
+		        + widen(error)
+		        + (incomplete ? tr(L"\n\nSome files could not be put back. Run ArxRaymix.exe --rollback or reinstall.",
+		                           L"\n\nAlguns arquivos não puderam ser restaurados. Rode ArxRaymix.exe --rollback ou reinstale.")
+		                      : tr(L"\n\nNothing was changed.", L"\n\nNada foi alterado.")),
+		        MB_ICONWARNING);
 	} else {
 		log("updated " + installed.version + " -> " + job.release.tag);
 		setInstalledVersion(job.release.tag);
+		// A backup left by the 1.4 / 1.5 launcher is superseded by the new one.
+		if(legacyBackupIsOurs()) {
+			std::error_code ec;
+			fs::remove_all(g_dir / "backup", ec);
+		}
 	}
 	cleanLeftovers();
 }
@@ -648,10 +760,15 @@ void installLocal(const fs::path & zipFile) {
 
 void rollback() {
 
-	fs::path backup = g_dir / "backup";
+	fs::path backup = g_dir / kBackupDir;
+	if(!readManifest(backup) && legacyBackupIsOurs()) {
+		backup = g_dir / "backup"; // left by the 1.4 / 1.5 launcher
+	}
 	std::optional<updates::PackageManifest> previous = readManifest(backup);
+	// A swap cut short can leave the folder without package.txt: the backup alone is then enough,
+	// its files are moved over whatever is there.
 	std::optional<updates::PackageManifest> current = readManifest(g_dir);
-	if(!previous || !current) {
+	if(!previous) {
 		message(tr(L"There is no previous version to go back to.", L"Não há versão anterior para restaurar."));
 		return;
 	}
@@ -660,9 +777,11 @@ void rollback() {
 		return;
 	}
 
-	// The same swap in reverse; what comes out goes to update\ and is deleted on the next start.
+	// The same swap in reverse; what comes out is deleted on the next start.
 	std::string error;
-	if(!swapIn(backup, current->files, g_dir / "update" / "rolled-back", error)) {
+	bool incomplete = false;
+	const std::vector<std::string> currentFiles = current ? current->files : std::vector<std::string>();
+	if(!swapIn(backup, currentFiles, g_dir / kUpdateDir / "rolled-back", error, incomplete)) {
 		log("rollback failed: " + error);
 		message(std::wstring(tr(L"Could not restore the previous version:\n", L"Não foi possível restaurar a versão anterior:\n"))
 		        + widen(error), MB_ICONWARNING);
@@ -670,12 +789,16 @@ void rollback() {
 	}
 	std::error_code ec;
 	fs::remove_all(backup, ec);
-	setSkippedVersion(current->version);
-	log("rolled back " + current->version + " -> " + previous->version);
+	log("rolled back " + (current ? current->version : std::string("?")) + " -> " + previous->version);
 	setInstalledVersion(previous->version);
-	message(std::wstring(tr(L"Restored Arx Raymix ", L"Arx Raymix restaurado para a versão ")) + widen(previous->version)
-	        + tr(L". The launcher will not offer ", L". O launcher não vai oferecer a ") + widen(current->version)
-	        + tr(L" again.", L" de novo."));
+	std::wstring text = std::wstring(tr(L"Restored Arx Raymix ", L"Arx Raymix restaurado para a versão "))
+	                    + widen(previous->version) + L".";
+	if(current) {
+		setSkippedVersion(current->version);
+		text += std::wstring(tr(L" The launcher will not offer ", L" O launcher não vai oferecer a "))
+		        + widen(current->version) + tr(L" again.", L" de novo.");
+	}
+	message(text);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -773,6 +896,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 		LocalFree(argv);
 	}
 
+	// One launcher at a time: a second double-click while the first is still asking GitHub or
+	// downloading would clean or swap the folder under it. The first one starts the game.
+	HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\ArxRaymixLauncher");
+	if(single && GetLastError() == ERROR_ALREADY_EXISTS) {
+		log("another launcher is already running");
+		CloseHandle(single);
+		return 0;
+	}
+
 	cleanLeftovers();
 
 	if(doRollback) {
@@ -782,7 +914,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
 	if(!localZip.empty()) {
 		installLocal(localZip);
-	} else if(!noUpdate) {
+	} else if(!noUpdate && !updatesDisabled()) {
 		checkForUpdate();
 	}
 

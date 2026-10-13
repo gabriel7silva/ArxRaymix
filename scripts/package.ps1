@@ -66,6 +66,8 @@ if (Test-Path -LiteralPath $stage) {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
+# Absolute and without a trailing separator: the manifest below cuts this prefix off FullName.
+$stage = (Resolve-Path -LiteralPath $stage).ProviderPath.TrimEnd([char]92)
 
 # Executable and runtime DLLs: CMake already staged everything arx.exe loads next to it.
 Copy-Item -LiteralPath $exe -Destination $stage

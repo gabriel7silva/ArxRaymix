@@ -410,7 +410,8 @@ inline std::string parseSha256(std::string_view text) {
  * A zip entry path made relative to the package root: backslashes become slashes and the
  * single top folder the package is zipped in ("ArxRaymix-v1.5/") is dropped. Returns an
  * empty string for the top folder itself, for directories, and for anything that could land
- * outside the install folder (absolute paths, drive letters, "..", empty components).
+ * outside the install folder (absolute paths, drive letters, "..", empty components), or
+ * that Windows cannot name a file (wildcards, <>|", control characters).
  */
 inline std::string packageRelativePath(std::string_view entry) {
 	std::string path(entry);
@@ -434,8 +435,13 @@ inline std::string packageRelativePath(std::string_view entry) {
 			end = path.size();
 		}
 		std::string_view part = std::string_view(path).substr(begin, end - begin);
-		if(part.empty() || part == "." || part == ".." || part.find(':') != std::string_view::npos) {
+		if(part.empty() || part == "." || part == ".." || part.find_first_of(":*?<>|\"") != std::string_view::npos) {
 			return std::string();
+		}
+		for(char c : part) {
+			if(static_cast<unsigned char>(c) < 0x20) {
+				return std::string();
+			}
 		}
 		begin = end + 1;
 	}

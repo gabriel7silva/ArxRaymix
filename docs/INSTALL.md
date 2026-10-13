@@ -109,7 +109,7 @@ When `ArxRaymix.exe` starts, it checks the latest release on GitHub. If there is
 
 1. It asks whether to update: **Update now**, **Not now**, or **Skip this version**.
 2. On *Update now*, it downloads the release zip with a progress bar and checks its SHA-256. A download that does not match is refused and nothing changes.
-3. It replaces only the files listed in `package.txt` and moves the old ones to the `backup` folder next to it. `ArxRaymix.exe --rollback` puts the previous version back.
+3. It replaces only the files listed in `package.txt` and moves the old ones to the hidden `.arxraymix-backup` folder next to it (`backup` in 1.4 and 1.5). `ArxRaymix.exe --rollback` puts the previous version back.
 4. It starts `arx.exe`.
 
 It never touches `cfg.ini`, your saves, or the Arx Fatalis folder. Without an internet connection, or if anything fails, it starts the installed version as usual. `ArxRaymix.exe --no-update` skips the check.
@@ -128,7 +128,7 @@ Your settings and saves are in the user folder, not the mod folder, so they carr
 
 ## Uninstall
 
-1. Installed with the setup: **Settings → Apps → Arx Raymix → Uninstall**, or *Uninstall Arx Raymix* in the Start menu. It removes the mod's files, its `backup` folder and the shortcuts. Installed from the zip: delete the Arx Raymix folder.
+1. Installed with the setup: **Settings → Apps → Arx Raymix → Uninstall**, or *Uninstall Arx Raymix* in the Start menu. It removes the mod's files, its `.arxraymix-backup` folder and the shortcuts. Installed from the zip: delete the Arx Raymix folder.
 2. Optional: delete your user folder (`%USERPROFILE%\Saved Games\Arx Libertatis`, see below) to remove settings and **saves**. Arx Libertatis uses the same folder.
 3. If you added the `DataDir` registry value in step 4 of the install, delete it as well.
 

@@ -54,6 +54,7 @@ VIAddVersionKey "LegalCopyright" "GPLv3. Arx Fatalis (c) Arkane Studios / ZeniMa
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${STAGE}\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE CheckFolderBeforeInstall
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\ArxRaymix.exe"
@@ -97,6 +98,8 @@ LangString GameFolderWarning ${LANG_ENGLISH} "This folder contains data.pak, so 
 LangString GameFolderWarning ${LANG_PORTUGUESEBR} "Esta pasta tem o data.pak, então parece ser a pasta do Arx Fatalis. Instale o Arx Raymix numa pasta própria."
 LangString RunningWarning ${LANG_ENGLISH} "Arx Raymix is running. Close the game, then click Retry."
 LangString RunningWarning ${LANG_PORTUGUESEBR} "O Arx Raymix está aberto. Feche o jogo e clique em Repetir."
+LangString FolderNotEmpty ${LANG_ENGLISH} "This folder already has other files. Choose an empty folder, or the folder of an earlier Arx Raymix install."
+LangString FolderNotEmpty ${LANG_PORTUGUESEBR} "Esta pasta já tem outros arquivos. Escolha uma pasta vazia ou a pasta de uma instalação anterior do Arx Raymix."
 LangString UnKeepNote ${LANG_ENGLISH} "Your saves and settings (cfg.ini) are kept in Saved Games\Arx Libertatis."
 LangString UnKeepNote ${LANG_PORTUGUESEBR} "Seus saves e configurações (cfg.ini) ficam guardados em Jogos Salvos\Arx Libertatis."
 
@@ -104,6 +107,25 @@ Function .onVerifyInstDir
 	; Refuse the Arx Fatalis folder: the mod must not mix its files with the game's.
 	${If} ${FileExists} "$INSTDIR\data.pak"
 		Abort
+	${EndIf}
+FunctionEnd
+
+Function CheckFolderBeforeInstall
+	; Refuse a folder that already has files and is not an earlier Arx Raymix install: the
+	; uninstaller removes the folders the launcher creates, and must only find ours there.
+	${If} ${FileExists} "$INSTDIR\*"
+	${AndIfNot} ${FileExists} "$INSTDIR\package.txt"
+		FindFirst $0 $1 "$INSTDIR\*"
+		${DoWhile} $1 != ""
+			${If} $1 != "."
+			${AndIf} $1 != ".."
+				FindClose $0
+				MessageBox MB_OK|MB_ICONEXCLAMATION "$(FolderNotEmpty)"
+				Abort
+			${EndIf}
+			FindNext $0 $1
+		${Loop}
+		FindClose $0
 	${EndIf}
 FunctionEnd
 
@@ -177,8 +199,32 @@ Function un.onInit
 	SetShellVarContext current
 FunctionEnd
 
-; Deletes every file package.txt lists (line 1 is the version). Lines that could point outside
-; the install folder are skipped.
+; Removes $1's parent folders inside the install folder, deepest first, while they are empty.
+Function un.RemoveParents
+	${Do}
+		StrLen $5 $1
+		IntOp $6 $5 - 1
+		${Do}
+			${If} $6 < 1
+				${ExitDo}
+			${EndIf}
+			StrCpy $7 $1 1 $6
+			${If} $7 == "\"
+				${ExitDo}
+			${EndIf}
+			IntOp $6 $6 - 1
+		${Loop}
+		${If} $6 < 1
+			${ExitDo}
+		${EndIf}
+		StrCpy $1 $1 $6
+		RMDir "$INSTDIR\$1"
+	${Loop}
+FunctionEnd
+
+; Deletes every file package.txt lists (line 1 is the version), or with $R0 = 1 removes the
+; folders they were in once empty: an update can add folders the setup did not create. Lines
+; that could point outside the install folder, or are not plain file names, are skipped.
 Function un.RemovePackageFiles
 	ClearErrors
 	FileOpen $0 "$INSTDIR\package.txt" r
@@ -203,9 +249,17 @@ Function un.RemovePackageFiles
 		${EndIf}
 		${UnStrStr} $3 $1 ".."
 		${UnStrStr} $4 $1 ":"
+		${UnStrStr} $8 $1 "*"
+		${UnStrStr} $9 $1 "?"
 		${If} $3 == ""
 		${AndIf} $4 == ""
-			Delete "$INSTDIR\$1"
+		${AndIf} $8 == ""
+		${AndIf} $9 == ""
+			${If} $R0 == 1
+				Call un.RemoveParents
+			${Else}
+				Delete "$INSTDIR\$1"
+			${EndIf}
 		${EndIf}
 	${Loop}
 	FileClose $0
@@ -214,14 +268,25 @@ FunctionEnd
 Section "Uninstall"
 	!insertmacro WaitForGame
 
+	StrCpy $R0 0
+	Call un.RemovePackageFiles
+	StrCpy $R0 1
 	Call un.RemovePackageFiles
 	Delete "$INSTDIR\package.txt"
 	Delete "$INSTDIR\launcher.log"
 	Delete "$INSTDIR\launcher.ini"
 	Delete "$INSTDIR\ArxRaymix.exe.old"
 	; Created by the launcher: the previous version and a pending download.
-	RMDir /r "$INSTDIR\backup"
-	RMDir /r "$INSTDIR\update"
+	RMDir /r "$INSTDIR\.arxraymix-backup"
+	RMDir /r "$INSTDIR\.arxraymix-update"
+	; The 1.4 / 1.5 launcher used plain names; removed only when they hold what it put there.
+	${If} ${FileExists} "$INSTDIR\backup\package.txt"
+		RMDir /r "$INSTDIR\backup"
+	${EndIf}
+	${If} ${FileExists} "$INSTDIR\update\staging\*"
+	${OrIf} ${FileExists} "$INSTDIR\update\rolled-back\*"
+		RMDir /r "$INSTDIR\update"
+	${EndIf}
 	!include "${DIRS_NSH}"
 	Delete "$INSTDIR\Uninstall.exe"
 	RMDir "$INSTDIR"

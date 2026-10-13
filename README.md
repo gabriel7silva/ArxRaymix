@@ -121,7 +121,7 @@ The `cfg.ini` keys behind these settings are listed in [docs/CONFIGURATION.md](d
 
 ## Updating
 
-From v1.4, `ArxRaymix.exe` checks the latest GitHub Release when it starts. If there is a newer version it offers to update. On yes, it downloads the zip, checks its SHA-256, replaces only the mod's own files (the old ones go to `backup`, and `ArxRaymix.exe --rollback` restores them) and starts the game. Offline or on any error it just starts the game. It never touches `cfg.ini`, your saves or the Arx Fatalis folder. If you start `arx.exe` directly, the main menu shows a "new version available" notice instead; turn it off in Options → Interface → Check for updates. Details in [docs/INSTALL.md](docs/INSTALL.md#updating).
+From v1.4, `ArxRaymix.exe` checks the latest GitHub Release when it starts. If there is a newer version it offers to update. On yes, it downloads the zip, checks its SHA-256, replaces only the mod's own files (the old ones go to `.arxraymix-backup`, and `ArxRaymix.exe --rollback` restores them) and starts the game. Offline or on any error it just starts the game. It never touches `cfg.ini`, your saves or the Arx Fatalis folder. If you start `arx.exe` directly, the main menu shows a "new version available" notice instead; turn it off in Options → Interface → Check for updates, which also stops the launcher from checking. Details in [docs/INSTALL.md](docs/INSTALL.md#updating).
 
 To update by hand: download the new zip and extract it over the old folder, or into a new folder. Settings and saves are not in the mod folder, so they carry over.
 

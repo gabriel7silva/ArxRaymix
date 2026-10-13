@@ -106,7 +106,7 @@ Com uma GPU com DXR, o jogo escolhe um preset de ray tracing pela memória de v�
 
 ## Atualização
 
-A partir da v1.4, o `ArxRaymix.exe` consulta a última versão no GitHub ao abrir. Se houver versão nova, oferece **Atualizar agora**, **Agora não** ou **Pular esta versão**. Se você aceitar, ele baixa o zip, confere o SHA-256, troca só os arquivos do mod e abre o jogo. A versão anterior fica na pasta `backup`, e `ArxRaymix.exe --rollback` volta para ela. Sem internet ou com erro, ele só abre o jogo. Baixou o zip pelo Nexus? `ArxRaymix.exe --install <zip>` instala do mesmo jeito. Ele **nunca** mexe no `cfg.ini`, nos saves nem na pasta do Arx Fatalis.
+A partir da v1.4, o `ArxRaymix.exe` consulta a última versão no GitHub ao abrir. Se houver versão nova, oferece **Atualizar agora**, **Agora não** ou **Pular esta versão**. Se você aceitar, ele baixa o zip, confere o SHA-256, troca só os arquivos do mod e abre o jogo. A versão anterior fica na pasta `.arxraymix-backup`, e `ArxRaymix.exe --rollback` volta para ela. Sem internet ou com erro, ele só abre o jogo. Baixou o zip pelo Nexus? `ArxRaymix.exe --install <zip>` instala do mesmo jeito. Ele **nunca** mexe no `cfg.ini`, nos saves nem na pasta do Arx Fatalis.
 
 Quem abre o `arx.exe` direto vê um aviso de **nova versão disponível** no menu principal. Para desligar: **Opções → Interface → Verificar atualizações**.
 

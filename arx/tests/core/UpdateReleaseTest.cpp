@@ -130,7 +130,9 @@ void UpdateReleaseTest::packagePathTest() {
 
 	for(const char * bad : { "arx.exe", "ArxRaymix-v1.5/", "ArxRaymix-v1.5/data/", "ArxRaymix-v1.5//x",
 	                         "ArxRaymix-v1.5/../x", "ArxRaymix-v1.5/a/../../x", "ArxRaymix-v1.5/./x",
-	                         "ArxRaymix-v1.5/C:/Windows/x", "ArxRaymix-v1.5/C:x", "/abs" }) {
+	                         "ArxRaymix-v1.5/C:/Windows/x", "ArxRaymix-v1.5/C:x", "/abs",
+	                         "ArxRaymix-v1.5/*.dll", "ArxRaymix-v1.5/a?.ini", "ArxRaymix-v1.5/a|b",
+	                         "ArxRaymix-v1.5/a\"b", "ArxRaymix-v1.5/a<b>", "ArxRaymix-v1.5/a	b" }) {
 		CPPUNIT_ASSERT_EQUAL_MESSAGE(bad, std::string(), packageRelativePath(bad));
 	}
 }
