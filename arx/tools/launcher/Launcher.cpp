@@ -508,6 +508,29 @@ bool downloadWithProgress(Job & job) {
 // ---------------------------------------------------------------------------------------------
 // Update and rollback
 
+/*!
+ * Keeps the version shown in Settings -> Apps current when this folder came from the installer
+ * (scripts/installer/ArxRaymix.nsi), which registered it under HKCU.
+ */
+void setInstalledVersion(const std::string & version) {
+	HKEY key = nullptr;
+	if(RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ArxRaymix",
+	                 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &key) != ERROR_SUCCESS) {
+		return;
+	}
+	wchar_t location[MAX_PATH * 4] = {};
+	DWORD size = sizeof(location) - sizeof(wchar_t);
+	DWORD type = 0;
+	std::error_code ec;
+	if(RegQueryValueExW(key, L"InstallLocation", nullptr, &type, reinterpret_cast<LPBYTE>(location), &size) == ERROR_SUCCESS
+	   && type == REG_SZ && fs::equivalent(fs::path(location), g_dir, ec)) {
+		std::wstring value = widen(version);
+		RegSetValueExW(key, L"DisplayVersion", 0, REG_SZ, reinterpret_cast<const BYTE *>(value.c_str()),
+		               DWORD((value.size() + 1) * sizeof(wchar_t)));
+	}
+	RegCloseKey(key);
+}
+
 void cleanLeftovers() {
 	std::error_code ec;
 	fs::remove_all(g_dir / "update", ec);
@@ -600,6 +623,7 @@ void install(Job & job, const updates::PackageManifest & installed) {
 		        + widen(error) + tr(L"\n\nNothing was changed.", L"\n\nNada foi alterado."), MB_ICONWARNING);
 	} else {
 		log("updated " + installed.version + " -> " + job.release.tag);
+		setInstalledVersion(job.release.tag);
 	}
 	cleanLeftovers();
 }
@@ -648,6 +672,7 @@ void rollback() {
 	fs::remove_all(backup, ec);
 	setSkippedVersion(current->version);
 	log("rolled back " + current->version + " -> " + previous->version);
+	setInstalledVersion(previous->version);
 	message(std::wstring(tr(L"Restored Arx Raymix ", L"Arx Raymix restaurado para a versão ")) + widen(previous->version)
 	        + tr(L". The launcher will not offer ", L". O launcher não vai oferecer a ") + widen(current->version)
 	        + tr(L" again.", L" de novo."));

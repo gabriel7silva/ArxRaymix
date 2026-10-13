@@ -68,8 +68,8 @@ Both carry the same zip, `ArxRaymix-1.4.zip`. The GitHub release lists its SHA-2
 ## Install
 
 1. Install Arx Fatalis from Steam or GOG.
-2. Extract the zip to its own folder, for example `C:\Games\ArxRaymix`. Do not put it inside the Arx Fatalis folder.
-3. Run `ArxRaymix.exe` (or `arx.exe`).
+2. Run `ArxRaymix-vX.Y-setup.exe` (no administrator prompt; Start menu shortcuts and an uninstaller), **or** extract the zip to its own folder, for example `C:\Games\ArxRaymix`. Never inside the Arx Fatalis folder.
+3. Start *Arx Raymix* from the Start menu, or run `ArxRaymix.exe` (or `arx.exe`).
 
 Step-by-step instructions for Steam and GOG, and what to do if the game is not found, are in [docs/INSTALL.md](docs/INSTALL.md).
 
