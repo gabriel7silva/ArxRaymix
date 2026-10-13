@@ -376,8 +376,15 @@ void ShowFPS() {
 	oss << std::fixed << std::setprecision(2) << g_fpsCounter.FPS << " FPS";
 	hFontDebug->draw(Vec2i(10, 10), oss.str(), Color::white);
 	if(GRenderer && hFontDebug) {
-		hFontDebug->draw(Vec2i(10, 10 + hFontDebug->getLineHeight() + 2),
-		                 dlssStatusLine(false), Color::white);
+		const int lineStep = hFontDebug->getLineHeight() + 2;
+		hFontDebug->draw(Vec2i(10, 10 + lineStep), dlssStatusLine(false), Color::white);
+		const Renderer::GpuTimings gpu = GRenderer->gpuTimings();
+		if(gpu.valid) {
+			std::ostringstream line;
+			line << std::fixed << std::setprecision(2) << "GPU " << gpu.frameMs << " ms"
+			     << "  ray " << gpu.rayMs << "  upscale " << gpu.upscaleMs;
+			hFontDebug->draw(Vec2i(10, 10 + 2 * lineStep), line.str(), Color::white);
+		}
 	}
 }
 

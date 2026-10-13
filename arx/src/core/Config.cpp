@@ -27,6 +27,8 @@
 
 #include <boost/preprocessor/stringize.hpp>
 
+#include "core/DxrPreset.h"
+
 #include "input/Input.h"
 #include "input/Keyboard.h"
 #include "input/Mouse.h"
@@ -703,6 +705,7 @@ bool Config::init(const fs::path & file) {
 		video.dxrPreset = 4;
 	} else {
 		video.dxrPreset = 0;
+		video.dxrFirstRun = true;
 	}
 	
 	// Get interface settings
@@ -779,67 +782,31 @@ bool Config::init(const fs::path & file) {
 }
 
 void Config::applyDxrPreset(int preset) {
-	video.dxrPreset = glm::clamp(preset, 0, 4);
-	if(video.dxrPreset == 4) {
+	video.dxrPreset = glm::clamp(preset, kDxrPresetOff, kDxrPresetCustom);
+	if(video.dxrPreset == kDxrPresetCustom) {
 		return;
 	}
-	if(video.dxrPreset == 0) {
-		video.rtao = 0;
-		video.dxrShadows = 0;
-		video.dxrGi = 0;
-		video.dxrReflections = 0;
-		video.dxrTransReflections = 0;
-		video.dxrShadowDenoise = 0;
-		video.dxrGiDenoise = 0;
-		video.dxrContact = 0;
-		video.dxrDebris = 0;
-		video.dxrTransparency = 0;
-		video.dxrRr = 0;
-		return;
-	}
-	if(video.dxrPreset == 1) {
-		video.rtao = 1;
-		video.dxrShadows = 1;
-		video.dxrGi = 1;
-		video.dxrReflections = 0;
-		video.dxrTransReflections = 1;
-		video.dxrShadowDenoise = 0;
-		video.dxrGiDenoise = 0;
-		video.dxrContact = 0;
-		video.dxrDebris = 0;
-		video.dxrTransparency = 0;
-		video.dxrRr = 0;
-		return;
-	}
-	if(video.dxrPreset == 2) {
-		video.rtao = 2;
-		video.dxrShadows = 2;
-		video.dxrGi = 2;
-		video.dxrReflections = 1;
-		video.dxrTransReflections = 2;
-		video.dxrShadowDenoise = 1;
-		video.dxrGiDenoise = 1;
-		video.dxrContact = 1;
-		video.dxrDebris = 0;
-		video.dxrTransparency = 0;
-		video.dxrRr = 0;
-		return;
-	}
-	video.rtao = 3;
-	video.dxrShadows = 3;
-	video.dxrGi = 3;
-	video.dxrReflections = 2;
-	video.dxrTransReflections = 3;
-	video.dxrShadowDenoise = 1;
-	video.dxrGiDenoise = 2;
-	video.dxrContact = 1;
-	video.dxrDebris = 1;
-	video.dxrTransparency = 0;
-	video.dxrRr = 0;
+	const DxrPresetValues & v = kDxrPresets[video.dxrPreset];
+	video.rtao = v.rtao;
+	video.dxrShadows = v.dxrShadows;
+	video.dxrGi = v.dxrGi;
+	video.dxrReflections = v.dxrReflections;
+	video.dxrTransReflections = v.dxrTransReflections;
+	video.dxrShadowDenoise = v.dxrShadowDenoise;
+	video.dxrGiDenoise = v.dxrGiDenoise;
+	video.dxrContact = v.dxrContact;
+	video.dxrDebris = v.dxrDebris;
+	video.dxrTransparency = v.dxrTransparency;
+	video.dxrRr = v.dxrRr;
 }
 
 bool Config::dxrEffectsEnabled() const {
-	return video.rtao > 0 || video.dxrShadows > 0 || video.dxrGi > 0
-	       || video.dxrReflections > 0 || video.dxrTransReflections > 0
-	       || video.dxrContact > 0;
+	DxrPresetValues v {};
+	v.rtao = video.rtao;
+	v.dxrShadows = video.dxrShadows;
+	v.dxrGi = video.dxrGi;
+	v.dxrReflections = video.dxrReflections;
+	v.dxrTransReflections = video.dxrTransReflections;
+	v.dxrContact = video.dxrContact;
+	return dxrValuesEnabled(v);
 }

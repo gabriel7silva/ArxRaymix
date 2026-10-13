@@ -12,6 +12,8 @@ These scripts start a built `arx.exe` against your own Arx Fatalis install. They
 | `fetch-streamline.ps1` | Fetch the NVIDIA Streamline SDK once into `arx/third_party/streamline/` |
 | `Check-MaintenanceDocs.ps1` | Fail if a grep in `docs/maintenance/` matches nothing |
 | `import-speech-portugues.ps1` | Copy PT-BR speech WAVs into `arx/data/core/speech/portugues/` |
+| `check-shaders.py` | Compile the HLSL embedded in the D3D12 / DXR sources with the Windows SDK's DXC / FXC (CI runs it) |
+| `package.ps1` | Zip a built `arx.exe`, its DLLs and `arx/data/core` into `dist\ArxRaymix-<version>.zip` for players |
 | `sweep-plausible-levels.ps1` | Load each level for a few seconds (`--benchmark`) and score Pdxr-5 / F5 from the log; it reports F4 as undecidable |
 
 ```powershell
@@ -31,6 +33,26 @@ slow on a given machine.
 
 `ARX_DXR_NO_TEXREFL=1` stops off-screen reflected hits from using their own texture and goes
 back to the light-only approximation.
+
+`ARX_DXR_NO_REFIT=1` rebuilds the entity and player acceleration structures from scratch every
+frame instead of refitting them; use it to rule refitting out when a moving shadow looks wrong.
+
+`ARX_DXR_STATIC_NOISE=1` keeps the penumbra / AO / GI noise fixed in screen space instead of
+stepping it every frame under the temporal history.
+
+`ARX_SL_NO_VERIFY=1` loads an `sl.interposer.dll` that is not signed by NVIDIA (a development
+build of the Streamline SDK). Release DLLs are signed and need nothing.
+
+Package for players (needs a RelWithDebInfo build; run `fetch-streamline.ps1` first to include
+DLSS / Frame Generation):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.4
+```
+
+The zip holds `arx.exe`, the DLLs CMake staged next to it, `data\` (from `arx/data/core`), the
+licence, a `README.txt` and `Arx Raymix - DirectX 9.bat`. It never holds game data, PDBs (unless
+`-IncludePdb`), `data.dirs` or the imported PT-BR speech WAVs, which are game audio.
 
 Plausible load sweep (loads levels, does not play them):
 

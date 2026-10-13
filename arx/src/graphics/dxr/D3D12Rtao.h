@@ -69,14 +69,21 @@ public:
 	void beginWorldFrame();
 	void markReflectOnlyStart();
 	void clearRooms();
+	//! TriAttr flag: the face's texture is a cutout (alpha-tested or colour-keyed). Rays run the
+	//! any-hit shader on it and pass through where the texture's alpha is below one half.
+	static constexpr std::uint32_t kTriCutout = 1u;
 	//! texIndex is the caller's descriptor index for the face's texture, 0 for the white
-	//! fallback. It is stored per triangle so a hit can find its material.
+	//! fallback. It is stored per triangle so a hit can find its material. triFlags is a set of
+	//! kTri* bits stored with it.
 	void addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	             const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
+	             const unsigned short * indices, size_t nindices, unsigned texIndex = 0,
+	             std::uint32_t triFlags = 0);
 	void addWorld(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
+	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0,
+	              std::uint32_t triFlags = 0);
 	void addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0);
+	              const unsigned short * indices, size_t nindices, unsigned texIndex = 0,
+	              std::uint32_t triFlags = 0);
 	void addWater(const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	void addMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
 	              const unsigned short * indices, size_t nindices);
@@ -153,7 +160,7 @@ private:
 	struct TriAttr {
 		float u0, v0, u1, v1, u2, v2;
 		std::uint32_t tex;
-		std::uint32_t pad;
+		std::uint32_t flags; //!< kTri* bits
 	};
 	
 	template <class T>
@@ -201,7 +208,8 @@ private:
 	//! the hit shader finds an attribute by PrimitiveIndex.
 	void addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, size_t cap,
 	             Renderer::Primitive primitive, const Vertex * vertices, size_t nvertices,
-	             const unsigned short * indices, size_t nindices, unsigned texIndex);
+	             const unsigned short * indices, size_t nindices, unsigned texIndex,
+	             std::uint32_t triFlags);
 	void addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c);
 	
 	ID3D12Device * m_device = nullptr;
@@ -243,6 +251,22 @@ private:
 	ComPtr<ID3D12Resource> m_viewCbuf;
 	ComPtr<ID3D12Resource> m_blas;
 	ComPtr<ID3D12Resource> m_playerBlas;
+	//! Vertex count the entity / player BLAS was last built with (0 = must rebuild), and how
+	//! many refits it has taken since. A refit keeps the tree of the last full build, so it is
+	//! only valid for the same triangle count and loses quality as the meshes move away from it.
+	size_t m_blasVerts = 0;
+	//! Whether the BLAS was last built with opaque geometry. A refit must keep the geometry flags
+	//! of the build it updates, so a change forces a rebuild.
+	bool m_blasOpaque = true;
+	bool m_playerBlasOpaque = true;
+	//! A cutout face was added since the last clear. Geometry holding one is built non-opaque so
+	//! the any-hit shader runs on it; without one it stays opaque and pays nothing.
+	bool m_roomHasCutout = false;
+	bool m_dynHasCutout = false;
+	size_t m_playerBlasVerts = 0;
+	int m_blasRefits = 0;
+	unsigned m_noiseFrame = 0;
+	int m_playerBlasRefits = 0;
 	ComPtr<ID3D12Resource> m_roomBlas;
 	ComPtr<ID3D12Resource> m_waterBlas;
 	ComPtr<ID3D12Resource> m_tlas;

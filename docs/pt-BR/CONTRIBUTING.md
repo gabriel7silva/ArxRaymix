@@ -36,12 +36,24 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 
 `-DataDir '<caminho do Arx Fatalis>'` se a deteção falhar. Log: `runtime/user/arx.log`. Saia pelo menu.
 
+## Testes
+
+Os testes unitários ficam em `arx/tests/` (CppUnit). O CppUnit não vem em `libs/`, então o build do Windows os deixa desligados; o CI compila e roda os testes no Linux em todo pull request, ao lado de um build MSVC do jogo ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)). Para rodar no Linux:
+
+```bash
+cmake -S arx -B build-tests -G Ninja -DBUILD_TESTS=ON -DICON_TYPE=none
+cmake --build build-tests --target arxtest
+./build-tests/arxtest
+```
+
+Lógica que dá para testar sem GPU vai num header próprio, para o teste não puxar o renderer: `core/DxrPreset.h`, `core/LocalisationEncoding.h`, `graphics/PrimitiveIndices.h`, `graphics/dxr/DxrJitter.h`.
+
 ## Depuração
 
 - **Um sintoma de cada vez.** Prove no `runtime/user/arx.log` antes de empilhar hipóteses.
 - **`arx.exe --list-dirs`** mostra qual diretório de dados está em uso.
 - Não faça dual-boot de OpenGL no Windows a menos que essa seja a pergunta.
-- Não acrescente root constants de DXR (`kRootConstants` já está no limite de 64 DWORD). O `TMax` de distância fica no CBV `ViewParams`.
+- Valores novos do DXR vão nos constant buffers `Params` (`b0`) ou `ViewParams` (`b1`), com a struct C++ e o `cbuffer` HLSL andando juntos ([INV-01](../maintenance/INVARIANTS.md#inv-01)). Os dois são root CBVs, então o root signature tem folga; `Params` tem 256 bytes fixos (`kParamsBytes`).
 
 ## Privacidade
 

@@ -40,12 +40,24 @@ powershell -ExecutionPolicy Bypass -File scripts/run-d3d9.ps1
 
 Pass `-DataDir '<path to Arx Fatalis>'` if Steam / GOG detection cannot see the install. Logs: `runtime/user/arx.log`. Quit from the menu.
 
+## Tests
+
+Unit tests live in `arx/tests/` (CppUnit). CppUnit is not vendored, so the Windows build leaves them off; CI builds and runs them on Linux for every pull request, next to an MSVC build of the game ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)). To run them locally on Linux:
+
+```bash
+cmake -S arx -B build-tests -G Ninja -DBUILD_TESTS=ON -DICON_TYPE=none
+cmake --build build-tests --target arxtest
+./build-tests/arxtest
+```
+
+Logic that can be tested without a GPU goes in a header of its own so the test does not drag in the renderer: `core/DxrPreset.h`, `core/LocalisationEncoding.h`, `graphics/PrimitiveIndices.h`, `graphics/dxr/DxrJitter.h`.
+
 ## Debugging
 
 - **One symptom at a time.** Prove it in `runtime/user/arx.log` before stacking hypotheses.
 - **`arx.exe --list-dirs`** settles which data directory is in use.
 - Do not dual-boot OpenGL on Windows unless that is the question.
-- Do not add DXR root constants (`kRootConstants` is already at the 64-DWORD cap). Distance `TMax` lives in the `ViewParams` CBV.
+- New DXR values go in the `Params` (`b0`) or `ViewParams` (`b1`) constant buffers, keeping the C++ struct and the HLSL `cbuffer` in step ([INV-01](maintenance/INVARIANTS.md#inv-01)). Both are root CBVs, so the root signature has room; `Params` is a fixed 256 bytes (`kParamsBytes`).
 
 ## Privacy
 

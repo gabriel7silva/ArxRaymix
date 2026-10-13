@@ -91,7 +91,7 @@ These are not style preferences. Each one has a reason that will bite.
   ```
   grep -n "ARX_D3D12_SOURCES" arx/CMakeLists.txt
   ```
-- **The project builds without run-time type information.** `arx/CMakeLists.txt` compiles with `-fno-rtti` and defines `BOOST_NO_RTTI`. This is why `D3D12Rtao` carries its own small `ComPtr` instead of using the Windows Runtime one: that header requires facilities this build does not have.
+- **The project builds without run-time type information.** `arx/cmake/BuildType.cmake` adds `-fno-rtti` and `arx/CMakeLists.txt` defines `BOOST_NO_RTTI`. This is why `D3D12Rtao` carries its own small `ComPtr` instead of using the Windows Runtime one: that header requires facilities this build does not have.
 - **One window, one device, one renderer per process.** There is no path that runs two backends at once, and adding one to compare output is not a debugging technique available here.
 
 ## Dead code

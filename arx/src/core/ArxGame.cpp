@@ -61,6 +61,7 @@ ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "core/Benchmark.h"
 #include "core/Config.h"
+#include "core/DxrPreset.h"
 #include "core/Core.h"
 #include "core/FpsCounter.h"
 #include "core/GameTime.h"
@@ -1130,6 +1131,8 @@ void ArxGame::doFrame() {
 	
 	ARX_PROFILE_FUNC();
 	
+	GRenderer->beginSimulation();
+	
 	updateTime();
 
 	updateInput();
@@ -2049,6 +2052,21 @@ void ArxGame::onRendererInit(Renderer & renderer) {
 	renderer.RestoreAllTextures();
 
 	ARX_PLAYER_Restore_Skin();
+	
+	if(config.video.dxrFirstRun) {
+		// First run on this cfg.ini: ray tracing Medium and DLSS Quality where the GPU has them,
+		// instead of everything Off until the player finds Options -> Ray tracing.
+		config.video.dxrFirstRun = false;
+		if(renderer.supportsRayTracing()) {
+			config.applyDxrPreset(kDxrPresetMedium);
+			if(renderer.supportsDlss() && config.video.dxrDlss <= 0) {
+				config.video.dxrDlss = 2; // Quality
+			}
+			LogInfo << "First run: ray tracing preset Medium"
+			        << (config.video.dxrDlss > 0 ? ", DLSS Quality" : "");
+			config.save();
+		}
+	}
 	
 	// Fog
 	float fogEnd = 0.48f;

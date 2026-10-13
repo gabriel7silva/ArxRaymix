@@ -1,6 +1,8 @@
 # Build trees
 /build/
 /build-*/
+# scripts/package.ps1 output
+/dist/
 
 # In-tree CMake configuration, for anyone who configures outside build/
 CMakeCache.txt
@@ -71,3 +73,4 @@ Screenshots/
 Thumbs.db
 desktop.ini
 .DS_Store
+__pycache__/

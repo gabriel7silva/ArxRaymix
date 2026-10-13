@@ -28,6 +28,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 
 #include "core/Config.h"
+#include "core/LocalisationEncoding.h"
 
 #include "io/resource/ResourcePath.h"
 #include "io/resource/PakReader.h"
@@ -122,6 +123,12 @@ void autodetectTextLanguage() {
 	}
 	LogInfo << "Multiple text languages available: " << list.str();
 	
+	// Arx Raymix ships English by default; other languages are picked in the options menu
+	if(Languages::iterator it = languages.find("english"); it != languages.end()) {
+		config.interface.language = it->first;
+		return;
+	}
+	
 	config.interface.language = selectPreferredLanguage(languages);
 	if(!config.interface.language.empty()) {
 		return;
@@ -181,6 +188,12 @@ void autodetectAudioLanguage() {
 	}
 	LogInfo << "Multiple audio languages available: " << list.str();
 	
+	// English by default, like the text language
+	if(Languages::iterator it = languages.find("english"); it != languages.end()) {
+		config.audio.language = it->first;
+		return;
+	}
+	
 	config.audio.language = selectPreferredLanguage(languages);
 	if(!config.audio.language.empty()) {
 		return;
@@ -234,14 +247,6 @@ void loadLocalisation(PakDirectory * dir, std::string_view name) {
 		LogWarning << "Error parsing localisation file localisation/" << name;
 	}
 	
-}
-
-bool looksLikeUtf16Le(std::string_view data) {
-	if(data.size() >= 2 && u8(data[0]) == 0xff && u8(data[1]) == 0xfe) {
-		return true;
-	}
-	// Original loc.pak files are UTF-16 LE without relying on a BOM: '[' → 5B 00
-	return data.size() >= 2 && data[1] == '\0';
 }
 
 bool loadUtextLanguage(std::string_view language, bool merge) {

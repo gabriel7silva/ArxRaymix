@@ -130,6 +130,7 @@ public:
 	void showFrame() override;
 	void setPresentVSync(int vsync) override { m_vsync = vsync; }
 	void beginSceneUpscale() override;
+	void beginSimulation() override;
 	void applyWorldRayEffects() override;
 	void addRayWaterTriangle(const Vec3f & a, const Vec3f & b, const Vec3f & c) override;
 	[[nodiscard]] bool supportsRayTracing() const override;
@@ -138,6 +139,7 @@ public:
 	[[nodiscard]] bool supportsDlssG() const override;
 	[[nodiscard]] Vec2i queryDlssInternalSize(int cfgMode, int displayW, int displayH) const override;
 	[[nodiscard]] DlssDebugState dlssDebugState() const override;
+	[[nodiscard]] GpuTimings gpuTimings() const override;
 	
 	void drawTextured(Primitive primitive, const TexturedVertex * vertices, size_t count);
 	void drawWorldVertices(Primitive primitive, const SMY_VERTEX * vertices, size_t count);
@@ -167,6 +169,10 @@ private:
 	bool waitGpu();
 	bool ensureCommandList();
 	bool beginRecording();
+	void createTimestamps();
+	void markTimestamp(unsigned mark);
+	void resolveTimestamps();
+	void readTimestamps();
 	bool bindDrawState(Primitive primitive);
 	void drawGpuVerts(Primitive primitive, const void * verts, size_t stride, size_t count);
 	void restoreRasterBind();

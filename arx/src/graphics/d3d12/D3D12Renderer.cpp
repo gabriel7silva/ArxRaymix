@@ -32,6 +32,7 @@
 #include "graphics/Color.h"
 #include "graphics/GraphicsTypes.h"
 #include "graphics/Math.h"
+#include "graphics/PrimitiveIndices.h"
 #include "graphics/Vertex.h"
 #include "graphics/data/TextureContainer.h"
 #include "graphics/dxr/D3D12Rtao.h"
@@ -90,6 +91,23 @@ public:
 namespace {
 
 constexpr UINT kFrameCount = 2;
+//! GPU timestamps written each frame, read back once that frame's fence has passed.
+enum TimestampMark : unsigned {
+	kTsFrameStart,
+	kTsFrameEnd,
+	kTsRayStart,
+	kTsRayEnd,
+	kTsUpscaleStart,
+	kTsUpscaleEnd,
+	kTsMarks
+};
+
+//! Named region for PIX / Nsight captures. Metadata 0 tells PIX the payload is a UTF-16 string;
+//! outside a capture the call costs nothing. Close it with EndEvent on the same list.
+template <size_t N>
+void beginGpuEvent(ID3D12GraphicsCommandList * list, const wchar_t (&name)[N]) {
+	list->BeginEvent(0, name, UINT(N * sizeof(wchar_t)));
+}
 // Game textures rest here rather than in PIXEL_SHADER_RESOURCE alone. A ray dispatch reads
 // through the non-pixel stage, and transitioning thousands of textures each frame to hand them
 // to the ray pass is not an option, so they carry both bits for their whole life. The two
@@ -121,6 +139,12 @@ unsigned srvOf(const TextureContainer * tc) {
 		return 0u;
 	}
 	return static_cast<const D3D12Texture *>(tc->m_pTexture)->srvIndex();
+}
+
+//! Cutout faces only reach the collectors when Transparency is Low or High; the flag makes the
+//! ray pass alpha-test them instead of treating the quad as solid.
+std::uint32_t cutoutFlag(const TextureContainer * tc) {
+	return (tc && tc->m_pTexture && tc->m_pTexture->hasAlpha()) ? D3D12Rtao::kTriCutout : 0u;
 }
 
 constexpr D3D12_RESOURCE_STATES kTextureReadState =
@@ -582,9 +606,9 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 			if(ep.type & POLY_WATER) {
 				continue; // water comes from RenderWater (visible surface)
 			}
-			// Cutout decals (roots, webs, color-keyed grates) are opaque quads to
-			// the BLAS since rays never see the texture; they self-shadowed to black
-			// and cast solid rectangles. High transparency includes them as casters.
+			// Cutout decals (roots, webs, color-keyed grates). Transparency Off leaves them
+			// out; Low / High include them flagged as cutouts, so the any-hit shader tests
+			// their alpha and they cast their pattern rather than a solid rectangle.
 			if(!includeAlpha && ep.tex && ep.tex->m_pTexture && ep.tex->m_pTexture->hasAlpha()) {
 				alphaSkipped++;
 				continue;
@@ -596,13 +620,14 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 			// the raster path applies it.
 			const Vec2f uvScale = ep.tex ? ep.tex->uv : Vec2f(1.f);
 			const unsigned roomTex = srvOf(ep.tex);
+			const std::uint32_t roomFlags = cutoutFlag(ep.tex);
 			verts[0].p = ep.v[0].p;
 			verts[1].p = ep.v[1].p;
 			verts[2].p = ep.v[2].p;
 			verts[0].uv = ep.v[0].uv * uvScale;
 			verts[1].uv = ep.v[1].uv * uvScale;
 			verts[2].uv = ep.v[2].uv * uvScale;
-			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex);
+			rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex, roomFlags);
 			if(collectMetal && (ep.type & POLY_METAL)) {
 				rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 			}
@@ -613,7 +638,7 @@ void collectRoomCasters(D3D12Rtao * rtao, float casterDist,
 				verts[0].uv = ep.v[3].uv * uvScale;
 				verts[1].uv = ep.v[2].uv * uvScale;
 				verts[2].uv = ep.v[1].uv * uvScale;
-				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex);
+				rtao->addRoom(Renderer::TriangleList, verts, 3, nullptr, 0, roomTex, roomFlags);
 				if(collectMetal && (ep.type & POLY_METAL)) {
 					rtao->addRoomMetal(Renderer::TriangleList, verts, 3, nullptr, 0);
 				}
@@ -671,7 +696,7 @@ void addObjectFaces(D3D12Rtao * rtao, const EERIE_3DOBJ * obj, bool includeAlpha
 		verts[1].p = p[1];
 		verts[2].p = p[2];
 		setFaceUv(verts, face, faceTc);
-		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
+		rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc), cutoutFlag(faceTc));
 		if(collectMetal) {
 			const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
 				? obj->materials[face.material] : nullptr;
@@ -740,7 +765,7 @@ void addLinkedCasters(D3D12Rtao * rtao, const Entity & entity, bool includeAlpha
 			verts[1].p = p[1];
 			verts[2].p = p[2];
 			setFaceUv(verts, face, faceTc);
-			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc), cutoutFlag(faceTc));
 		}
 	}
 }
@@ -855,7 +880,7 @@ void collectEntityCasters(D3D12Rtao * rtao, float casterDist,
 				mix(v.y);
 				mix(v.z);
 			}
-			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc));
+			rtao->addWorld(Renderer::TriangleList, verts, 3, nullptr, 0, srvOf(faceTc), cutoutFlag(faceTc));
 			if(collectMetal) {
 				const TextureContainer * tc = (face.material && size_t(face.material) < obj->materials.size())
 					? obj->materials[face.material] : nullptr;
@@ -1105,51 +1130,6 @@ bool isTrianglePrimitive(Renderer::Primitive primitive) {
 	return primitive == Renderer::TriangleList
 	       || primitive == Renderer::TriangleStrip
 	       || primitive == Renderer::TriangleFan;
-}
-
-template <typename Emit>
-void forEachTriangleIndices(Renderer::Primitive primitive, size_t n, Emit && emit) {
-	switch(primitive) {
-		case Renderer::TriangleList:
-			for(size_t i = 0; i + 2 < n; i += 3) {
-				emit(i, i + 1, i + 2);
-			}
-			break;
-		case Renderer::TriangleStrip:
-			for(size_t i = 0; i + 2 < n; ++i) {
-				if(i & 1) {
-					emit(i + 1, i, i + 2);
-				} else {
-					emit(i, i + 1, i + 2);
-				}
-			}
-			break;
-		case Renderer::TriangleFan:
-			for(size_t i = 1; i + 1 < n; ++i) {
-				emit(size_t(0), i, i + 1);
-			}
-			break;
-		default:
-			break;
-	}
-}
-
-bool resolveIndex(const unsigned short * indices, size_t nindices, size_t nverts, size_t i, size_t & out) {
-	if(indices) {
-		if(i >= nindices) {
-			return false;
-		}
-		if(indices[i] >= nverts) {
-			return false;
-		}
-		out = indices[i];
-		return true;
-	}
-	if(i >= nverts) {
-		return false;
-	}
-	out = i;
-	return true;
 }
 
 GpuVert toGpu(float x, float y, float z, float rhw, u32 color, u32 specular, float u, float v) {
@@ -1681,6 +1661,14 @@ struct D3D12Renderer::Impl {
 	std::unordered_map<u32, DxPtr<ID3D12PipelineState>> psos;
 	DxPtr<ID3DBlob> vs;
 	DxPtr<ID3DBlob> ps;
+	//! Timestamp queries, kTsMarks per frame slot. tsWritten holds the marks the slot's last frame
+	//! wrote and resolved; marks it did not reach are never resolved (that is a debug-layer error).
+	DxPtr<ID3D12QueryHeap> tsHeap;
+	DxPtr<ID3D12Resource> tsReadback;
+	double tsMsPerTick = 0.0;
+	unsigned tsWritten[kFrameCount] {};
+	bool tsFrameOpen = false;
+	Renderer::GpuTimings gpuTimes;
 };
 
 ID3D12Device * D3D12Renderer::device() const {
@@ -2732,6 +2720,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	if(FAILED(m->device->CreateCommandQueue(&qd, IID_PPV_ARGS(m->queue.put())))) {
 		return false;
 	}
+	createTimestamps();
 	
 	DXGI_SWAP_CHAIN_DESC1 sd {};
 	sd.Width = UINT(width);
@@ -3054,6 +3043,13 @@ bool D3D12Renderer::beginRecording() {
 	}
 	if(!m->backbuffers[m->frame]) {
 		return false;
+	}
+	if(!m->tsFrameOpen) {
+		// ensureCommandList waited for this slot's fence, so its resolved timestamps are final.
+		readTimestamps();
+		m->tsWritten[m->frame] = 0;
+		m->tsFrameOpen = true;
+		markTimestamp(kTsFrameStart);
 	}
 	if(m->inPresentState) {
 		// FLIP_DISCARD leaves buffers in COMMON after Present (and at creation).
@@ -3606,6 +3602,99 @@ Renderer::DlssDebugState D3D12Renderer::dlssDebugState() const {
 	return s;
 }
 
+Renderer::GpuTimings D3D12Renderer::gpuTimings() const {
+	return m ? m->gpuTimes : GpuTimings();
+}
+
+//! Timestamp queries for the debug HUD (F11, first panel). Optional: on failure the HUD simply
+//! shows no GPU times.
+void D3D12Renderer::createTimestamps() {
+	UINT64 frequency = 0;
+	if(FAILED(m->queue->GetTimestampFrequency(&frequency)) || frequency == 0) {
+		return;
+	}
+	D3D12_QUERY_HEAP_DESC qh {};
+	qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+	qh.Count = kFrameCount * kTsMarks;
+	if(FAILED(m->device->CreateQueryHeap(&qh, IID_PPV_ARGS(m->tsHeap.put())))) {
+		return;
+	}
+	D3D12_RESOURCE_DESC rb {};
+	rb.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	rb.Width = UINT64(kFrameCount) * kTsMarks * sizeof(UINT64);
+	rb.Height = 1;
+	rb.DepthOrArraySize = 1;
+	rb.MipLevels = 1;
+	rb.SampleDesc.Count = 1;
+	rb.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	D3D12_HEAP_PROPERTIES heap {};
+	heap.Type = D3D12_HEAP_TYPE_READBACK;
+	if(FAILED(m->device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rb,
+	                                             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+	                                             IID_PPV_ARGS(m->tsReadback.put())))) {
+		m->tsHeap.reset();
+		return;
+	}
+	m->tsMsPerTick = 1000.0 / double(frequency);
+}
+
+void D3D12Renderer::markTimestamp(unsigned mark) {
+	if(!m->tsHeap || !m->recording || !m->tsFrameOpen) {
+		return;
+	}
+	m->list->EndQuery(m->tsHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, m->frame * kTsMarks + mark);
+	m->tsWritten[m->frame] |= 1u << mark;
+}
+
+void D3D12Renderer::resolveTimestamps() {
+	if(!m->tsHeap || !m->recording) {
+		return;
+	}
+	const unsigned written = m->tsWritten[m->frame];
+	for(unsigned mark = 0; mark < kTsMarks; ++mark) {
+		if(written & (1u << mark)) {
+			const UINT index = m->frame * kTsMarks + mark;
+			m->list->ResolveQueryData(m->tsHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, index, 1,
+			                          m->tsReadback.Get(), UINT64(index) * sizeof(UINT64));
+		}
+	}
+}
+
+void D3D12Renderer::readTimestamps() {
+	const unsigned written = m->tsWritten[m->frame];
+	const unsigned frameBits = (1u << kTsFrameStart) | (1u << kTsFrameEnd);
+	if(!m->tsReadback || (written & frameBits) != frameBits) {
+		return;
+	}
+	const UINT64 first = UINT64(m->frame) * kTsMarks * sizeof(UINT64);
+	D3D12_RANGE range { SIZE_T(first), SIZE_T(first + kTsMarks * sizeof(UINT64)) };
+	void * mapped = nullptr;
+	if(FAILED(m->tsReadback->Map(0, &range, &mapped)) || !mapped) {
+		return;
+	}
+	UINT64 ticks[kTsMarks];
+	std::memcpy(ticks, static_cast<const unsigned char *>(mapped) + first, sizeof(ticks));
+	D3D12_RANGE none { 0, 0 };
+	m->tsReadback->Unmap(0, &none);
+	auto span = [&](unsigned a, unsigned b) {
+		const unsigned bits = (1u << a) | (1u << b);
+		if((written & bits) != bits || ticks[b] < ticks[a]) {
+			return 0.f;
+		}
+		return float(double(ticks[b] - ticks[a]) * m->tsMsPerTick);
+	};
+	const float frame = span(kTsFrameStart, kTsFrameEnd);
+	const float ray = span(kTsRayStart, kTsRayEnd);
+	const float upscale = span(kTsUpscaleStart, kTsUpscaleEnd);
+	// About half a second of smoothing at 60 fps, so the numbers are readable.
+	Renderer::GpuTimings & t = m->gpuTimes;
+	const float k = t.valid ? 0.06f : 1.f;
+	t.frameMs += (frame - t.frameMs) * k;
+	t.rayMs += (ray - t.rayMs) * k;
+	t.upscaleMs += (upscale - t.upscaleMs) * k;
+	t.valid = true;
+}
+
 bool D3D12Renderer::usingSceneTargets() const {
 	return m && m->worldPass && m->sceneReady && m->sceneColor && m->sceneDepth;
 }
@@ -3795,6 +3884,12 @@ int D3D12Renderer::passHeight() const {
 	return (m && m->worldPass && m->sceneH > 0) ? m->sceneH : m_height;
 }
 
+void D3D12Renderer::beginSimulation() {
+	if(m_sl && config.video.dxrFg > 0 && m_sl->supportsFg()) {
+		m_sl->beginSimulation();
+	}
+}
+
 void D3D12Renderer::beginSceneUpscale() {
 	if(!m) {
 		return;
@@ -3813,7 +3908,7 @@ void D3D12Renderer::beginSceneUpscale() {
 	// Native + RR uses DLAA without a low-res scene RT. Do not apply Halton
 	// jitter unless DLSS is actually scaling — leftover jitter smeared native.
 	if(m_sl && config.video.dxrFg > 0 && m_sl->supportsFg()) {
-		m_sl->beginFrame();
+		m_sl->beginRenderSubmit();
 	}
 	if(!wantDlss) {
 		if((m->sceneColor || m->sceneDepth) && waitGpu()) {
@@ -3938,7 +4033,11 @@ void D3D12Renderer::applyStreamlineRr() {
 	frame.cameraNear = kNearW;
 	bool upscaled = false;
 	if(wantDlss || wantRr) {
+		markTimestamp(kTsUpscaleStart);
+		beginGpuEvent(m->list.Get(), L"DLSS / Ray Reconstruction");
 		upscaled = m_sl->evaluate(frame);
+		m->list->EndEvent();
+		markTimestamp(kTsUpscaleEnd);
 	}
 	if(haveScene && !upscaled) {
 		m_sl->blitSceneToOutput(frame);
@@ -4126,8 +4225,12 @@ void D3D12Renderer::applyWorldRayEffects() {
 		m->worldPass = false;
 		return;
 	}
+	markTimestamp(kTsRayStart);
+	beginGpuEvent(m->list.Get(), L"DXR ray effects");
 	m_rtao->apply(m->list.Get(), color, depth, m_view, m_proj,
 	              passWidth(), passHeight(), dxr, lights, nlights, std::uint64_t(rtv.ptr));
+	m->list->EndEvent();
+	markTimestamp(kTsRayEnd);
 	restoreRasterBind();
 	m_rtao->beginWorldFrame();
 	applyStreamlineRr();
@@ -4147,6 +4250,9 @@ void D3D12Renderer::showFrame() {
 		           D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON);
 		m->inPresentState = true;
 	}
+	markTimestamp(kTsFrameEnd);
+	resolveTimestamps();
+	m->tsFrameOpen = false;
 	if(FAILED(m->list->Close())) {
 		LogError << "D3D12: Close command list failed";
 		m->recording = false;

@@ -86,9 +86,14 @@ public:
 	//! must restoreRasterBind() after this returns.
 	bool evaluate(const Frame & frame);
 	
-	//! Reflex sleep + frame token. Call once at the start of a 3D level frame.
-	void beginFrame();
-	//! Menu toggle only. RT / DLSS / untagged Presents do not change FG.
+	//! Reflex sleep, frame token and the PCL simulation-start marker. Call once per frame,
+	//! before input and game logic, so Reflex can delay the sampling and not just the submit.
+	void beginSimulation();
+	//! PCL simulation-end + render-submit-start. Idempotent within a frame; onPresent() calls
+	//! it too so menu and cinematic frames still send a complete marker sequence.
+	void beginRenderSubmit();
+	//! Menu toggle only. RT / DLSS / untagged Presents do not turn FG off. Turning it on waits
+	//! for a tagged frame, so the first generated frame never lacks depth / motion vectors.
 	void syncFrameGen(bool enabled);
 	//! Copy HUD-less color, tag depth / mvec. Does not turn FG off on failure.
 	void prepareFrameGen(const Frame & frame);
@@ -153,6 +158,8 @@ private:
 	bool m_firstFrame = true;
 	bool m_loggedFg = false;
 	bool m_loggedUntagged = false;
+	bool m_simulationOpen = false;
+	bool m_renderSubmitOpen = false;
 	bool m_targetsFailed = false;
 	void * m_token = nullptr;
 	int m_inW = 0;

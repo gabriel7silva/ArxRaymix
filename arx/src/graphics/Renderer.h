@@ -391,6 +391,8 @@ public:
 	
 	//! Bind scene color/depth at the Streamline render size when DLSS / RR is on.
 	virtual void beginSceneUpscale() { }
+	//! Start of a frame, before input and game logic. Backends with a latency limiter wait here.
+	virtual void beginSimulation() { }
 	
 	struct DlssDebugState {
 		int displayW = 0;
@@ -410,6 +412,16 @@ public:
 	}
 	
 	[[nodiscard]] virtual DlssDebugState dlssDebugState() const { return { }; }
+	
+	//! GPU time of the last frames, from timestamp queries, smoothed over about half a second.
+	//! A pass that did not run reads 0. valid is false until the first frame has been read back.
+	struct GpuTimings {
+		bool valid = false;
+		float frameMs = 0.f;
+		float rayMs = 0.f;
+		float upscaleMs = 0.f;
+	};
+	[[nodiscard]] virtual GpuTimings gpuTimings() const { return { }; }
 	
 	//! DXR / RTAO after the world is rasterized and before HUD. Default is a no-op.
 	virtual void applyWorldRayEffects() { }

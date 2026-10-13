@@ -27,6 +27,8 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include "graphics/Math.h"
+#include "graphics/PrimitiveIndices.h"
+#include "graphics/dxr/DxrJitter.h"
 #include "math/Vector.h"
 #include "io/log/Logger.h"
 #include "platform/Platform.h"
@@ -65,6 +67,26 @@ static_assert(kHeapCount == D3D12Rtao::kHeapDescriptors,
 bool arxDxrNoTexReflect() {
 	static const bool off = [] {
 		const char * env = std::getenv("ARX_DXR_NO_TEXREFL");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	return off;
+}
+
+//! ARX_DXR_STATIC_NOISE=1 keeps the penumbra / AO / GI sample rotation fixed in screen space,
+//! as it was before it moved with the frame.
+bool arxDxrStaticNoise() {
+	static const bool on = [] {
+		const char * env = std::getenv("ARX_DXR_STATIC_NOISE");
+		return env && *env && std::atoi(env) != 0;
+	}();
+	return on;
+}
+
+//! ARX_DXR_NO_REFIT=1 rebuilds the entity and player BLAS from scratch every frame, as before
+//! refitting was added.
+bool arxDxrNoRefit() {
+	static const bool off = [] {
+		const char * env = std::getenv("ARX_DXR_NO_REFIT");
 		return env && *env && std::atoi(env) != 0;
 	}();
 	return off;
@@ -180,7 +202,7 @@ struct DxrConstants {
 	UINT debugView;
 	UINT specClosest;
 	UINT texReflect;
-	UINT dbgPad2;
+	UINT noiseFrame;
 };
 static_assert(sizeof(DxrConstants) == kParamsBytes, "Params (b0) must match the HLSL cbuffer");
 static_assert(sizeof(DxrConstants) % 16 == 0,
@@ -212,18 +234,11 @@ static_assert(offsetof(DxrViewCbuf, waterFill) == 80,
               "ViewParams must stay float4-aligned to match the HLSL cbuffer");
 static_assert(sizeof(DxrViewCbuf) == 96);
 
-glm::mat4x4 jitteredProjection(const glm::mat4x4 & proj, float jitterNdcX, float jitterNdcY) {
-	glm::mat4x4 jp = proj;
-	for(int i = 0; i < 4; ++i) {
-		jp[i][0] += jitterNdcX * jp[i][3];
-		jp[i][1] += jitterNdcY * jp[i][3];
-	}
-	return jp;
-}
-
 constexpr UINT kLightFloat4s = 3;
 static_assert(sizeof(D3D12Rtao::GpuLight) == kLightFloat4s * 16, "DXR light record is three float4s");
 
+// Split into several raw literals on blank lines: MSVC 19.44 (VS 2022) rejects a single literal
+// over 16 KB (C2026, "string too big"). Adjacent literals concatenate, so the HLSL is unchanged.
 const char * kRayLib = R"(
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<float4> g_verts : register(t1);
@@ -247,7 +262,7 @@ struct TriAttr {
 	float2 uv1;
 	float2 uv2;
 	uint tex;
-	uint pad;
+	uint flags; // bit 0: cutout texture, alpha-tested by AnyHit
 };
 StructuredBuffer<TriAttr> g_dynAttr : register(t15);
 StructuredBuffer<TriAttr> g_roomAttr : register(t16);
@@ -301,7 +316,8 @@ cbuffer Params : register(b0) {
 	uint specClosest;
 	// 1 = an off-screen hit reflects its own material. 0 = the light-only guess of E8.
 	uint texReflect;
-	uint dbgPad2;
+	// Frame index folded into the per-pixel rotation, 0 when there is no history to average it.
+	uint noiseFrame;
 };
 
 cbuffer ViewParams : register(b1) {
@@ -342,11 +358,14 @@ struct RayPayload {
 	uint wantMat;
 };
 
-// Interleaved gradient noise: a per-pixel rotation that is fixed in screen space
-// (no frame index), so the fixed sample sets dither spatially instead of banding.
-// The composite's bilateral and the temporal history average it out.
+// Interleaved gradient noise: a per-pixel rotation, so the fixed sample sets dither spatially
+// instead of banding. With history on, noiseFrame shifts the pattern every frame (Jimenez's
+// 5.588238 px step) over a short cycle, so the history averages several rotations per pixel
+// instead of keeping one: a static pattern read as a dither stuck to the screen as the camera
+// moved. noiseFrame is 0 without history, which is the old fixed pattern.
 float pixelRotation(uint2 p) {
-	return 6.2831853 * frac(52.9829189 * frac(0.06711056 * float(p.x) + 0.00583715 * float(p.y)));
+	float2 q = float2(p) + 5.588238 * float(noiseFrame);
+	return 6.2831853 * frac(52.9829189 * frac(0.06711056 * q.x + 0.00583715 * q.y));
 }
 
 float2 rotate2(float2 p, float rot) {
@@ -495,7 +514,8 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	}
 	return float4(hitCol, resolved);
 }
-
+)"
+R"(
 
 [shader("raygeneration")]
 void RayGen() {
@@ -781,7 +801,8 @@ void RayGen() {
 	g_ao[pixel] = aoOut;
 	g_shadow[pixel] = shOut;
 	g_depthOut[pixel] = z;
-
+)"
+R"(
 	float3 specRgb = float3(0, 0, 0);
 	float specF = 0.0;
 	// Metal reflects from the primary surface, so the shared history reprojection above is right
@@ -1046,6 +1067,38 @@ void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) 
 	p.albedo = g_textures[NonUniformResourceIndex(a.tex)]
 	           .SampleLevel(g_matSamp, uv, clamp(lod, 0.0, 12.0)).rgb;
 }
+)"
+R"(
+// Runs only on non-opaque geometry, i.e. a BLAS that holds at least one cutout face. Faces
+// without the cutout flag are accepted at once; a cutout face lets the ray through where its
+// texture is transparent, so a grate or a web casts its pattern instead of a solid quad.
+[shader("anyhit")]
+void AnyHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) {
+	uint inst = InstanceID();
+	if(inst == 2u) {
+		return;
+	}
+	uint prim = PrimitiveIndex();
+	TriAttr a;
+	if(inst == 0u) {
+		a = g_roomAttr[prim];
+	} else {
+		uint attrBase = (inst == 3u) ? (playerVertBase / 3u) : 0u;
+		a = g_dynAttr[attrBase + prim];
+	}
+	if((a.flags & 1u) == 0u) {
+		return;
+	}
+	float3 bc = float3(1.0 - attr.barycentrics.x - attr.barycentrics.y,
+	                   attr.barycentrics.x, attr.barycentrics.y);
+	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
+	// Mip 0: the raster alpha test reads the full-resolution texture too, and a coarser level
+	// would blur thin bars into half-transparent smears that flicker in and out.
+	float alpha = g_textures[NonUniformResourceIndex(a.tex)].SampleLevel(g_matSamp, uv, 0.0).a;
+	if(alpha < 0.5) {
+		IgnoreHit();
+	}
+}
 
 [shader("miss")]
 void Miss(inout RayPayload p) {
@@ -1243,48 +1296,6 @@ bool createBuffer(ID3D12Device * device, UINT64 bytes, D3D12_HEAP_TYPE heap,
 	                                                 state, nullptr, IID_PPV_ARGS(out)));
 }
 
-template <typename Emit>
-void forEachTriangleIndices(Renderer::Primitive primitive, size_t n, Emit && emit) {
-	switch(primitive) {
-		case Renderer::TriangleList:
-			for(size_t i = 0; i + 2 < n; i += 3) {
-				emit(i, i + 1, i + 2);
-			}
-			break;
-		case Renderer::TriangleStrip:
-			for(size_t i = 0; i + 2 < n; ++i) {
-				if(i & 1) {
-					emit(i + 1, i, i + 2);
-				} else {
-					emit(i, i + 1, i + 2);
-				}
-			}
-			break;
-		case Renderer::TriangleFan:
-			for(size_t i = 1; i + 1 < n; ++i) {
-				emit(size_t(0), i, i + 1);
-			}
-			break;
-		default:
-			break;
-	}
-}
-
-bool resolveIndex(const unsigned short * indices, size_t nindices, size_t nverts, size_t i, size_t & out) {
-	if(indices) {
-		if(i >= nindices || indices[i] >= nverts) {
-			return false;
-		}
-		out = indices[i];
-		return true;
-	}
-	if(i >= nverts) {
-		return false;
-	}
-	out = i;
-	return true;
-}
-
 struct DxcCache {
 	HMODULE compiler = nullptr;
 	HMODULE dxil = nullptr;
@@ -1425,6 +1436,8 @@ void D3D12Rtao::shutdown() {
 	m_scratch.reset();
 	m_tlas.reset();
 	m_blas.reset();
+	m_blasVerts = 0;
+	m_playerBlasVerts = 0;
 	m_attrUpload.reset();
 	m_attrDefault.reset();
 	m_roomAttrUpload.reset();
@@ -1716,19 +1729,21 @@ bool D3D12Rtao::createPipeline() {
 		return false;
 	}
 	
-	D3D12_EXPORT_DESC exports[3] {};
+	D3D12_EXPORT_DESC exports[4] {};
 	exports[0].Name = L"RayGen";
 	exports[1].Name = L"ClosestHit";
 	exports[2].Name = L"Miss";
+	exports[3].Name = L"AnyHit";
 	D3D12_DXIL_LIBRARY_DESC lib {};
 	lib.DXILLibrary.pShaderBytecode = m_dxil.data();
 	lib.DXILLibrary.BytecodeLength = m_dxil.size();
-	lib.NumExports = 3;
+	lib.NumExports = UINT(std::size(exports));
 	lib.pExports = exports;
 	D3D12_HIT_GROUP_DESC hit {};
 	hit.HitGroupExport = L"HitGroup";
 	hit.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
 	hit.ClosestHitShaderImport = L"ClosestHit";
+	hit.AnyHitShaderImport = L"AnyHit";
 	D3D12_RAYTRACING_SHADER_CONFIG sc {};
 	// t, n, inst, albedo, wantMat.
 	sc.MaxPayloadSizeInBytes = 36;
@@ -2317,6 +2332,7 @@ void D3D12Rtao::beginWorldFrame() {
 	m_waterPositions.clear();
 	m_metalPositions.clear();
 	m_triAttr.clear();
+	m_dynHasCutout = false;
 	m_reflectOnlyStart = SIZE_MAX;
 	m_masksRasterized = false;
 }
@@ -2329,6 +2345,7 @@ void D3D12Rtao::clearRooms() {
 	m_roomPositions.clear();
 	m_roomMetalPositions.clear();
 	m_roomTriAttr.clear();
+	m_roomHasCutout = false;
 	m_roomsDirty = true;
 }
 
@@ -2341,7 +2358,8 @@ template <typename Vertex>
 void D3D12Rtao::addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, size_t cap,
                         Renderer::Primitive primitive,
                         const Vertex * vertices, size_t nvertices,
-                        const unsigned short * indices, size_t nindices, unsigned texIndex) {
+                        const unsigned short * indices, size_t nindices, unsigned texIndex,
+                        std::uint32_t triFlags) {
 	if(!m_supported || !vertices || nvertices == 0) {
 		return;
 	}
@@ -2378,22 +2396,26 @@ void D3D12Rtao::addTris(std::vector<Pos> & dst, std::vector<TriAttr> * attr, siz
 			const Vec2f ua = diffuseUv(vertices[a]);
 			const Vec2f ub = diffuseUv(vertices[b]);
 			const Vec2f uc = diffuseUv(vertices[c]);
-			attr->push_back({ ua.x, ua.y, ub.x, ub.y, uc.x, uc.y, texIndex, 0u });
+			attr->push_back({ ua.x, ua.y, ub.x, ub.y, uc.x, uc.y, texIndex, triFlags });
 		}
 	});
 }
 
 void D3D12Rtao::addRoom(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                        const unsigned short * indices, size_t nindices, unsigned texIndex) {
+                        const unsigned short * indices, size_t nindices, unsigned texIndex,
+                        std::uint32_t triFlags) {
 	addTris(m_roomPositions, &m_roomTriAttr, kMaxRoomTriangles, primitive, vertices, nvertices,
-	        indices, nindices, texIndex);
+	        indices, nindices, texIndex, triFlags);
+	m_roomHasCutout = m_roomHasCutout || (triFlags & kTriCutout) != 0;
 	m_roomsDirty = true;
 }
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
-                         const unsigned short * indices, size_t nindices, unsigned texIndex) {
+                         const unsigned short * indices, size_t nindices, unsigned texIndex,
+                         std::uint32_t triFlags) {
 	addTris(m_positions, &m_triAttr, kMaxDynTriangles, primitive, vertices, nvertices,
-	        indices, nindices, texIndex);
+	        indices, nindices, texIndex, triFlags);
+	m_dynHasCutout = m_dynHasCutout || (triFlags & kTriCutout) != 0;
 }
 
 void D3D12Rtao::addPosTri(std::vector<Pos> & dst, size_t cap, const Vec3f & a, const Vec3f & b, const Vec3f & c) {
@@ -2424,27 +2446,29 @@ void D3D12Rtao::addMetal(Renderer::Primitive primitive, const SMY_VERTEX * verti
                          const unsigned short * indices, size_t nindices) {
 	// Mask geometry never enters a BLAS and has no material lookup.
 	addTris(m_metalPositions, nullptr, kMaxMetalTriangles, primitive, vertices, nvertices,
-	        indices, nindices, 0u);
+	        indices, nindices, 0u, 0u);
 }
 
 void D3D12Rtao::addRoomMetal(Renderer::Primitive primitive, const SMY_VERTEX * vertices, size_t nvertices,
                              const unsigned short * indices, size_t nindices) {
 	addTris(m_roomMetalPositions, nullptr, kMaxMetalTriangles, primitive, vertices, nvertices,
-	        indices, nindices, 0u);
+	        indices, nindices, 0u, 0u);
 }
 
 void D3D12Rtao::addWorld(Renderer::Primitive primitive, const SMY_VERTEX3 * vertices, size_t nvertices,
-                         const unsigned short * indices, size_t nindices, unsigned texIndex) {
+                         const unsigned short * indices, size_t nindices, unsigned texIndex,
+                         std::uint32_t triFlags) {
 	addTris(m_positions, &m_triAttr, kMaxDynTriangles, primitive, vertices, nvertices,
-	        indices, nindices, texIndex);
+	        indices, nindices, texIndex, triFlags);
+	m_dynHasCutout = m_dynHasCutout || (triFlags & kTriCutout) != 0;
 }
 
 template void D3D12Rtao::addTris<SMY_VERTEX>(std::vector<Pos> &, std::vector<TriAttr> *, size_t,
                                             Renderer::Primitive, const SMY_VERTEX *, size_t,
-                                            const unsigned short *, size_t, unsigned);
+                                            const unsigned short *, size_t, unsigned, std::uint32_t);
 template void D3D12Rtao::addTris<SMY_VERTEX3>(std::vector<Pos> &, std::vector<TriAttr> *, size_t,
                                             Renderer::Primitive, const SMY_VERTEX3 *, size_t,
-                                            const unsigned short *, size_t, unsigned);
+                                            const unsigned short *, size_t, unsigned, std::uint32_t);
 
 bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 	if(!m_device || (m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty())) {
@@ -2577,10 +2601,13 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	}
 	
 	auto fillGeo = [](D3D12_RAYTRACING_GEOMETRY_DESC & geo, ID3D12Resource * vb,
-	                  size_t vertOffset, size_t nverts) {
+	                  size_t vertOffset, size_t nverts, bool opaque) {
 		geo = {};
 		geo.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-		geo.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+		// Non-opaque only when a cutout face is in it: that is what makes the hardware call
+		// AnyHit, and the call costs on every candidate hit in the geometry.
+		geo.Flags = opaque ? D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE
+		                   : D3D12_RAYTRACING_GEOMETRY_FLAG_NONE;
 		geo.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
 		geo.Triangles.VertexCount = UINT(nverts);
 		geo.Triangles.VertexBuffer.StartAddress = vb->GetGPUVirtualAddress()
@@ -2595,6 +2622,15 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		? 0 : (m_positions.size() - m_reflectOnlyStart);
 	const bool havePlayer = playerVertCount >= 3 && bool(m_vertDefault);
 	const bool haveEntity = entityVertCount >= 3 && bool(m_vertDefault);
+	// Entities and the player change every frame but keep their triangle count while the same
+	// meshes are in range, so their BLAS is refit in place and only rebuilt when the count
+	// changes or every kMaxRefits frames, which bounds how far the tree drifts from the meshes.
+	constexpr int kMaxRefits = 30;
+	const bool refit = !arxDxrNoRefit();
+	const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS movingFlags = refit
+		? (D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD
+		   | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE)
+		: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
 	
 	D3D12_RAYTRACING_GEOMETRY_DESC dynGeo {};
 	D3D12_RAYTRACING_GEOMETRY_DESC playerGeo {};
@@ -2611,29 +2647,31 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	UINT64 waterBlasBytes = 0;
 	
 	if(haveEntity) {
-		fillGeo(dynGeo, m_vertDefault.Get(), 0, entityVertCount);
+		fillGeo(dynGeo, m_vertDefault.Get(), 0, entityVertCount, !m_dynHasCutout);
 		dynIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		dynIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+		dynIn.Flags = movingFlags;
 		dynIn.NumDescs = 1;
 		dynIn.pGeometryDescs = &dynGeo;
 		D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info {};
 		m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&dynIn, &info);
 		dynBlasBytes = info.ResultDataMaxSizeInBytes;
 		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
+		scratchBytes = (std::max)(scratchBytes, info.UpdateScratchDataSizeInBytes);
 	}
 	if(havePlayer) {
-		fillGeo(playerGeo, m_vertDefault.Get(), entityVertCount, playerVertCount);
+		fillGeo(playerGeo, m_vertDefault.Get(), entityVertCount, playerVertCount, !m_dynHasCutout);
 		playerIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-		playerIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
+		playerIn.Flags = movingFlags;
 		playerIn.NumDescs = 1;
 		playerIn.pGeometryDescs = &playerGeo;
 		D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO info {};
 		m_device5->GetRaytracingAccelerationStructurePrebuildInfo(&playerIn, &info);
 		playerBlasBytes = info.ResultDataMaxSizeInBytes;
 		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
+		scratchBytes = (std::max)(scratchBytes, info.UpdateScratchDataSizeInBytes);
 	}
 	if(haveRooms && m_roomsDirty) {
-		fillGeo(roomGeo, m_roomDefault.Get(), 0, m_roomPositions.size());
+		fillGeo(roomGeo, m_roomDefault.Get(), 0, m_roomPositions.size(), !m_roomHasCutout);
 		roomIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
 		roomIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
 		roomIn.NumDescs = 1;
@@ -2644,7 +2682,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		scratchBytes = (std::max)(scratchBytes, info.ScratchDataSizeInBytes);
 	}
 	if(haveWater) {
-		fillGeo(waterGeo, m_waterDefault.Get(), 0, m_waterPositions.size());
+		fillGeo(waterGeo, m_waterDefault.Get(), 0, m_waterPositions.size(), true);
 		waterIn.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
 		waterIn.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_BUILD;
 		waterIn.NumDescs = 1;
@@ -2674,6 +2712,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	}
 	if(haveEntity && (!m_blas || m_blas->GetDesc().Width < dynBlasBytes)) {
 		m_blas.reset();
+		m_blasVerts = 0;
 		if(!createBuffer(m_device, dynBlasBytes, D3D12_HEAP_TYPE_DEFAULT,
 		                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
 		                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, m_blas.put())) {
@@ -2683,6 +2722,7 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	}
 	if(havePlayer && (!m_playerBlas || m_playerBlas->GetDesc().Width < playerBlasBytes)) {
 		m_playerBlas.reset();
+		m_playerBlasVerts = 0;
 		if(!createBuffer(m_device, playerBlasBytes, D3D12_HEAP_TYPE_DEFAULT,
 		                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
 		                 D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, m_playerBlas.put())) {
@@ -2742,6 +2782,16 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC dynBlas {};
 		dynBlas.DestAccelerationStructureData = m_blas->GetGPUVirtualAddress();
 		dynBlas.Inputs = dynIn;
+		if(refit && m_blasVerts == entityVertCount && m_blasOpaque == !m_dynHasCutout
+		   && m_blasRefits < kMaxRefits) {
+			dynBlas.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+			dynBlas.SourceAccelerationStructureData = m_blas->GetGPUVirtualAddress();
+			m_blasRefits++;
+		} else {
+			m_blasRefits = 0;
+		}
+		m_blasVerts = refit ? entityVertCount : 0;
+		m_blasOpaque = !m_dynHasCutout;
 		dynBlas.ScratchAccelerationStructureData = m_scratch->GetGPUVirtualAddress();
 		list4->BuildRaytracingAccelerationStructure(&dynBlas, 0, nullptr);
 		uavBarrier(list, m_blas.Get());
@@ -2751,6 +2801,16 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 		D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC playerBlas {};
 		playerBlas.DestAccelerationStructureData = m_playerBlas->GetGPUVirtualAddress();
 		playerBlas.Inputs = playerIn;
+		if(refit && m_playerBlasVerts == playerVertCount && m_playerBlasOpaque == !m_dynHasCutout
+		   && m_playerBlasRefits < kMaxRefits) {
+			playerBlas.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+			playerBlas.SourceAccelerationStructureData = m_playerBlas->GetGPUVirtualAddress();
+			m_playerBlasRefits++;
+		} else {
+			m_playerBlasRefits = 0;
+		}
+		m_playerBlasVerts = refit ? playerVertCount : 0;
+		m_playerBlasOpaque = !m_dynHasCutout;
 		playerBlas.ScratchAccelerationStructureData = m_scratch->GetGPUVirtualAddress();
 		list4->BuildRaytracingAccelerationStructure(&playerBlas, 0, nullptr);
 		uavBarrier(list, m_playerBlas.Get());
@@ -3069,6 +3129,9 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	cb.debugView = arxDxrDebugView();
 	cb.specClosest = arxDxrFirstHit() ? 0u : 1u;
 	cb.texReflect = arxDxrNoTexReflect() ? 0u : 1u;
+	// Eight rotations: enough for the shadow / GI history (alpha 0.08-0.3) to average, short
+	// enough that a pixel never sits on one rotation long enough to read as a pattern.
+	cb.noiseFrame = (cb.temporalAlpha > 0.f && !arxDxrStaticNoise()) ? (++m_noiseFrame & 7u) : 0u;
 	const DistancePreset dist = distancePreset(settings.distance);
 
 	ID3D12DescriptorHeap * heaps[] = { m_heap };

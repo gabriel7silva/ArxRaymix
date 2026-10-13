@@ -17,6 +17,7 @@
 
 #include "graphics/Color.h"
 #include "graphics/Math.h"
+#include "graphics/PrimitiveIndices.h"
 #include "graphics/Vertex.h"
 #include "graphics/image/Image.h"
 #include "io/log/Logger.h"
@@ -366,53 +367,6 @@ bool insideTLFrustum(float x, float y, float z, float w, float xMin, float xMax,
 	return x >= xMin * w && x <= xMax * w
 	       && y >= yMin * w && y <= yMax * w
 	       && z >= 0.f && z <= w;
-}
-
-template <typename Emit>
-void forEachTriangleIndices(Renderer::Primitive primitive, size_t n, Emit && emit) {
-	switch(primitive) {
-		case Renderer::TriangleList:
-			for(size_t i = 0; i + 2 < n; i += 3) {
-				emit(i, i + 1, i + 2);
-			}
-			break;
-		case Renderer::TriangleStrip:
-			for(size_t i = 0; i + 2 < n; ++i) {
-				if(i & 1) {
-					emit(i + 1, i, i + 2);
-				} else {
-					emit(i, i + 1, i + 2);
-				}
-			}
-			break;
-		case Renderer::TriangleFan:
-			for(size_t i = 1; i + 1 < n; ++i) {
-				emit(size_t(0), i, i + 1);
-			}
-			break;
-		default:
-			break;
-	}
-}
-
-bool resolveIndex(const unsigned short * indices, size_t nindices, size_t nverts, size_t i,
-                  size_t & out) {
-	if(indices) {
-		if(i >= nindices) {
-			return false;
-		}
-		const unsigned short idx = indices[i];
-		if(idx >= nverts) {
-			return false;
-		}
-		out = idx;
-		return true;
-	}
-	if(i >= nverts) {
-		return false;
-	}
-	out = i;
-	return true;
 }
 
 void convertTL(const TexturedVertex * src, size_t count, const Rect & vp, const VertexFog & fog,

@@ -250,13 +250,13 @@ grep -n "SKY_Z" arx/src/graphics/dxr/D3D12Rtao.cpp
 grep -n "footprint\|aoBias\|shBias" arx/src/graphics/dxr/D3D12Rtao.cpp
 ```
 
-### <a id="inv-07"></a>INV-07 — Cutout geometry must not be a caster
+### <a id="inv-07"></a>INV-07 — Cutout geometry is a caster only with its cutout flag
 
-**Break it by** feeding alpha-tested polygons into the acceleration structure.
+**Break it by** feeding alpha-tested polygons into the acceleration structure without `kTriCutout`, or building the geometry that holds them `OPAQUE`.
 
 **Symptom** foliage, cobwebs and grates cast solid rectangular shadows and shade themselves black.
 
-**Mechanism** a ray cannot see a texture. To the acceleration structure a cutout quad is a solid quad, so the holes that make it read as foliage do not exist. Off excludes those polygons from the caster set, which trades their shadow for the absence of a wrong one. **Transparency Low or High** includes them as opaque quads anyway (still no any-hit shader); High also includes `POLY_TRANS`. See [RAYTRACING.md](RAYTRACING.md).
+**Mechanism** to the acceleration structure a cutout quad is a solid quad; only the `AnyHit` shader, sampling the face's texture, can put the holes back. **Transparency Off** excludes those polygons from the caster set, which trades their shadow for the absence of a wrong one. **Low or High** includes them with `kTriCutout` in their `TriAttr`; the geometry holding one is built non-opaque and `AnyHit` ignores the hit where alpha < 0.5. An `OPAQUE` geometry flag skips `AnyHit` entirely, which brings the solid quad back. High also includes `POLY_TRANS`. See [RAYTRACING.md](RAYTRACING.md).
 
 **Detect** the log reports how many were excluded per room rebuild:
 

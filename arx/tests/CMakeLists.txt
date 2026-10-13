@@ -8,8 +8,17 @@ set(arxtest_TESTCASES
 	
 	tests/TestMain.cpp
 	
+	tests/core/DxrPresetTest.h
+	tests/core/DxrPresetTest.cpp
+	
+	tests/core/LocalisationEncodingTest.h
+	tests/core/LocalisationEncodingTest.cpp
+	
 	tests/graphics/ColorTest.h
 	tests/graphics/ColorTest.cpp
+	
+	tests/graphics/PrimitiveIndicesTest.h
+	tests/graphics/PrimitiveIndicesTest.cpp
 	
 	tests/io/fs/FilePathTest.h
 	tests/io/fs/FilePathTest.cpp

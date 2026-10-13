@@ -33,7 +33,8 @@ endif()
 set(DATA_FILES "${CMAKE_CURRENT_LIST_DIR}/data")
 
 if(NOT DEFINED BUILD_TESTS)
-	# TODO Add CppUnit library
+	# CppUnit is not vendored in libs/. Pass -DBUILD_TESTS=ON with CppUnit on CMAKE_PREFIX_PATH
+	# to build arxtest here; CI runs the tests on Linux (.github/workflows/ci.yml).
 	set(BUILD_TESTS OFF)
 endif()
 

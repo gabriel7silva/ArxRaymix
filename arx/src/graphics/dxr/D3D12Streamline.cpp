@@ -4,11 +4,20 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+// sl_security.h (signature check of sl.interposer.dll) uses WINTRUST_SIGNATURE_SETTINGS, which the
+// SDK only declares for Windows 8 and later; the project defines _WIN32_WINNT=0x0502. This file is
+// built outside the unity blob, so raising it here, before any Windows header, stays local to it.
+#if defined(_WIN32) && defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0602
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
+#endif
+
 #include "graphics/dxr/D3D12Streamline.h"
 
 #if ARX_HAVE_D3D12
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <cwchar>
@@ -44,6 +53,8 @@
 #include <sl_dlss_g.h>
 #include <sl_reflex.h>
 #include <sl_pcl.h>
+// Header-only WinVerifyTrust wrapper; loads wintrust / crypt32 itself, so nothing to link.
+#include <sl_security.h>
 
 #endif
 
@@ -384,9 +395,23 @@ bool D3D12Streamline::loadLibrary() {
 		dir.resize(slash + 1);
 	}
 	const std::wstring path = dir + L"sl.interposer.dll";
+	if(GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+		LogInfo << "Streamline: sl.interposer.dll not next to arx.exe — DLSS / FG stay off";
+		return false;
+	}
+	// The interposer hooks the swapchain and loads the other sl.*.dll, so a replaced copy runs
+	// inside the game. NVIDIA signs the release DLLs; ARX_SL_NO_VERIFY=1 accepts an unsigned
+	// development build of the SDK.
+	const char * noVerify = std::getenv("ARX_SL_NO_VERIFY");
+	const bool verify = !(noVerify && *noVerify && std::atoi(noVerify) != 0);
+	if(verify && !sl::security::verifyEmbeddedSignature(path.c_str())) {
+		LogWarning << "Streamline: sl.interposer.dll is not signed by NVIDIA — DLSS / FG stay off"
+		           << " (ARX_SL_NO_VERIFY=1 to load it anyway)";
+		return false;
+	}
 	m_dll = LoadLibraryW(path.c_str());
 	if(!m_dll) {
-		LogInfo << "Streamline: sl.interposer.dll not next to arx.exe — RR stays off";
+		LogInfo << "Streamline: sl.interposer.dll failed to load — DLSS / FG stay off";
 		return false;
 	}
 	auto proc = [&](const char * name) {
@@ -1692,9 +1717,9 @@ bool D3D12Streamline::copyHudless(const Frame & frame) {
 #endif
 }
 
-void D3D12Streamline::beginFrame() {
+void D3D12Streamline::beginSimulation() {
 #if ARX_HAVE_STREAMLINE
-	if(!m_ready || !supportsFg()) {
+	if(!m_ready || !supportsFg() || m_simulationOpen || m_renderSubmitOpen) {
 		return;
 	}
 	if(!frameToken()) {
@@ -1706,7 +1731,26 @@ void D3D12Streamline::beginFrame() {
 	                         reinterpret_cast<void *&>(sleep)) == sl::Result::eOk && sleep) {
 		sleep(*static_cast<sl::FrameToken *>(m_token));
 	}
+	pclMarker(int(sl::PCLMarker::eSimulationStart));
+	m_simulationOpen = true;
+#endif
+}
+
+void D3D12Streamline::beginRenderSubmit() {
+#if ARX_HAVE_STREAMLINE
+	if(!m_ready || !supportsFg() || m_renderSubmitOpen) {
+		return;
+	}
+	if(!m_simulationOpen) {
+		// The first frame after FG is switched on reaches here without beginSimulation().
+		beginSimulation();
+		if(!m_simulationOpen) {
+			return;
+		}
+	}
+	pclMarker(int(sl::PCLMarker::eSimulationEnd));
 	pclMarker(int(sl::PCLMarker::eRenderSubmitStart));
+	m_renderSubmitOpen = true;
 #endif
 }
 
@@ -1719,7 +1763,11 @@ void D3D12Streamline::syncFrameGen(bool enabled) {
 	}
 	if(enabled) {
 		setReflex(true);
-		setDlssg(true);
+		// Generation follows the tags: a menu, loading or cinematic frame carries no depth /
+		// motion vectors, and presenting it with DLSS-G on generates from stale data ("Present
+		// without DLSS-G tags"). FG comes on with the first world frame and goes off while the
+		// game shows a menu.
+		setDlssg(m_fgTagged);
 	} else {
 		setDlssg(false);
 		setReflex(false);
@@ -1785,6 +1833,14 @@ void D3D12Streamline::onPresent() {
 		LogWarning << "Streamline: Present without DLSS-G tags";
 		m_loggedUntagged = true;
 	}
+	// Reflex is on only while FG is wanted (syncFrameGen runs just before this). Menu and
+	// cinematic frames never reach beginSceneUpscale, so close their simulation here.
+	if(m_reflexOn) {
+		beginRenderSubmit();
+	}
+	if(!m_renderSubmitOpen) {
+		return;
+	}
 	pclMarker(int(sl::PCLMarker::eRenderSubmitEnd));
 	pclMarker(int(sl::PCLMarker::ePresentStart));
 #endif
@@ -1792,7 +1848,11 @@ void D3D12Streamline::onPresent() {
 
 void D3D12Streamline::afterPresent() {
 #if ARX_HAVE_STREAMLINE
-	pclMarker(int(sl::PCLMarker::ePresentEnd));
+	if(m_renderSubmitOpen) {
+		pclMarker(int(sl::PCLMarker::ePresentEnd));
+	}
+	m_simulationOpen = false;
+	m_renderSubmitOpen = false;
 	m_fgTagged = false;
 	m_token = nullptr;
 	m_constantsSet = false;

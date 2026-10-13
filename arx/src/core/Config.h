@@ -157,6 +157,9 @@ public:
 		int dxrGi;
 		//! 0 = Off, 1 = Low, 2 = Medium, 3 = High, 4 = Custom.
 		int dxrPreset;
+		//! cfg.ini had no ray tracing settings at all: the first run picks them once the renderer
+		//! knows what the GPU supports (ArxGame::onRendererInit). Not saved.
+		bool dxrFirstRun = false;
 		//! Opaque / metal reflections. 0 = Off, 1 = Low, 2 = Medium, 3 = High.
 		int dxrReflections;
 		//! Water / transparent reflections. 0 = Off, 1 = Low, 2 = Medium, 3 = High.

@@ -260,7 +260,7 @@ These are constants in the same file, next to the ones above. They are derived o
 
 | Looks like a knob | Actually | See |
 |---|---|---|
-| `kRootConstants` | The size of the constant buffer in words. It must equal the size of the matching struct, and the hardware root-signature cap is 64 DWORDs (already full). A `static_assert` catches a size mismatch but not a field reordered inside the same size | [INV-01](INVARIANTS.md#inv-01), [INV-13](INVARIANTS.md#inv-13) |
+| `kParamsBytes` | The size of the `Params` (`b0`) constant buffer in bytes (256). It must equal `sizeof(DxrConstants)`; a `static_assert` catches a size mismatch and the `offsetof` asserts catch most reorders. `Params` is a root CBV now, so the root signature has room to spare | [INV-01](INVARIANTS.md#inv-01), [INV-13](INVARIANTS.md#inv-13) |
 | `kRtSrvCount`, `kRtUavBase`, `kRtUavCount`, `kCompositeBase`, `kHeapCount` | Five projections of one descriptor layout, tied by an equation, and each also stated as a register in the shaders | [INV-02](INVARIANTS.md#inv-02) |
 | `SKY_Z` | The depth value that means "nothing was drawn here". It must equal the clear value exactly | [INV-04](INVARIANTS.md#inv-04) |
 | `kLightFloat4s` | How many four-float groups one light occupies. It must match both the packed structure and the shader's indexing of the light buffer, and a `static_assert` ties the first two | [INV-08](INVARIANTS.md#inv-08) |
