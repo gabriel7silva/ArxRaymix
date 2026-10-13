@@ -41,15 +41,16 @@ constexpr size_t kMaxWaterTriangles = 20000;
 constexpr size_t kMaxMetalTriangles = 30000;
 constexpr UINT kIdentifierSize = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
 constexpr UINT kShaderRecord = 64;
-// Heap: [0..17] RT SRVs t0-t17, [18..23] RT UAVs u0-u5,
-// [24..32] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask, fog).
+// Heap: [0..19] RT SRVs t0-t19, [20..25] RT UAVs u0-u5,
+// [26..34] composite SRVs (color, ao, shadow, depth, gi, spec, waterMask, metalMask, fog).
 // t15 / t16 are the per-triangle attribute buffers, t17 / u5 the volumetric haze history and
-// output. Growing the SRV range shifts the UAV and composite ranges after it: INV-02 is one
-// equation, so these five move together or not at all.
-constexpr UINT kRtSrvCount = 18;
-constexpr UINT kRtUavBase = 18;
+// output, t18 / t19 the software ray tracing BVH (nodes, triangle indices). Growing the SRV range
+// shifts the UAV and composite ranges after it: INV-02 is one equation, so these five move
+// together or not at all.
+constexpr UINT kRtSrvCount = 20;
+constexpr UINT kRtUavBase = 20;
 constexpr UINT kRtUavCount = 6;
-constexpr UINT kCompositeBase = 24;
+constexpr UINT kCompositeBase = 26;
 constexpr UINT kCompositeSrvCount = 9;
 constexpr UINT kHeapCount = kCompositeBase + kCompositeSrvCount;
 static_assert(kRtUavBase == kRtSrvCount, "INV-02: UAVs follow the SRV range");
@@ -160,6 +161,9 @@ static constexpr UINT fogSteps[] = { 0u, 8u, 12u, 16u };
 // half), and how much of the current frame goes into its history.
 constexpr float kFogRange = 3000.f;
 constexpr float kFogAlpha = 0.15f;
+// Without DXR every ray walks a BVH in a compute shader, several times slower than the RT cores,
+// so each effect is held at this quality whatever the menu says.
+constexpr int kSoftwareMaxQuality = 1;
 static_assert(std::size(aoRadius) == kMaxRtQuality + 1);
 static_assert(std::size(aoRayCount) == kMaxRtQuality + 1);
 static_assert(std::size(shadowRays) == kMaxRtQuality + 1);
@@ -240,13 +244,15 @@ struct DxrViewCbuf {
 	float fogDensity;
 	float fogRange;
 	float fogAlpha;
+	UINT bvhRoots[4];
 };
 static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
 static_assert(offsetof(DxrViewCbuf, specTMax) == 64);
 static_assert(offsetof(DxrViewCbuf, waterFill) == 80,
               "ViewParams must stay float4-aligned to match the HLSL cbuffer");
 static_assert(offsetof(DxrViewCbuf, fogSteps) == 96);
-static_assert(sizeof(DxrViewCbuf) == 112);
+static_assert(offsetof(DxrViewCbuf, bvhRoots) == 112);
+static_assert(sizeof(DxrViewCbuf) == 128);
 
 constexpr UINT kLightFloat4s = 3;
 static_assert(sizeof(D3D12Rtao::GpuLight) == kLightFloat4s * 16, "DXR light record is three float4s");
@@ -254,7 +260,25 @@ static_assert(sizeof(D3D12Rtao::GpuLight) == kLightFloat4s * 16, "DXR light reco
 // Split into several raw literals on blank lines: MSVC 19.44 (VS 2022) rejects a single literal
 // over 16 KB (C2026, "string too big"). Adjacent literals concatenate, so the HLSL is unchanged.
 const char * kRayLib = R"(
+// One source, two builds. Without ARX_SOFTWARE_RT this is the DXR library (RayGen, hit and miss
+// shaders, rays traced through the acceleration structure). With it, it is a compute shader that
+// runs the same RayGen body and traces its rays through a BVH it walks itself (swTrace), for
+// GPUs without DXR. Everything between the two is shared, so both modes shade alike.
+#ifdef ARX_SOFTWARE_RT
+#define ARX_TRACE(flags, mask, ray, payload) swTrace(flags, mask, ray, payload)
+#define RAY_FLAG_NONE 0u
+#define RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH 4u
+#define RayDesc SwRayDesc
+struct SwRayDesc {
+	float3 Origin;
+	float TMin;
+	float3 Direction;
+	float TMax;
+};
+#else
+#define ARX_TRACE(flags, mask, ray, payload) TraceRay(g_scene, flags, mask, 0, 1, 0, ray, payload)
 RaytracingAccelerationStructure g_scene : register(t0);
+#endif
 StructuredBuffer<float4> g_verts : register(t1);
 StructuredBuffer<float4> g_lights : register(t2);
 Texture2D<float> g_depth : register(t3);
@@ -281,6 +305,12 @@ struct TriAttr {
 StructuredBuffer<TriAttr> g_dynAttr : register(t15);
 StructuredBuffer<TriAttr> g_roomAttr : register(t16);
 Texture2D<float4> g_fogPrev : register(t17);
+#ifdef ARX_SOFTWARE_RT
+// Software ray tracing: the nodes of every instance's BVH (two float4 each, RayBvh.h layout)
+// and, per leaf, the triangles it holds as indices into that instance's vertex buffer.
+StructuredBuffer<float4> g_bvhNodes : register(t18);
+StructuredBuffer<uint> g_bvhTris : register(t19);
+#endif
 // Every game texture, indexed by the descriptor index the renderer assigned it. space1 keeps
 // it clear of the pass's own t registers. Index 0 is a 1x1 white texture, so a face with no
 // material needs no branch.
@@ -358,6 +388,8 @@ cbuffer ViewParams : register(b1) {
 	float fogDensity;
 	float fogRange;
 	float fogAlpha;
+	// Software ray tracing: root node of the room, entity, water and player BVHs, ~0u if absent.
+	uint4 bvhRoots;
 };
 
 // Cleared D24_UNORM depth is exactly 1.0 (INV-04). A value just below 1.0 is a
@@ -379,6 +411,191 @@ struct RayPayload {
 	// paid for a value nobody reads.
 	uint wantMat;
 };
+
+)"
+R"(
+// The vertices of triangle prim of instance inst: 0 rooms, 1 entities, 2 water, 3 player. The
+// player's geometry follows the entities' in the shared dynamic buffer and its primitive index
+// restarts at zero, so it is shifted by where it begins.
+void hitVertices(uint inst, uint prim, out float3 v0, out float3 v1, out float3 v2) {
+	if(inst == 0u) {
+		v0 = g_roomVerts[prim * 3 + 0].xyz;
+		v1 = g_roomVerts[prim * 3 + 1].xyz;
+		v2 = g_roomVerts[prim * 3 + 2].xyz;
+	} else if(inst == 2u) {
+		v0 = g_waterVerts[prim * 3 + 0].xyz;
+		v1 = g_waterVerts[prim * 3 + 1].xyz;
+		v2 = g_waterVerts[prim * 3 + 2].xyz;
+	} else {
+		uint base = (inst == 3u) ? playerVertBase : 0u;
+		v0 = g_verts[base + prim * 3 + 0].xyz;
+		v1 = g_verts[base + prim * 3 + 1].xyz;
+		v2 = g_verts[base + prim * 3 + 2].xyz;
+	}
+}
+
+TriAttr hitAttr(uint inst, uint prim) {
+	if(inst == 0u) {
+		return g_roomAttr[prim];
+	}
+	uint attrBase = (inst == 3u) ? (playerVertBase / 3u) : 0u;
+	return g_dynAttr[attrBase + prim];
+}
+
+// Surface colour at a hit, sampled from the real texture. Water carries no material.
+float3 hitAlbedo(uint inst, uint prim, float3 v0, float3 v1, float3 v2, float3 bc, float tHit) {
+	if(inst == 2u) {
+		// Giving water a material would mean a third attribute buffer, a third SRV and moving the
+		// heap constants again, all for the one case that reaches here: a metal surface reflecting
+		// a water surface, since the metal ray's mask includes water and the water ray's does not.
+		// A dim neutral rather than white, so it reads as dark water rather than a highlight.
+		return float3(0.18, 0.20, 0.20);
+	}
+	TriAttr a = hitAttr(inst, prim);
+	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
+	// Ray-cone mip selection. A hit has no quad derivatives, so the level has to be derived:
+	// compare how much texture the triangle carries per unit of world area with how much world
+	// area this ray covers by the time it arrives. A fixed level aliased on distant surfaces and
+	// thrashed the cache with incoherent rays; picking the level the footprint deserves is what
+	// makes texture fetches affordable here.
+	uint texW, texH;
+	g_textures[NonUniformResourceIndex(a.tex)].GetDimensions(texW, texH);
+	float2 duv1 = a.uv1 - a.uv0;
+	float2 duv2 = a.uv2 - a.uv0;
+	float texArea = abs(duv1.x * duv2.y - duv1.y * duv2.x) * float(texW) * float(texH);
+	float worldArea = length(cross(v1 - v0, v2 - v0));
+	// footprint: the world-space width of the pixel this ray started from, at the hit distance.
+	float footprint = max(tHit * pixelWorld, 1e-4);
+	float lod = 0.0;
+	if(texArea > 1e-9 && worldArea > 1e-9) {
+		lod = 0.5 * log2(texArea / worldArea) + log2(footprint);
+	}
+	return g_textures[NonUniformResourceIndex(a.tex)].SampleLevel(g_matSamp, uv, clamp(lod, 0.0, 12.0)).rgb;
+}
+
+// False where a cutout face is transparent: a grate or a web lets the ray through there, so it
+// casts its pattern instead of a solid quad. Faces without the cutout flag always count.
+bool hitAlphaPasses(uint inst, uint prim, float3 bc) {
+	if(inst == 2u) {
+		return true;
+	}
+	TriAttr a = hitAttr(inst, prim);
+	if((a.flags & 1u) == 0u) {
+		return true;
+	}
+	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
+	// Mip 0: the raster alpha test reads the full-resolution texture too, and a coarser level
+	// would blur thin bars into half-transparent smears that flicker in and out.
+	return g_textures[NonUniformResourceIndex(a.tex)].SampleLevel(g_matSamp, uv, 0.0).a >= 0.5;
+}
+
+)"
+R"(
+#ifdef ARX_SOFTWARE_RT
+// TraceRay for GPUs without DXR: the same instances, masks (rooms and entities 0x1, water 0x2,
+// player 0x4), cutout test and hit results, through the BVHs built by graphics/RayBvh.h.
+void swTrace(uint flags, uint mask, RayDesc ray, inout RayPayload p) {
+	const uint instMask[4] = { 1u, 1u, 2u, 4u };
+	const bool firstHit = (flags & RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH) != 0u;
+	float3 o = ray.Origin;
+	float3 d = ray.Direction;
+	float3 invD = 1.0 / float3(abs(d.x) > 1e-12 ? d.x : 1e-12, abs(d.y) > 1e-12 ? d.y : 1e-12,
+	                           abs(d.z) > 1e-12 ? d.z : 1e-12);
+	float bestT = ray.TMax;
+	uint bestInst = 0xffffffffu;
+	uint bestPrim = 0u;
+	float3 bestBc = float3(1, 0, 0);
+	bool done = false;
+	for(uint inst = 0u; inst < 4u && !done; ++inst) {
+		uint root = bvhRoots[inst];
+		if((instMask[inst] & mask) == 0u || root == 0xffffffffu) {
+			continue;
+		}
+		uint stack[64];
+		int sp = 0;
+		stack[sp++] = root;
+		while(sp > 0 && !done) {
+			uint ni = stack[--sp];
+			float4 lo = g_bvhNodes[ni * 2u + 0u];
+			float4 hi = g_bvhNodes[ni * 2u + 1u];
+			float3 ta = (lo.xyz - o) * invD;
+			float3 tb = (hi.xyz - o) * invD;
+			float3 tmn = min(ta, tb);
+			float3 tmx = max(ta, tb);
+			float t0 = max(max(tmn.x, tmn.y), max(tmn.z, ray.TMin));
+			float t1 = min(min(tmx.x, tmx.y), min(tmx.z, bestT));
+			if(t0 > t1) {
+				continue;
+			}
+			uint count = asuint(hi.w);
+			uint first = asuint(lo.w);
+			if(count == 0u) {
+				if(sp < 62) {
+					stack[sp++] = first + 1u;
+					stack[sp++] = first;
+				}
+				continue;
+			}
+			for(uint i = 0u; i < count; ++i) {
+				uint prim = g_bvhTris[first + i];
+				float3 v0, v1, v2;
+				hitVertices(inst, prim, v0, v1, v2);
+				float3 e1 = v1 - v0;
+				float3 e2 = v2 - v0;
+				float3 pv = cross(d, e2);
+				float det = dot(e1, pv);
+				if(abs(det) < 1e-12) {
+					continue;
+				}
+				float inv = 1.0 / det;
+				float3 s = o - v0;
+				float u = dot(s, pv) * inv;
+				if(u < 0.0 || u > 1.0) {
+					continue;
+				}
+				float3 q = cross(s, e1);
+				float v = dot(d, q) * inv;
+				if(v < 0.0 || u + v > 1.0) {
+					continue;
+				}
+				float t = dot(e2, q) * inv;
+				if(t <= ray.TMin || t >= bestT) {
+					continue;
+				}
+				float3 bc = float3(1.0 - u - v, u, v);
+				if(!hitAlphaPasses(inst, prim, bc)) {
+					continue;
+				}
+				bestT = t;
+				bestInst = inst;
+				bestPrim = prim;
+				bestBc = bc;
+				if(firstHit) {
+					done = true;
+					break;
+				}
+			}
+		}
+	}
+	if(bestInst == 0xffffffffu) {
+		p.t = 1e7;
+		p.n = 0.xxx;
+		p.inst = 0xffffffffu;
+		p.albedo = 0.xxx;
+		return;
+	}
+	float3 v0, v1, v2;
+	hitVertices(bestInst, bestPrim, v0, v1, v2);
+	float3 n = normalize(cross(v1 - v0, v2 - v0));
+	if(dot(n, -d) < 0.0) {
+		n = -n;
+	}
+	p.t = bestT;
+	p.n = n;
+	p.inst = bestInst;
+	p.albedo = (p.wantMat != 0u) ? hitAlbedo(bestInst, bestPrim, v0, v1, v2, bestBc, bestT) : 0.xxx;
+}
+#endif
 
 // Interleaved gradient noise: a per-pixel rotation, so the fixed sample sets dither spatially
 // instead of banding. With history on, noiseFrame shifts the pattern every frame (Jimenez's
@@ -448,9 +665,9 @@ float4 shadeReflectionHit(float3 origin, float3 dir, float tmin, float tmax, uin
 	// Deliberately not CULL_BACK_FACING_TRIANGLES, which would pay for part of the extra
 	// traversal: this world has POLY_DOUBLESIDED geometry that would drop out of reflections.
 	if(specClosest != 0u) {
-		TraceRay(g_scene, RAY_FLAG_NONE, mask, 0, 1, 0, rd, rp);
+		ARX_TRACE(RAY_FLAG_NONE, mask, rd, rp);
 	} else {
-		TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, mask, 0, 1, 0, rd, rp);
+		ARX_TRACE(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, mask, rd, rp);
 	}
 	if(rp.t >= tmax) {
 		// Nothing within range: the reflection genuinely shows nothing here.
@@ -672,7 +889,7 @@ float4 traceFog(uint2 pixel, float z, float rot) {
 				sp.t = 1e7;
 				sp.n = float3(0, 0, 0);
 				sp.wantMat = 0u;
-				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, 0, 1, 0, sr, sp);
+				ARX_TRACE(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, sr, sp);
 				if(sp.t >= sr.TMax) {
 					light += cChosen * (wsum / wChosen);
 				}
@@ -698,9 +915,7 @@ void writeFogRaw(uint2 pixel, float z) {
 }
 )"
 R"(
-[shader("raygeneration")]
-void RayGen() {
-	uint2 pixel = DispatchRaysIndex().xy;
+void rayMain(uint2 pixel) {
 	if(pixel.x >= width || pixel.y >= height) {
 		return;
 	}
@@ -814,8 +1029,7 @@ void RayGen() {
 			aop.t = radius + 1.0;
 			aop.n = 0.xxx;
 			aop.wantMat = 0u;
-			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-			         0x01, 0, 1, 0, ao, aop);
+			ARX_TRACE(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, ao, aop);
 			if(aop.t >= 8.0 && aop.t < radius) {
 				occ += 1.0 - aop.t / radius;
 			}
@@ -883,8 +1097,7 @@ void RayGen() {
 				shp.t = 1e7;
 				shp.n = 0.xxx;
 				shp.wantMat = 0u;
-				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-				         0x01, 0, 1, 0, sh, shp);
+				ARX_TRACE(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, sh, shp);
 				vis += (shp.t >= tmax) ? 1.0 : 0.0;
 			}
 			if(contactOn != 0u && disc) {
@@ -897,8 +1110,7 @@ void RayGen() {
 				cp.t = 1e7;
 				cp.n = float3(0, 0, 0);
 				cp.wantMat = 0u;
-				TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-				         0x01, 0, 1, 0, cs, cp);
+				ARX_TRACE(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, cs, cp);
 				if(cp.t < cs.TMax) {
 					vis *= 0.35;
 				}
@@ -1134,8 +1346,7 @@ R"(
 			// Same caveat as the reflection ray: this treats the first hit as the nearest surface
 			// when computing the bounce. Left as it is — bounce light is diffuse and low
 			// frequency, so the error hides, and a second full traversal per ray is not worth it.
-			TraceRay(g_scene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-			         0x01, 0, 1, 0, bounce, bp);
+			ARX_TRACE(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0x01, bounce, bp);
 			if(bp.t < 8.0 || bp.t >= giTMax) {
 				continue;
 			}
@@ -1182,109 +1393,49 @@ R"(
 	}
 }
 
+#ifdef ARX_SOFTWARE_RT
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) {
+	rayMain(id.xy);
+}
+#else
+[shader("raygeneration")]
+void RayGen() {
+	rayMain(DispatchRaysIndex().xy);
+}
+
 [shader("closesthit")]
 void ClosestHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) {
 	p.t = RayTCurrent();
+	uint inst = InstanceID();
 	uint prim = PrimitiveIndex();
 	float3 v0, v1, v2;
-	if(InstanceID() == 0) {
-		v0 = g_roomVerts[prim * 3 + 0].xyz;
-		v1 = g_roomVerts[prim * 3 + 1].xyz;
-		v2 = g_roomVerts[prim * 3 + 2].xyz;
-	} else if(InstanceID() == 2) {
-		v0 = g_waterVerts[prim * 3 + 0].xyz;
-		v1 = g_waterVerts[prim * 3 + 1].xyz;
-		v2 = g_waterVerts[prim * 3 + 2].xyz;
-	} else {
-		uint base = (InstanceID() == 3) ? playerVertBase : 0u;
-		v0 = g_verts[base + prim * 3 + 0].xyz;
-		v1 = g_verts[base + prim * 3 + 1].xyz;
-		v2 = g_verts[base + prim * 3 + 2].xyz;
-	}
+	hitVertices(inst, prim, v0, v1, v2);
 	float3 n = normalize(cross(v1 - v0, v2 - v0));
 	if(dot(n, -WorldRayDirection()) < 0.0) {
 		n = -n;
 	}
 	p.n = n;
-	p.inst = InstanceID();
+	p.inst = inst;
 	if(p.wantMat == 0u) {
-		// Everything below is material work: the attribute fetch, the mip derivation and the
+		// Everything after this is material work: the attribute fetch, the mip derivation and the
 		// texture sample. A visibility ray has what it came for.
 		p.albedo = 0.xxx;
 		return;
 	}
-	// Barycentrics give the point inside the triangle; the attribute buffer is picked by the
-	// same InstanceID branch as the vertices above. InstanceIndex would slide whenever one of
-	// the four categories is absent, InstanceID is written explicitly per instance.
+	// InstanceID, not InstanceIndex: the index slides whenever one of the four categories is
+	// absent, the ID is written explicitly per instance.
 	float3 bc = float3(1.0 - attr.barycentrics.x - attr.barycentrics.y,
 	                   attr.barycentrics.x, attr.barycentrics.y);
-	TriAttr a;
-	if(InstanceID() == 0u) {
-		a = g_roomAttr[prim];
-	} else if(InstanceID() == 2u) {
-		// Water carries no material. Giving it one would mean a third attribute buffer, a third
-		// SRV and moving the heap constants again, all for the one case that reaches here: a metal
-		// surface reflecting a water surface, since the metal ray's mask includes water and the
-		// water ray's does not. A dim neutral rather than white, so it reads as dark water rather
-		// than as a highlight on the metal.
-		p.albedo = float3(0.18, 0.20, 0.20);
-		return;
-	} else {
-		// The player's BLAS starts partway into the shared dynamic buffer and its
-		// PrimitiveIndex restarts at zero, so shift by where that geometry begins.
-		uint attrBase = (InstanceID() == 3u) ? (playerVertBase / 3u) : 0u;
-		a = g_dynAttr[attrBase + prim];
-	}
-	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
-	// Ray-cone mip selection. A hit shader has no quad derivatives, so the level has to be
-	// derived: compare how much texture the triangle carries per unit of world area with how
-	// much world area this ray covers by the time it arrives. A fixed level aliased on distant
-	// surfaces and thrashed the cache with incoherent rays; picking the level the footprint
-	// deserves is what makes texture fetches affordable here.
-	uint texW, texH;
-	g_textures[NonUniformResourceIndex(a.tex)].GetDimensions(texW, texH);
-	float2 duv1 = a.uv1 - a.uv0;
-	float2 duv2 = a.uv2 - a.uv0;
-	float texArea = abs(duv1.x * duv2.y - duv1.y * duv2.x) * float(texW) * float(texH);
-	float worldArea = length(cross(v1 - v0, v2 - v0));
-	// footprint: the world-space width of the pixel this ray started from, at the hit distance.
-	float footprint = max(RayTCurrent() * pixelWorld, 1e-4);
-	float lod = 0.0;
-	if(texArea > 1e-9 && worldArea > 1e-9) {
-		lod = 0.5 * log2(texArea / worldArea) + log2(footprint);
-	}
-	p.albedo = g_textures[NonUniformResourceIndex(a.tex)]
-	           .SampleLevel(g_matSamp, uv, clamp(lod, 0.0, 12.0)).rgb;
+	p.albedo = hitAlbedo(inst, prim, v0, v1, v2, bc, RayTCurrent());
 }
-)"
-R"(
-// Runs only on non-opaque geometry, i.e. a BLAS that holds at least one cutout face. Faces
-// without the cutout flag are accepted at once; a cutout face lets the ray through where its
-// texture is transparent, so a grate or a web casts its pattern instead of a solid quad.
+
+// Runs only on non-opaque geometry, i.e. a BLAS that holds at least one cutout face.
 [shader("anyhit")]
 void AnyHit(inout RayPayload p, BuiltInTriangleIntersectionAttributes attr) {
-	uint inst = InstanceID();
-	if(inst == 2u) {
-		return;
-	}
-	uint prim = PrimitiveIndex();
-	TriAttr a;
-	if(inst == 0u) {
-		a = g_roomAttr[prim];
-	} else {
-		uint attrBase = (inst == 3u) ? (playerVertBase / 3u) : 0u;
-		a = g_dynAttr[attrBase + prim];
-	}
-	if((a.flags & 1u) == 0u) {
-		return;
-	}
 	float3 bc = float3(1.0 - attr.barycentrics.x - attr.barycentrics.y,
 	                   attr.barycentrics.x, attr.barycentrics.y);
-	float2 uv = a.uv0 * bc.x + a.uv1 * bc.y + a.uv2 * bc.z;
-	// Mip 0: the raster alpha test reads the full-resolution texture too, and a coarser level
-	// would blur thin bars into half-transparent smears that flicker in and out.
-	float alpha = g_textures[NonUniformResourceIndex(a.tex)].SampleLevel(g_matSamp, uv, 0.0).a;
-	if(alpha < 0.5) {
+	if(!hitAlphaPasses(InstanceID(), PrimitiveIndex(), bc)) {
 		IgnoreHit();
 	}
 }
@@ -1296,6 +1447,7 @@ void Miss(inout RayPayload p) {
 	p.inst = 0xffffffffu;
 	p.albedo = 0.xxx;
 }
+#endif
 )";
 
 const char * kComposite = R"(
@@ -1682,6 +1834,12 @@ void D3D12Rtao::shutdown() {
 	m_waterDepthPso.reset();
 	m_metalMaskPso.reset();
 	m_rtState.reset();
+	m_swPso.reset();
+	m_bvhNodeBuf.reset();
+	m_bvhTriBuf.reset();
+	m_roomBvhNodes.clear();
+	m_roomBvhTris.clear();
+	m_software = false;
 	m_compositeRoot.reset();
 	m_maskRoot.reset();
 	m_rtRoot.reset();
@@ -1711,14 +1869,15 @@ bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
 	}
 	
 	D3D12_FEATURE_DATA_D3D12_OPTIONS5 opt {};
-	if(FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &opt, sizeof(opt)))
-	   || opt.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED) {
-		LogInfo << "RaytracingTier=NOT_SUPPORTED";
-		return true;
+	bool dxr = SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &opt, sizeof(opt)))
+	           && opt.RaytracingTier != D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
+	LogInfo << "RaytracingTier=" << (dxr ? std::to_string(int(opt.RaytracingTier)) : std::string("NOT_SUPPORTED"));
+	if(dxr && FAILED(device->QueryInterface(IID_PPV_ARGS(m_device5.put())))) {
+		LogInfo << "RaytracingTier=NOT_SUPPORTED (Device5 QI failed)";
+		dxr = false;
 	}
-	LogInfo << "RaytracingTier=" << int(opt.RaytracingTier);
-	// The bindless texture range needs Resource Binding Tier 2. Every DXR-capable GPU reports
-	// Tier 3 in practice, but the project only ever asked about ray tracing, so say it out loud.
+	// The bindless texture range needs Resource Binding Tier 2, in both modes. Every DXR-capable
+	// GPU reports Tier 3 in practice; GPUs without DXR may not.
 	D3D12_FEATURE_DATA_D3D12_OPTIONS base {};
 	if(SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &base, sizeof(base)))) {
 		LogInfo << "ResourceBindingTier=" << int(base.ResourceBindingTier);
@@ -1727,10 +1886,23 @@ bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
 			return true;
 		}
 	}
-	
-	if(FAILED(device->QueryInterface(IID_PPV_ARGS(m_device5.put())))) {
-		LogInfo << "RaytracingTier=NOT_SUPPORTED (Device5 QI failed)";
-		return true;
+	// Without DXR, or when asked, rays are traced by a compute shader walking our own BVH. It
+	// needs shader model 6.0 (the shader is compiled with DXC) and nothing else.
+	const char * forceSoftware = std::getenv("ARX_DXR_SOFTWARE");
+	const bool wantSoftware = forceSoftware && *forceSoftware && std::atoi(forceSoftware) != 0;
+	if(!dxr || wantSoftware) {
+		D3D12_FEATURE_DATA_SHADER_MODEL sm { D3D_SHADER_MODEL_6_0 };
+		if(FAILED(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &sm, sizeof(sm)))
+		   || sm.HighestShaderModel < D3D_SHADER_MODEL_6_0) {
+			LogInfo << "Software ray tracing: shader model 6.0 not supported — raster only";
+			return true;
+		}
+		m_software = true;
+		m_device5.reset();
+		LogInfo << "Ray tracing mode: software (compute BVH" << (dxr ? ", forced by ARX_DXR_SOFTWARE" : "")
+		        << "), effects held at quality " << kSoftwareMaxQuality;
+	} else {
+		LogInfo << "Ray tracing mode: DXR";
 	}
 	
 	m_supported = true;
@@ -1838,8 +2010,13 @@ bool D3D12Rtao::compileRayLib() {
 	}
 	
 	IDxcOperationResult * result = nullptr;
-	const HRESULT compileHr = compiler->Compile(source, L"rtao.hlsl", L"", L"lib_6_3",
-	                                            nullptr, 0, nullptr, 0, nullptr, &result);
+	// The same source builds the DXR library or, in software mode, a compute shader that walks
+	// our own BVH (see the ARX_SOFTWARE_RT blocks in kRayLib).
+	DxcDefine softwareDefine { L"ARX_SOFTWARE_RT", L"1" };
+	const HRESULT compileHr = m_software
+		? compiler->Compile(source, L"rtao.hlsl", L"CSMain", L"cs_6_0", nullptr, 0, &softwareDefine, 1,
+		                    nullptr, &result)
+		: compiler->Compile(source, L"rtao.hlsl", L"", L"lib_6_3", nullptr, 0, nullptr, 0, nullptr, &result);
 	source->Release();
 	compiler->Release();
 	library->Release();
@@ -1856,7 +2033,7 @@ bool D3D12Rtao::compileRayLib() {
 		if(errors && errors->GetBufferPointer()) {
 			LogError << "RTAO: " << static_cast<const char *>(errors->GetBufferPointer());
 		} else {
-			LogError << "RTAO: lib_6_3 compile failed";
+			LogError << "RTAO: " << (m_software ? "cs_6_0" : "lib_6_3") << " compile failed";
 		}
 		if(errors) {
 			errors->Release();
@@ -1877,6 +2054,81 @@ bool D3D12Rtao::compileRayLib() {
 		std::memcpy(m_dxil.data(), dxil->GetBufferPointer(), n);
 	}
 	dxil->Release();
+	return true;
+}
+
+bool D3D12Rtao::createRtState() {
+	D3D12_EXPORT_DESC exports[4] {};
+	exports[0].Name = L"RayGen";
+	exports[1].Name = L"ClosestHit";
+	exports[2].Name = L"Miss";
+	exports[3].Name = L"AnyHit";
+	D3D12_DXIL_LIBRARY_DESC lib {};
+	lib.DXILLibrary.pShaderBytecode = m_dxil.data();
+	lib.DXILLibrary.BytecodeLength = m_dxil.size();
+	lib.NumExports = UINT(std::size(exports));
+	lib.pExports = exports;
+	D3D12_HIT_GROUP_DESC hit {};
+	hit.HitGroupExport = L"HitGroup";
+	hit.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+	hit.ClosestHitShaderImport = L"ClosestHit";
+	hit.AnyHitShaderImport = L"AnyHit";
+	D3D12_RAYTRACING_SHADER_CONFIG sc {};
+	// t, n, inst, albedo, wantMat.
+	sc.MaxPayloadSizeInBytes = 36;
+	sc.MaxAttributeSizeInBytes = 8;
+	D3D12_RAYTRACING_PIPELINE_CONFIG pc {};
+	pc.MaxTraceRecursionDepth = 2;
+	D3D12_GLOBAL_ROOT_SIGNATURE grs {};
+	grs.pGlobalRootSignature = m_rtRoot.Get();
+	D3D12_STATE_SUBOBJECT subs[5] {};
+	subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &lib };
+	subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hit };
+	subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &sc };
+	subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc };
+	subs[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, &grs };
+	D3D12_STATE_OBJECT_DESC sod {};
+	sod.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
+	sod.NumSubobjects = 5;
+	sod.pSubobjects = subs;
+	if(FAILED(m_device5->CreateStateObject(&sod, IID_PPV_ARGS(m_rtState.put())))) {
+		LogError << "RTAO: CreateStateObject failed";
+		return false;
+	}
+	
+	ID3D12StateObjectProperties * props = nullptr;
+	if(FAILED(m_rtState->QueryInterface(IID_PPV_ARGS(&props))) || !props) {
+		return false;
+	}
+	if(!createBuffer(m_device, kShaderRecord * 3, D3D12_HEAP_TYPE_UPLOAD,
+	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE,
+	                 m_shaderTable.put())) {
+		props->Release();
+		return false;
+	}
+	char * table = nullptr;
+	if(FAILED(m_shaderTable->Map(0, nullptr, reinterpret_cast<void **>(&table))) || !table) {
+		props->Release();
+		return false;
+	}
+	std::memset(table, 0, kShaderRecord * 3);
+	std::memcpy(table + 0, props->GetShaderIdentifier(L"RayGen"), kIdentifierSize);
+	std::memcpy(table + kShaderRecord, props->GetShaderIdentifier(L"Miss"), kIdentifierSize);
+	std::memcpy(table + kShaderRecord * 2, props->GetShaderIdentifier(L"HitGroup"), kIdentifierSize);
+	m_shaderTable->Unmap(0, nullptr);
+	props->Release();
+	return true;
+}
+
+bool D3D12Rtao::createSoftwarePso() {
+	D3D12_COMPUTE_PIPELINE_STATE_DESC cs {};
+	cs.pRootSignature = m_rtRoot.Get();
+	cs.CS.pShaderBytecode = m_dxil.data();
+	cs.CS.BytecodeLength = m_dxil.size();
+	if(FAILED(m_device->CreateComputePipelineState(&cs, IID_PPV_ARGS(m_swPso.put())))) {
+		LogError << "RTAO: software ray tracing pipeline failed";
+		return false;
+	}
 	return true;
 }
 
@@ -1949,65 +2201,11 @@ bool D3D12Rtao::createPipeline() {
 		return false;
 	}
 	
-	D3D12_EXPORT_DESC exports[4] {};
-	exports[0].Name = L"RayGen";
-	exports[1].Name = L"ClosestHit";
-	exports[2].Name = L"Miss";
-	exports[3].Name = L"AnyHit";
-	D3D12_DXIL_LIBRARY_DESC lib {};
-	lib.DXILLibrary.pShaderBytecode = m_dxil.data();
-	lib.DXILLibrary.BytecodeLength = m_dxil.size();
-	lib.NumExports = UINT(std::size(exports));
-	lib.pExports = exports;
-	D3D12_HIT_GROUP_DESC hit {};
-	hit.HitGroupExport = L"HitGroup";
-	hit.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-	hit.ClosestHitShaderImport = L"ClosestHit";
-	hit.AnyHitShaderImport = L"AnyHit";
-	D3D12_RAYTRACING_SHADER_CONFIG sc {};
-	// t, n, inst, albedo, wantMat.
-	sc.MaxPayloadSizeInBytes = 36;
-	sc.MaxAttributeSizeInBytes = 8;
-	D3D12_RAYTRACING_PIPELINE_CONFIG pc {};
-	pc.MaxTraceRecursionDepth = 2;
-	D3D12_GLOBAL_ROOT_SIGNATURE grs {};
-	grs.pGlobalRootSignature = m_rtRoot.Get();
-	D3D12_STATE_SUBOBJECT subs[5] {};
-	subs[0] = { D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, &lib };
-	subs[1] = { D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, &hit };
-	subs[2] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, &sc };
-	subs[3] = { D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, &pc };
-	subs[4] = { D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, &grs };
-	D3D12_STATE_OBJECT_DESC sod {};
-	sod.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
-	sod.NumSubobjects = 5;
-	sod.pSubobjects = subs;
-	if(FAILED(m_device5->CreateStateObject(&sod, IID_PPV_ARGS(m_rtState.put())))) {
-		LogError << "RTAO: CreateStateObject failed";
+	// The global root signature above serves both modes: the DXR state object, or the compute
+	// pipeline of the software path.
+	if(m_software ? !createSoftwarePso() : !createRtState()) {
 		return false;
 	}
-	
-	ID3D12StateObjectProperties * props = nullptr;
-	if(FAILED(m_rtState->QueryInterface(IID_PPV_ARGS(&props))) || !props) {
-		return false;
-	}
-	if(!createBuffer(m_device, kShaderRecord * 3, D3D12_HEAP_TYPE_UPLOAD,
-	                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE,
-	                 m_shaderTable.put())) {
-		props->Release();
-		return false;
-	}
-	char * table = nullptr;
-	if(FAILED(m_shaderTable->Map(0, nullptr, reinterpret_cast<void **>(&table))) || !table) {
-		props->Release();
-		return false;
-	}
-	std::memset(table, 0, kShaderRecord * 3);
-	std::memcpy(table + 0, props->GetShaderIdentifier(L"RayGen"), kIdentifierSize);
-	std::memcpy(table + kShaderRecord, props->GetShaderIdentifier(L"Miss"), kIdentifierSize);
-	std::memcpy(table + kShaderRecord * 2, props->GetShaderIdentifier(L"HitGroup"), kIdentifierSize);
-	m_shaderTable->Unmap(0, nullptr);
-	props->Release();
 	
 	D3D12_DESCRIPTOR_RANGE colorSrv {};
 	colorSrv.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -3114,6 +3312,104 @@ bool D3D12Rtao::buildAcceleration(ID3D12GraphicsCommandList * list) {
 	return true;
 }
 
+bool D3D12Rtao::buildSoftwareBvh() {
+	const size_t entityVerts = (m_reflectOnlyStart == SIZE_MAX)
+		? m_positions.size() : (std::min)(m_reflectOnlyStart, m_positions.size());
+	const size_t playerVerts = m_positions.size() - entityVerts;
+	static_assert(sizeof(Pos) == 4 * sizeof(float), "RayBvh reads Pos as four floats");
+	
+	// The rooms change only when the room cache is rebuilt; their tree is kept until then.
+	if(m_roomsDirty) {
+		if(!m_roomPositions.empty() && m_roomDefault) {
+			raybvh::build(&m_roomPositions[0].x, m_roomPositions.size() / 3, m_roomBvhNodes, m_roomBvhTris);
+		} else {
+			m_roomBvhNodes.clear();
+			m_roomBvhTris.clear();
+		}
+		m_roomsDirty = false;
+	}
+	
+	// One node buffer and one triangle buffer for the four instances: child and leaf indices
+	// are rebased to where each tree lands, and the shader starts from m_bvhRoots[instance].
+	m_swNodes.clear();
+	m_swTris.clear();
+	for(std::uint32_t & root : m_bvhRoots) {
+		root = ~0u;
+	}
+	auto append = [&](unsigned inst, const std::vector<raybvh::Node> & nodes,
+	                  const std::vector<std::uint32_t> & tris) {
+		if(nodes.empty()) {
+			return;
+		}
+		const std::uint32_t nodeBase = std::uint32_t(m_swNodes.size());
+		const std::uint32_t triBase = std::uint32_t(m_swTris.size());
+		m_bvhRoots[inst] = nodeBase;
+		for(raybvh::Node node : nodes) {
+			node.leftOrFirst += (node.count > 0) ? triBase : nodeBase;
+			m_swNodes.push_back(node);
+		}
+		m_swTris.insert(m_swTris.end(), tris.begin(), tris.end());
+	};
+	append(0, m_roomBvhNodes, m_roomBvhTris);
+	if(entityVerts >= 3 && m_vertDefault) {
+		raybvh::build(&m_positions[0].x, entityVerts / 3, m_swScratchNodes, m_swScratchTris);
+		append(1, m_swScratchNodes, m_swScratchTris);
+	}
+	if(!m_waterPositions.empty() && m_waterDefault) {
+		raybvh::build(&m_waterPositions[0].x, m_waterPositions.size() / 3, m_swScratchNodes, m_swScratchTris);
+		append(2, m_swScratchNodes, m_swScratchTris);
+	}
+	if(playerVerts >= 3 && m_vertDefault) {
+		raybvh::build(&m_positions[entityVerts].x, playerVerts / 3, m_swScratchNodes, m_swScratchTris);
+		append(3, m_swScratchNodes, m_swScratchTris);
+	}
+	if(m_swNodes.empty()) {
+		return false;
+	}
+	
+	auto upload = [&](const void * data, UINT64 bytes, ComPtr<ID3D12Resource> & buf) {
+		if(!buf || buf->GetDesc().Width < bytes) {
+			buf.reset();
+			// Room to grow, so a few more triangles next frame do not reallocate.
+			if(!createBuffer(m_device, bytes + bytes / 2 + 4096, D3D12_HEAP_TYPE_UPLOAD,
+			                 D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, buf.put())) {
+				return false;
+			}
+		}
+		void * mapped = nullptr;
+		if(FAILED(buf->Map(0, nullptr, &mapped)) || !mapped) {
+			return false;
+		}
+		std::memcpy(mapped, data, size_t(bytes));
+		buf->Unmap(0, nullptr);
+		return true;
+	};
+	if(!upload(m_swNodes.data(), UINT64(m_swNodes.size() * sizeof(raybvh::Node)), m_bvhNodeBuf)
+	   || !upload(m_swTris.data(), UINT64(m_swTris.size() * sizeof(std::uint32_t)), m_bvhTriBuf)) {
+		LogError << "RTAO: software BVH upload failed";
+		return false;
+	}
+	
+	updateDescriptors();
+	const SIZE_T heapStart = m_heap->GetCPUDescriptorHandleForHeapStart().ptr
+	                         + SIZE_T(m_rtaoBase) * m_descriptorSize;
+	D3D12_SHADER_RESOURCE_VIEW_DESC nodes {};
+	nodes.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	nodes.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	nodes.Buffer.NumElements = UINT(m_swNodes.size() * 2);
+	nodes.Buffer.StructureByteStride = 16;
+	m_device->CreateShaderResourceView(m_bvhNodeBuf.Get(), &nodes,
+	                                   D3D12_CPU_DESCRIPTOR_HANDLE { heapStart + SIZE_T(18) * m_descriptorSize });
+	D3D12_SHADER_RESOURCE_VIEW_DESC tris {};
+	tris.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	tris.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	tris.Buffer.NumElements = UINT(m_swTris.size());
+	tris.Buffer.StructureByteStride = 4;
+	m_device->CreateShaderResourceView(m_bvhTriBuf.Get(), &tris,
+	                                   D3D12_CPU_DESCRIPTOR_HANDLE { heapStart + SIZE_T(19) * m_descriptorSize });
+	return true;
+}
+
 void D3D12Rtao::rasterizeMasks(ID3D12GraphicsCommandList * list, const glm::mat4x4 & viewProj,
                                ID3D12Resource * depth, float jitterNdcX, float jitterNdcY) {
 	if(!list || !m_rtvHeap || !m_waterMask || !m_waterDepth || !m_metalMask) {
@@ -3227,15 +3523,16 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	if(!m_ready || !list || !backbuffer || !depth) {
 		return false;
 	}
-	const int aoQuality = (std::max)(0, (std::min)(settings.aoQuality, kMaxRtQuality));
-	const int shadowQuality = (std::max)(0, (std::min)(settings.shadowQuality, kMaxRtQuality));
-	const int giQuality = (std::max)(0, (std::min)(settings.giQuality, kMaxRtQuality));
-	const int transRefl = (std::max)(0, (std::min)(settings.transRefl, kMaxRtQuality));
-	const int metalRefl = (std::max)(0, (std::min)(settings.metalRefl, kMaxRtQuality));
+	const int maxQuality = m_software ? kSoftwareMaxQuality : kMaxRtQuality;
+	const int aoQuality = (std::max)(0, (std::min)(settings.aoQuality, maxQuality));
+	const int shadowQuality = (std::max)(0, (std::min)(settings.shadowQuality, maxQuality));
+	const int giQuality = (std::max)(0, (std::min)(settings.giQuality, maxQuality));
+	const int transRefl = (std::max)(0, (std::min)(settings.transRefl, maxQuality));
+	const int metalRefl = (std::max)(0, (std::min)(settings.metalRefl, maxQuality));
 	const int shadowDenoise = (std::max)(0, (std::min)(settings.shadowDenoise, kMaxShadowDenoise));
 	const int giDenoise = (std::max)(0, (std::min)(settings.giDenoise, kMaxGiDenoise));
 	const int contact = settings.contact ? 1 : 0;
-	const int fogQuality = (std::max)(0, (std::min)(settings.fogQuality, kMaxRtQuality));
+	const int fogQuality = (std::max)(0, (std::min)(settings.fogQuality, maxQuality));
 	const bool skipTemporal = settings.skipTemporal;
 	// Ray Reconstruction takes over both the accumulation and the spatial blur, so toggling it
 	// swaps denoisers mid-flight. Log the swap and the history state: a reflection that fades in
@@ -3265,12 +3562,15 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	if(m_positions.empty() && m_roomPositions.empty() && m_waterPositions.empty()) {
 		return false;
 	}
+	// DispatchRays needs CommandList4; the software path dispatches a plain compute shader.
 	ID3D12GraphicsCommandList4 * list4 = nullptr;
-	if(FAILED(list->QueryInterface(IID_PPV_ARGS(&list4))) || !list4) {
+	if(!m_software && (FAILED(list->QueryInterface(IID_PPV_ARGS(&list4))) || !list4)) {
 		return false;
 	}
-	if(!ensureGeometryBuffers(list) || !buildAcceleration(list)) {
-		list4->Release();
+	if(!ensureGeometryBuffers(list) || !(m_software ? buildSoftwareBvh() : buildAcceleration(list))) {
+		if(list4) {
+			list4->Release();
+		}
 		return false;
 	}
 	timestamp(kTsAccelEnd);
@@ -3414,6 +3714,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 			viewCb.fogDensity = 1.f;
 			viewCb.fogRange = kFogRange;
 			viewCb.fogAlpha = (m_histValid && !skipTemporal) ? kFogAlpha : 0.f;
+			std::memcpy(viewCb.bvhRoots, m_bvhRoots, sizeof(viewCb.bvhRoots));
 			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
 		}
@@ -3421,7 +3722,7 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	}
 	
 	D3D12_DISPATCH_RAYS_DESC rays {};
-	const D3D12_GPU_VIRTUAL_ADDRESS table = m_shaderTable->GetGPUVirtualAddress();
+	const D3D12_GPU_VIRTUAL_ADDRESS table = m_shaderTable ? m_shaderTable->GetGPUVirtualAddress() : 0;
 	rays.RayGenerationShaderRecord.StartAddress = table;
 	rays.RayGenerationShaderRecord.SizeInBytes = kShaderRecord;
 	rays.MissShaderTable.StartAddress = table + kShaderRecord;
@@ -3433,11 +3734,17 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 	rays.Width = UINT(m_width);
 	rays.Height = UINT(m_height);
 	rays.Depth = 1;
-	list4->SetPipelineState1(m_rtState.Get());
 	timestamp(kTsTraceStart);
-	list4->DispatchRays(&rays);
+	if(m_software) {
+		// Same root signature and bindings, one thread per pixel in 8x8 groups (CSMain).
+		list->SetPipelineState(m_swPso.Get());
+		list->Dispatch((UINT(m_width) + 7u) / 8u, (UINT(m_height) + 7u) / 8u, 1);
+	} else {
+		list4->SetPipelineState1(m_rtState.Get());
+		list4->DispatchRays(&rays);
+		list4->Release();
+	}
 	timestamp(kTsTraceEnd);
-	list4->Release();
 	uavBarrier(list, m_ao.Get());
 	uavBarrier(list, m_shadow.Get());
 	uavBarrier(list, m_gi.Get());

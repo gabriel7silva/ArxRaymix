@@ -2815,7 +2815,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 			LogInfo << "Streamline: swapchain upgraded — Present will call presentCommon";
 		}
 	}
-	LogInfo << "Ray tracing: DXR=" << (supportsRayTracing() ? "yes" : "no")
+	LogInfo << "Ray tracing: DXR=" << (supportsRayTracing() ? (m_rtao->software() ? "software" : "yes") : "no")
 	        << " DLSS=" << (supportsDlss() ? "yes" : "no")
 	        << " DLSS-RR=" << (supportsDlssRr() ? "yes" : "no")
 	        << " DLSS-G=" << (supportsDlssG() ? "yes" : "no");
