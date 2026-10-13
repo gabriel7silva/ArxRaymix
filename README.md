@@ -19,7 +19,23 @@
 
 It is the same game. You need your own copy of Arx Fatalis (Steam or GOG); no game data is included or redistributed.
 
-<!-- TODO Gabriel: add 3–4 screenshots here (RT on/off comparison, water reflection, torch shadows, Options → Ray tracing page). Suggested path: docs/assets/screenshots/*.jpg -->
+## Screenshots
+
+| Ray tracing off | Ray tracing on |
+|---|---|
+| <img src="docs/assets/screenshots/rt-off-player-shadow.jpg" alt="Ray tracing off: your own shadow from the torch" width="100%"> | <img src="docs/assets/screenshots/rt-on-player-shadow.jpg" alt="Ray tracing on: your own shadow from the torch" width="100%"> |
+| <img src="docs/assets/screenshots/rt-off-room.jpg" alt="Ray tracing off: sewer room" width="100%"> | <img src="docs/assets/screenshots/rt-on-room.jpg" alt="Ray tracing on: sewer room" width="100%"> |
+| <img src="docs/assets/screenshots/rt-off-corridor.jpg" alt="Ray tracing off: corridor" width="100%"> | <img src="docs/assets/screenshots/rt-on-corridor.jpg" alt="Ray tracing on: corridor" width="100%"> |
+
+<p align="center">
+  <img src="docs/assets/screenshots/sewer-water.jpg" alt="Sewer water with ray traced reflections" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/menu-options.jpg" alt="Options menu" width="32%"> <img src="docs/assets/screenshots/menu-ray-tracing.jpg" alt="Options, Ray tracing page" width="32%"> <img src="docs/assets/screenshots/menu-video-dlss.jpg" alt="Options, Video page with DLSS and Frame Generation" width="32%">
+</p>
+
+Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 1920×1080, DLSS Quality.
 
 ## Features
 

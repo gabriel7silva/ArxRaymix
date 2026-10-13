@@ -10,6 +10,24 @@
 
 A documentação oficial é a em inglês: [README](../README.md) e [INSTALL.md](INSTALL.md). Para compilar a partir do código, veja [pt-BR/README.md](pt-BR/README.md).
 
+## Imagens
+
+| Ray tracing desligado | Ray tracing ligado |
+|---|---|
+| <img src="../docs/assets/screenshots/rt-off-player-shadow.jpg" alt="Ray tracing desligado: a sua sombra na luz da tocha" width="100%"> | <img src="../docs/assets/screenshots/rt-on-player-shadow.jpg" alt="Ray tracing ligado: a sua sombra na luz da tocha" width="100%"> |
+| <img src="../docs/assets/screenshots/rt-off-room.jpg" alt="Ray tracing desligado: sala do esgoto" width="100%"> | <img src="../docs/assets/screenshots/rt-on-room.jpg" alt="Ray tracing ligado: sala do esgoto" width="100%"> |
+| <img src="../docs/assets/screenshots/rt-off-corridor.jpg" alt="Ray tracing desligado: corredor" width="100%"> | <img src="../docs/assets/screenshots/rt-on-corridor.jpg" alt="Ray tracing ligado: corredor" width="100%"> |
+
+<p align="center">
+  <img src="../docs/assets/screenshots/sewer-water.jpg" alt="Água do esgoto com reflexos em ray tracing" width="100%">
+</p>
+
+<p align="center">
+  <img src="../docs/assets/screenshots/menu-options.jpg" alt="Menu de opções" width="32%"> <img src="../docs/assets/screenshots/menu-ray-tracing.jpg" alt="Opções, página Ray tracing" width="32%"> <img src="../docs/assets/screenshots/menu-video-dlss.jpg" alt="Opções, página Vídeo com DLSS e Frame Generation" width="32%">
+</p>
+
+Cada par é o mesmo lugar com **F7** (ray tracing ligado / desligado). RTX 4050 Laptop, 1920×1080, DLSS Qualidade.
+
 ## Requisitos
 
 | | |
