@@ -23,6 +23,7 @@
 #include <string>
 
 #include "audio/AudioTypes.h"
+#include "core/DxrPreset.h"
 
 #include "input/InputKey.h"
 
@@ -303,6 +304,8 @@ public:
 	void applyDxrPreset(int preset);
 	//! True when any hybrid DXR effect is on (used to skip the pass).
 	[[nodiscard]] bool dxrEffectsEnabled() const;
+	//! The ray tracing sliders as they are now, in the preset table's layout.
+	[[nodiscard]] DxrPresetValues currentDxrValues() const;
 	
 	/*!
 	 * Saves all config entries to a file.

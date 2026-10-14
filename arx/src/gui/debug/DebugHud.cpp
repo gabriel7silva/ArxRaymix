@@ -27,6 +27,8 @@
 #include <iomanip>
 #include <deque>
 #include <numeric>
+#include <sstream>
+#include <vector>
 
 #include <boost/circular_buffer.hpp>
 #include <boost/format.hpp>
@@ -57,6 +59,7 @@
 #include "game/magic/SpellRecognition.h"
 
 #include "graphics/Renderer.h"
+#include "graphics/Draw.h"
 #include "graphics/DrawLine.h"
 #include "graphics/effects/Decal.h"
 #include "graphics/particle/Spark.h"
@@ -409,81 +412,136 @@ void ShowPerformanceOverlay(int level) {
 	hFontDebug->draw(Vec2i(x, 10), text, Color::white);
 }
 
+// Second F11 panel: milliseconds per frame over the last few seconds, for comparison shots (F7
+// toggles ray tracing, so the same view can be graphed with and without it). The whole frame as
+// the CPU sees it in white, the GPU frame in green and the ray tracing pass in orange, with
+// guides at 120, 60 and 30 FPS.
 static boost::circular_buffer<float> frameDurationPlotValues;
+static boost::circular_buffer<float> gpuDurationPlotValues;
+static boost::circular_buffer<float> rayDurationPlotValues;
 static std::vector<TexturedVertex> frameDurationPlotVertices;
+
+namespace {
+
+struct PlotStats {
+	float avg = 0.f;
+	float worst = 0.f;
+	float current = 0.f;
+};
+
+PlotStats plotStats(const boost::circular_buffer<float> & values) {
+	PlotStats stats;
+	if(values.empty()) {
+		return stats;
+	}
+	stats.avg = std::accumulate(values.begin(), values.end(), 0.f) / float(values.size());
+	stats.worst = *std::max_element(values.begin(), values.end());
+	stats.current = values[0];
+	return stats;
+}
+
+} // anonymous namespace
 
 void ShowFrameDurationPlot() {
 	
-	Vec2i windowSize = mainApp->getWindow()->getSize();
-	size_t maxSamples = size_t(windowSize.x);
-	
-	if(maxSamples != frameDurationPlotValues.capacity()) {
-		frameDurationPlotValues.set_capacity(maxSamples);
+	if(!mainApp || !mainApp->getWindow() || !hFontDebug) {
+		return;
 	}
-	if(maxSamples != frameDurationPlotVertices.size()) {
+	Font * font = hFontDebug;
+	const Vec2i windowSize = mainApp->getWindow()->getSize();
+	const float lineOffset = float(font->getLineHeight() + 2);
+	
+	// The graph sits under five lines of text and spans the window, newest frame on the left.
+	const float left = 10.f;
+	const float right = float(windowSize.x) - 10.f;
+	const float top = 10.f + lineOffset * 5.f + 6.f;
+	const float height = std::min(200.f, float(windowSize.y) * 0.3f);
+	const float bottom = top + height;
+	const float maxMs = 50.f;
+	const float scale = height / maxMs;
+	const size_t maxSamples = size_t(std::max(right - left, 1.f));
+	
+	for(boost::circular_buffer<float> * values : { &frameDurationPlotValues, &gpuDurationPlotValues,
+	                                               &rayDurationPlotValues }) {
+		if(values->capacity() != maxSamples) {
+			values->set_capacity(maxSamples);
+		}
+	}
+	if(frameDurationPlotVertices.size() != maxSamples) {
 		frameDurationPlotVertices.resize(maxSamples);
+	}
+	
+	frameDurationPlotValues.push_front(toMsf(g_platformTime.lastFrameDuration()));
+	const Renderer::GpuTimings gpu = GRenderer ? GRenderer->gpuTimings() : Renderer::GpuTimings();
+	if(gpu.valid) {
+		gpuDurationPlotValues.push_front(gpu.frameMs);
+		rayDurationPlotValues.push_front(gpu.rayMs);
 	}
 	
 	GRenderer->ResetTexture(0);
 	
-	frameDurationPlotValues.push_front(toMsf(g_platformTime.lastFrameDuration()));
-	
-	float avg = std::accumulate(frameDurationPlotValues.begin(), frameDurationPlotValues.end(), 0.f);
-	avg /= float(frameDurationPlotValues.size());
-	float worst = *std::max_element(frameDurationPlotValues.begin(), frameDurationPlotValues.end());
-	
-	const float OFFSET_Y = 80.f;
-	const float SCALE_Y = 4.0f;
-
-	for(size_t i = 0; i < frameDurationPlotValues.size(); ++i)
 	{
-		float time = frameDurationPlotValues[i];
-		frameDurationPlotVertices[i].color = Color::white.toRGB();
-		frameDurationPlotVertices[i].p.x = i;
-		frameDurationPlotVertices[i].p.y = OFFSET_Y + (time * SCALE_Y);
-		frameDurationPlotVertices[i].p.z = 1.0f;
-		frameDurationPlotVertices[i].w = 1.0f;
+		UseRenderState state(render2D().blend(BlendSrcAlpha, BlendInvSrcAlpha));
+		EERIEDrawBitmap(Rectf(Vec2f(left, top), right - left, height), 0.000001f, nullptr,
+		                Color(0, 0, 0, 150));
 	}
-
-	EERIEDRAWPRIM(Renderer::LineStrip, frameDurationPlotVertices.data(), frameDurationPlotValues.size());
-
-	Color avgColor = Color::blue * 0.5f + Color::white * 0.5f;
-	float avgPos = OFFSET_Y + (avg * SCALE_Y);
-	drawLine(Vec2f(0, avgPos), Vec2f(windowSize.x, avgPos), 1.0f, Color::blue);
-
-	Color worstColor = Color::red * 0.5f + Color::white * 0.5f;
-	float worstPos = OFFSET_Y + (worst * SCALE_Y);
-	drawLine(Vec2f(0, worstPos), Vec2f(windowSize.x, worstPos), 1.0f, Color::red);
-
-	Font * font = hFontDebug;
-	float lineOffset = font->getLineHeight() + 2;
 	
-	const std::array<std::string_view, 3> labels = { "Average: ", "Worst: ", "Current: " };
-	const std::array<Color, 3> colors = { avgColor, worstColor, Color::white };
-	const std::array<float, 3> values = { avg, worst, frameDurationPlotValues[0] };
+	auto yFor = [&](float ms) {
+		return bottom - std::min(std::max(ms, 0.f), maxMs) * scale;
+	};
 	
-	std::string texts[3];
-	float widths[3];
-	static float labelWidth = 0.f;
-	static float valueWidth = 0.f;
-	for(size_t i = 0; i < 3; i++) {
-		// Format value
+	// Guides at 120, 60 and 30 FPS, labelled on the right.
+	const std::array<float, 3> guideMs = { 1000.f / 120.f, 1000.f / 60.f, 1000.f / 30.f };
+	const std::array<std::string_view, 3> guideLabels = { "120 FPS", "60 FPS", "30 FPS" };
+	for(size_t i = 0; i < guideMs.size(); i++) {
+		const float y = yFor(guideMs[i]);
+		drawLine(Vec2f(left, y), Vec2f(right, y), 1.f, Color::gray(0.35f));
+		const int labelWidth = font->getTextSize(guideLabels[i]).width();
+		font->draw(Vec2i(int(right) - labelWidth - 4, int(y) - font->getLineHeight()), guideLabels[i],
+		           Color::gray(0.6f));
+	}
+	
+	auto plot = [&](const boost::circular_buffer<float> & values, Color color) {
+		if(values.size() < 2) {
+			return;
+		}
+		for(size_t i = 0; i < values.size(); ++i) {
+			TexturedVertex & v = frameDurationPlotVertices[i];
+			v.color = color.toRGB();
+			v.p.x = left + float(i);
+			v.p.y = yFor(values[i]);
+			v.p.z = 1.0f;
+			v.w = 1.0f;
+		}
+		EERIEDRAWPRIM(Renderer::LineStrip, frameDurationPlotVertices.data(), values.size());
+	};
+	const Color gpuColor(118, 185, 0);
+	const Color rayColor(255, 150, 40);
+	plot(rayDurationPlotValues, rayColor);
+	plot(gpuDurationPlotValues, gpuColor);
+	plot(frameDurationPlotValues, Color::white);
+	
+	// Legend: average, worst and current for each series.
+	auto line = [&](float y, std::string_view label, const PlotStats & stats, Color color, bool fps) {
 		std::ostringstream oss;
-		oss << std::fixed << std::setprecision(2) << values[i] << " ms ("<< 1.f / (values[i] * 0.001f) << " FPS)";
-		texts[i] = oss.str();
-		// Calculate widths (could be done more efficiently for monospace fonts...)
-		labelWidth = std::max(labelWidth, float(font->getTextSize(labels[i]).width()));
-		widths[i] = font->getTextSize(texts[i]).width();
-		valueWidth = std::max(valueWidth, widths[i]);
-	}
-
-	float x = 10;
-	float y = 10;
-	float xend = x + labelWidth + 10 + valueWidth;
-	for(size_t i = 0; i < 3; i++) {
-		font->draw(Vec2i(x, y), labels[i], Color::gray(0.8f));
-		font->draw(Vec2i(xend - widths[i], y), texts[i], colors[i]);
+		oss << std::fixed << std::setprecision(2) << label << "avg " << stats.avg << " ms   worst "
+		    << stats.worst << " ms   now " << stats.current << " ms";
+		if(fps && stats.avg > 0.f) {
+			oss << std::setprecision(1) << "   (" << 1000.f / stats.avg << " FPS)";
+		}
+		font->draw(Vec2i(10, int(y)), oss.str(), color);
+	};
+	float y = 10.f;
+	font->draw(Vec2i(10, int(y)), dlssStatusLine(false), Color::gray(0.8f));
+	y += lineOffset;
+	line(y, "Frame  ", plotStats(frameDurationPlotValues), Color::white, true);
+	y += lineOffset;
+	if(gpu.valid || !gpuDurationPlotValues.empty()) {
+		line(y, "GPU    ", plotStats(gpuDurationPlotValues), gpuColor, false);
 		y += lineOffset;
+		line(y, "Ray    ", plotStats(rayDurationPlotValues), rayColor, false);
+	} else {
+		font->draw(Vec2i(10, int(y)), "GPU timings unavailable with this renderer", Color::gray(0.6f));
 	}
-
+	
 }

@@ -28,10 +28,14 @@ $root = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) {
     $OutDir = Join-Path $root 'dist'
 }
+# Absolute: .NET calls below resolve relative paths against their own current folder.
+$OutDir = (Resolve-Path -LiteralPath $OutDir).ProviderPath
 $stage = Join-Path $OutDir "ArxRaymix-$Version"
 if (-not (Test-Path -LiteralPath (Join-Path $stage 'package.txt'))) {
     throw "$stage has no package.txt. Run scripts/package.ps1 -Version $Version first."
 }
+# Absolute and without a trailing separator: the folder list below cuts this prefix off FullName.
+$stage = (Resolve-Path -LiteralPath $stage).ProviderPath.TrimEnd([char]92)
 
 $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
 if (-not $makensis) {

@@ -782,6 +782,12 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	   && (m_targetSet & needed) == needed && m_gpu->mvec) {
 		return true;
 	}
+	// The renderer only waits for the previous frame on some paths before this runs; freeing
+	// mvec / hdrOut / the descriptor heap while that frame's DLSS still reads them is a page
+	// fault, so make sure the GPU is idle first.
+	if(m_targetSet != 0 && m_gpuIdleHook) {
+		m_gpuIdleHook();
+	}
 	releaseTargets();
 	// Name the resource. "targets failed" on its own turns every allocation in this function into
 	// a suspect, and the failure latches until the next resize, so it is not easy to catch twice.
@@ -843,10 +849,14 @@ bool D3D12Streamline::ensureTargets(int inputW, int inputH, int outputW, int out
 	// Input resolution, not output: this is what Ray Reconstruction reads, before it upscales.
 	// It is created in the state it rests in — a shader resource — because linearizeSceneColour
 	// runs every Ray Reconstruction frame and has to leave the resource the way it found it.
+	// Only a quality aid: without it Ray Reconstruction reads the scene colour directly
+	// (linearizeSceneColour checks for it). Failing the whole set here latched until the next
+	// resize and dropped the blit, leaving the world black under the HUD.
 	if(needHdrOut
 	   && !makeTex(m_device, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT, rt,
 	               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &m_gpu->linearIn)) {
-		return fail("linearIn");
+		LogWarning << "Streamline: linear input target unavailable; Ray Reconstruction reads the scene colour";
+		m_gpu->linearIn = nullptr;
 	}
 	if(needHudless
 	   && !makeTex(m_device, ow, oh, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_NONE,

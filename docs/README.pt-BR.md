@@ -42,7 +42,7 @@ Cada par é o mesmo lugar com **F7** (ray tracing ligado / desligado). RTX 4050 
 | Ray tracing | Qualquer GPU Direct3D 12. Com suporte a DirectX Raytracing (DXR), roda nos núcleos RT, com cada efeito até Alto; sem DXR, roda por software, com cada efeito limitado a Baixo |
 | DLSS Super Resolution / Ray Reconstruction | GPU NVIDIA GeForce RTX |
 | DLSS Frame Generation | GPU NVIDIA GeForce RTX série 40 ou mais nova |
-| GPU mínima / recomendada | <!-- TODO Gabriel: preencher --> |
+| GPU mínima / recomendada | Mínima: qualquer placa com driver Direct3D 12 (ray tracing desligado). Recomendada para ray tracing: NVIDIA GeForce RTX com 6 GB ou mais. Desenvolvido e testado numa RTX 4050 Laptop (6 GB): preset Alto com DLSS Qualidade. Outras placas ainda não foram testadas |
 
 Não é preciso mais nada: nem patch, nem outro mod, nem o Arx Libertatis instalado. As versões da Steam e da GOG já trazem os dados de que o motor precisa.
 
@@ -106,7 +106,7 @@ Com uma GPU com DXR, o jogo escolhe um preset de ray tracing pela memória de v�
 
 ## Atualização
 
-A partir da v1.4, o `ArxRaymix.exe` consulta a última versão no GitHub ao abrir. Se houver versão nova, oferece **Atualizar agora**, **Agora não** ou **Pular esta versão**. Se você aceitar, ele baixa o zip, confere o SHA-256, troca só os arquivos do mod e abre o jogo. A versão anterior fica na pasta `backup`, e `ArxRaymix.exe --rollback` volta para ela. Sem internet ou com erro, ele só abre o jogo. Baixou o zip pelo Nexus? `ArxRaymix.exe --install <zip>` instala do mesmo jeito. Ele **nunca** mexe no `cfg.ini`, nos saves nem na pasta do Arx Fatalis.
+A partir da v1.4, o `ArxRaymix.exe` consulta a última versão no GitHub ao abrir. Se houver versão nova, oferece **Atualizar agora**, **Agora não** ou **Pular esta versão**. Se você aceitar, ele baixa o zip, confere o SHA-256, troca só os arquivos do mod e abre o jogo. A versão anterior fica na pasta `.arxraymix-backup`, e `ArxRaymix.exe --rollback` volta para ela. Sem internet ou com erro, ele só abre o jogo. Baixou o zip pelo Nexus? `ArxRaymix.exe --install <zip>` instala do mesmo jeito. Ele **nunca** mexe no `cfg.ini`, nos saves nem na pasta do Arx Fatalis.
 
 Quem abre o `arx.exe` direto vê um aviso de **nova versão disponível** no menu principal. Para desligar: **Opções → Interface → Verificar atualizações**.
 

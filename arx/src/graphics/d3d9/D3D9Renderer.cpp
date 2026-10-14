@@ -1377,18 +1377,22 @@ bool D3D9Renderer::resetDevice(int width, int height) {
 	}
 	invalidateTextureStages();
 	D3DPRESENT_PARAMETERS pp = makePresentParams(static_cast<HWND>(m_hwnd), width, height, m_vsync);
+	// Remember the size even if Reset fails: recoverDeviceIfNeeded resets to m_width x m_height
+	// once the device can be reset, and a resize during a lost device must not be undone there.
+	m_width = width;
+	m_height = height;
 	const HRESULT hr = m_device->Reset(&pp);
 	if(FAILED(hr)) {
 		LogWarning << "D3D9: Reset failed (hr=" << long(hr) << ") size=" << width << "x" << height;
 		m_deviceLost = true;
 		return false;
 	}
-	m_width = width;
-	m_height = height;
 	m_appliedStateValid = false;
 	m_deviceLost = false;
 	applyDefaultStates();
 	SetViewport(Rect(0, 0, m_width, m_height));
+	// Reset drops the scissor rectangle with the rest of the device state.
+	SetScissor(m_scissor);
 	LogInfo << "D3D9: Reset device " << width << "x" << height
 	        << " vsync=" << m_vsync << " hwnd=" << m_hwnd;
 	return true;

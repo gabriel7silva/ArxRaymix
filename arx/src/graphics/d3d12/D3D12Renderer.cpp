@@ -1620,10 +1620,18 @@ struct D3D12Renderer::Impl {
 	std::vector<DxPtr<ID3D12Resource>> inflight;
 	std::vector<ID3D12Resource *> releaseOnSubmit;
 	std::vector<std::pair<ID3D12Resource *, UINT64>> retire;
+	//! Freed SRV indices take the same road as freed textures: the descriptor may still be named
+	//! by draws in the open list, by the frame in flight or by the ray pass's bindless range, so
+	//! it returns to freeSrv only once the fence of the list that last used it completes.
+	std::vector<unsigned> srvOnSubmit;
+	std::vector<std::pair<unsigned, UINT64>> srvRetire;
 	HANDLE fenceEvent = nullptr;
 	UINT64 fenceValue = 0;
 	UINT64 frameFence[kFrameCount] {};
 	UINT frame = 0;
+	//! Back buffer shown by the last Present, kFrameCount before the first one. Snapshots (F10,
+	//! save thumbnails) are taken between frames, when `frame` already names the next buffer.
+	UINT lastPresented = kFrameCount;
 	UINT rtvSize = 0;
 	UINT srvSize = 0;
 	UINT sampSize = 0;
@@ -1954,7 +1962,13 @@ void D3D12Renderer::freeSrv(unsigned index) {
 	if(!m || index == 0) {
 		return;
 	}
-	m->freeSrv.push_back(index);
+	if(m->recording) {
+		m->srvOnSubmit.push_back(index);
+	} else if(m->fence) {
+		m->srvRetire.push_back({ index, m->fenceValue + 1 });
+	} else {
+		m->freeSrv.push_back(index);
+	}
 	// The room geometry stores this index per triangle and is only re-uploaded when the room
 	// cache is rebuilt, so it can outlive the texture by many frames. Once the index is back in
 	// the pool the next texture takes it, and a reflected wall would quietly wear that texture
@@ -2181,6 +2195,15 @@ void D3D12Renderer::retireCompleted() {
 		}
 	}
 	m->retire.resize(live);
+	size_t liveSrv = 0;
+	for(size_t i = 0; i < m->srvRetire.size(); ++i) {
+		if(m->srvRetire[i].second <= done) {
+			m->freeSrv.push_back(m->srvRetire[i].first);
+		} else {
+			m->srvRetire[liveSrv++] = m->srvRetire[i];
+		}
+	}
+	m->srvRetire.resize(liveSrv);
 }
 
 //! Hand everything the just-submitted command list referenced to the retire list, to be released
@@ -2196,6 +2219,10 @@ void D3D12Renderer::retireSubmitted(std::uint64_t value) {
 		m->retire.push_back({ res, value });
 	}
 	m->releaseOnSubmit.clear();
+	for(unsigned index : m->srvOnSubmit) {
+		m->srvRetire.push_back({ index, value });
+	}
+	m->srvOnSubmit.clear();
 }
 
 bool D3D12Renderer::waitFence(std::uint64_t value) {
@@ -2673,6 +2700,7 @@ void D3D12Renderer::resizeSwapchain(int width, int height) {
 	m->device->CreateDepthStencilView(m->depth.Get(), &dsv,
 	                                  m->dsvHeap->GetCPUDescriptorHandleForHeapStart());
 	m->frame = m->swapchain->GetCurrentBackBufferIndex();
+	m->lastPresented = kFrameCount; // the buffers were just re-created
 	m->inPresentState = true;
 	if(m_rtao) {
 		m_rtao->resize(width, height);
@@ -2695,6 +2723,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	if(!m_sl) {
 		m_sl = new D3D12Streamline();
 	}
+	m_sl->setGpuIdleHook([this]() { (void)waitGpu(); });
 	m_sl->init();
 	
 	// Arm the diagnostics before the device exists — neither can be turned on afterwards.
@@ -2834,6 +2863,7 @@ bool D3D12Renderer::createDevice(void * nativeHwnd, int width, int height) {
 	m_loggedShadowsOn = false;
 	m_loggedGiOff = false;
 	m_loggedGiOn = false;
+	m_loggedFogOn = false;
 	m_loggedReflOff = false;
 	m_loggedReflOn = false;
 	return true;
@@ -3530,8 +3560,15 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 	if(!m || m->unusable || !m->device || !m->queue || !m->backbuffers[m->frame] || width == 0 || height == 0) {
 		return false;
 	}
-	waitGpu();
-	ID3D12Resource * src = m->backbuffers[m->frame].Get();
+	if(!waitGpu()) {
+		return false;
+	}
+	// Between frames `frame` names the next back buffer, which holds an older picture (or
+	// nothing). The one just presented is in PRESENT (COMMON) state whatever is being recorded.
+	const bool usePresented = m->lastPresented < kFrameCount && m->lastPresented != m->frame
+	                          && m->backbuffers[m->lastPresented];
+	ID3D12Resource * src = m->backbuffers[usePresented ? m->lastPresented : m->frame].Get();
+	const bool srcInPresentState = usePresented || m->inPresentState;
 	const D3D12_RESOURCE_DESC srcDesc = src->GetDesc();
 	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};
 	UINT64 uploadSize = 0;
@@ -3558,7 +3595,7 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 	if(!ensureCommandList()) {
 		return false;
 	}
-	if(!m->inPresentState) {
+	if(!srcInPresentState) {
 		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	} else {
 		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -3571,7 +3608,7 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 	srcLoc.pResource = src;
 	srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
 	m->list->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, nullptr);
-	if(!m->inPresentState) {
+	if(!srcInPresentState) {
 		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	} else {
 		transition(m->list.Get(), src, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
@@ -3584,14 +3621,19 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 	m->queue->ExecuteCommandLists(1, lists);
 	m->recording = false;
 	retireSubmitted(m->fenceValue + 1);
-	waitGpu();
+	if(!waitGpu()) {
+		// The copy may still be running into the readback buffer; it must not be released early.
+		return false;
+	}
 	void * mapped = nullptr;
 	if(FAILED(readback->Map(0, nullptr, &mapped)) || !mapped) {
 		return false;
 	}
 	const UINT srcW = UINT(srcDesc.Width);
 	const UINT srcH = UINT(srcDesc.Height);
-	image.create(width, height, Image::Format_B8G8R8A8);
+	// The swap chain is R8G8B8A8, unlike D3D9's X8R8G8B8: tagging it BGRA swapped red and blue.
+	// Alpha holds whatever the last blend left, so it is forced opaque.
+	image.create(width, height, Image::Format_R8G8B8A8);
 	unsigned char * out = image.getData();
 	const char * rows = static_cast<const char *>(mapped);
 	for(size_t y = 0; y < height; ++y) {
@@ -3600,7 +3642,7 @@ bool D3D12Renderer::getSnapshot(Image & image, size_t width, size_t height) {
 		u32 * dstRow = reinterpret_cast<u32 *>(out + y * width * 4);
 		for(size_t x = 0; x < width; ++x) {
 			const size_t sx = (width == 1) ? 0 : x * (srcW - 1) / (width - 1);
-			dstRow[x] = srcRow[sx];
+			dstRow[x] = srcRow[sx] | 0xff000000u;
 		}
 	}
 	readback->Unmap(0, nullptr);
@@ -3646,7 +3688,9 @@ Renderer::DlssDebugState D3D12Renderer::dlssDebugState() const {
 	s.displayH = m_height;
 	s.renderW = (m && m->sceneUsed && m->sceneW > 0) ? m->sceneW : m_width;
 	s.renderH = (m && m->sceneUsed && m->sceneH > 0) ? m->sceneH : m_height;
-	s.mode = config.video.dxrDlss;
+	// The mode actually in use: on a GPU without DLSS the saved setting is ignored, and the F11
+	// line said "Mode Quality AA=DLSS" over a native image.
+	s.mode = supportsDlss() ? config.video.dxrDlss : 0;
 	s.sceneRT = m && m->sceneUsed && m->sceneReady;
 	s.rr = config.video.dxrRr > 0 && supportsDlssRr() && supportsRayTracing()
 	       && config.dxrEffectsEnabled();
@@ -4294,8 +4338,10 @@ void D3D12Renderer::applyWorldRayEffects() {
 	m->list->EndEvent();
 	markTimestamp(kTsRayEnd);
 	restoreRasterBind();
-	m_rtao->beginWorldFrame();
+	// Ray Reconstruction reads whether the water / metal masks were rasterized this frame, and
+	// beginWorldFrame() clears that flag: clearing it first fed RR the albedo instead of the masks.
 	applyStreamlineRr();
+	m_rtao->beginWorldFrame();
 }
 
 void D3D12Renderer::showFrame() {
@@ -4354,6 +4400,7 @@ void D3D12Renderer::showFrame() {
 	}
 	m->frameFence[m->frame] = value;
 	m->recording = false;
+	m->lastPresented = m->frame;
 	m->frame = m->swapchain->GetCurrentBackBufferIndex();
 }
 

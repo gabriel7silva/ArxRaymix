@@ -40,6 +40,7 @@
 #include "core/Localisation.h"
 #include "core/SaveGame.h"
 #include "core/UpdateCheck.h"
+#include "core/UpdateRelease.h"
 #include "core/Version.h"
 
 #include "gui/Hud.h"
@@ -766,6 +767,10 @@ public:
 			std::string current = std::string(getLocalised("system_menus_options_video_graphics_api"));
 			current += ": ";
 			current += activeGraphicsApiName();
+			if(g_rendererFellBackToD3D9) {
+				current += " ";
+				current += getLocalised("system_menus_options_video_api_fallback");
+			}
 			auto currentApi = std::make_unique<TextWidget>(hFontMenu, current);
 			currentApi->setEnabled(false);
 			addCenter(std::move(currentApi), false);
@@ -787,7 +792,10 @@ public:
 			addCenter(std::move(slider));
 		}
 		{
-			if(graphicsApiChoice(config.video.renderer) != activeGraphicsApiChoice()) {
+			// After a failed Direct3D 12 start the choice and the API differ, but a restart would
+			// not change that; the line above already says what happened.
+			if(graphicsApiChoice(config.video.renderer) != activeGraphicsApiChoice()
+			   && !(g_rendererFellBackToD3D9 && graphicsApiChoice(config.video.renderer) == 0)) {
 				auto restart = std::make_unique<TextWidget>(hFontControls,
 					getLocalised("system_menus_options_video_api_restart"));
 				restart->setEnabled(false);
@@ -2538,14 +2546,13 @@ void MainMenu::update() {
 	
 	if(!m_updateNotice) {
 		if(std::optional<updates::Available> release = updates::available()) {
-			// Right-aligned under the version line; clicking opens the release page.
+			// Right-aligned under the version line; clicking opens the mod's Nexus Mods page, where
+			// players download it (the launcher's own dialog links the GitHub release notes).
 			std::string text = std::string(getLocalised("system_menus_main_update_available")) + " " + release->tag;
 			float x = g_size.right - 20 * g_sizeRatio.x - hFontControls->getTextSize(text).width();
 			auto txt = std::make_unique<TextWidget>(hFontControls, text);
-			txt->clicked = [url = release->pageUrl](Widget * /* widget */) {
-				if(!url.empty()) {
-					platform::launchDefaultProgram(url);
-				}
+			txt->clicked = [](Widget * /* widget */) {
+				platform::launchDefaultProgram(std::string(updates::kModPageUrl));
 			};
 			txt->setPosition(RATIO_2(Vec2f(x / g_sizeRatio.x, 80)) + Vec2f(0.f, float(hFontControls->getLineHeight())));
 			m_updateNotice = txt.get();

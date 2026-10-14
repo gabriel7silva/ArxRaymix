@@ -11,6 +11,8 @@
 
 #if ARX_HAVE_D3D12
 
+#include <functional>
+
 #include <glm/glm.hpp>
 
 struct ID3D12Device;
@@ -103,7 +105,12 @@ public:
 	
 	void resize(int width, int height);
 	
+	//! Called before the targets are released to be re-created (a size or feature-set change):
+	//! the previous frames may still read them. The renderer waits for the GPU there.
+	void setGpuIdleHook(std::function<void()> hook) { m_gpuIdleHook = std::move(hook); }
+	
 private:
+	std::function<void()> m_gpuIdleHook;
 	enum TargetBits : unsigned {
 		kTargetMvec = 1u,
 		kTargetHudless = 2u,

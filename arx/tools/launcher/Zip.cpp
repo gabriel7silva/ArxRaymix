@@ -184,6 +184,10 @@ bool extract(const std::filesystem::path & archive, const Entry & entry,
 				break;
 			}
 			size_t produced = output.size() - stream.avail_out;
+			if(written + produced > entry.size) {
+				ok = false; // more data than the directory says: a broken or hostile archive
+				break;
+			}
 			out.write(output.data(), std::streamsize(produced));
 			crc = crc32(crc, reinterpret_cast<const Bytef *>(output.data()), uInt(produced));
 			written += produced;

@@ -70,7 +70,7 @@ v1.4 added auto-update, F7, the performance overlay and the first-run language p
 | Ray tracing | Any Direct3D 12 GPU. With DirectX Raytracing (DXR) support it runs on the RT cores, every effect up to High; without DXR it runs in software, each effect held at Low |
 | DLSS Super Resolution / Ray Reconstruction | An NVIDIA GeForce RTX GPU |
 | DLSS Frame Generation | An NVIDIA GeForce RTX 40 series GPU or newer |
-| Minimum / recommended GPU | <!-- TODO Gabriel: fill in tested GPUs and VRAM (development hardware: RTX 4050 Laptop) --> |
+| Minimum / recommended GPU | Minimum: any GPU with a Direct3D 12 driver (ray tracing off). Recommended for ray tracing: an NVIDIA GeForce RTX with 6 GB or more. Developed and tested on an RTX 4050 Laptop (6 GB): High preset with DLSS Quality. Other GPUs have not been tested yet |
 
 Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. The Steam and GOG releases already contain the data the engine needs.
 
@@ -121,7 +121,7 @@ The `cfg.ini` keys behind these settings are listed in [docs/CONFIGURATION.md](d
 
 ## Updating
 
-From v1.4, `ArxRaymix.exe` checks the latest GitHub Release when it starts. If there is a newer version it offers to update. On yes, it downloads the zip, checks its SHA-256, replaces only the mod's own files (the old ones go to `backup`, and `ArxRaymix.exe --rollback` restores them) and starts the game. Offline or on any error it just starts the game. It never touches `cfg.ini`, your saves or the Arx Fatalis folder. If you start `arx.exe` directly, the main menu shows a "new version available" notice instead; turn it off in Options → Interface → Check for updates. Details in [docs/INSTALL.md](docs/INSTALL.md#updating).
+From v1.4, `ArxRaymix.exe` checks the latest GitHub Release when it starts. If there is a newer version it offers to update. On yes, it downloads the zip, checks its SHA-256, replaces only the mod's own files (the old ones go to `.arxraymix-backup`, and `ArxRaymix.exe --rollback` restores them) and starts the game. Offline or on any error it just starts the game. It never touches `cfg.ini`, your saves or the Arx Fatalis folder. If you start `arx.exe` directly, the main menu shows a "new version available" notice instead; turn it off in Options → Interface → Check for updates, which also stops the launcher from checking. Details in [docs/INSTALL.md](docs/INSTALL.md#updating).
 
 To update by hand: download the new zip and extract it over the old folder, or into a new folder. Settings and saves are not in the mod folder, so they carry over.
 
@@ -151,7 +151,7 @@ Put that in a shortcut's *Target* field to keep it. See [docs/INSTALL.md](docs/I
 
 **Ray Reconstruction** is experimental. On some GPUs NVIDIA's feature cannot start; the setting then stays On but the built-in denoiser keeps running. It also costs noticeably more GPU time than DLSS alone.
 
-More in [docs/INSTALL.md](docs/INSTALL.md#troubleshooting). Bug reports: [GitHub Issues](https://github.com/gabriel7silva/ArxRaymix/issues). <!-- TODO Gabriel: confirm Issues is the bug channel, or point to the Nexus Bugs tab. -->
+More in [docs/INSTALL.md](docs/INSTALL.md#troubleshooting). Bug reports: the **Bugs** tab on [Nexus Mods](https://www.nexusmods.com/arxfatalis/mods/37) or [GitHub Issues](https://github.com/gabriel7silva/ArxRaymix/issues).
 
 ## Building from source
 
@@ -186,7 +186,7 @@ Portuguese developer docs: [docs/pt-BR/README.md](docs/pt-BR/README.md).
 - **Microsoft**: DirectX Shader Compiler (`dxcompiler.dll`, `dxil.dll`).
 - **Parricidium**: the volumetric fog follows the haze of [ArxCoop](https://github.com/Parricidium/ArxCoop) (GPLv3), adapted to traced shadows.
 - Libraries from [ArxWindows](https://github.com/arx/ArxWindows): SDL2, OpenAL Soft, Boost, FreeType, GLM, zlib.
-- **Arx Raymix**: Gabriel Silva ([gabriel7silva](https://github.com/gabriel7silva)). <!-- TODO Gabriel: confirm how you want to be credited -->
+- **Arx Raymix**: Gabriel Silva ([gabriel7silva](https://github.com/gabriel7silva)).
 
 ## License and copyright
 

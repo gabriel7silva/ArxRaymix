@@ -15,7 +15,7 @@ namespace updates {
 
 struct Available {
 	std::string tag;     //!< "v1.5"
-	std::string pageUrl; //!< release page, opened when the notice is clicked
+	std::string pageUrl; //!< GitHub release page (the menu notice opens kModPageUrl instead)
 };
 
 /*!

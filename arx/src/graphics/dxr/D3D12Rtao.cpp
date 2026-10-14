@@ -1322,7 +1322,7 @@ R"(
 		// The haze is the same at the reprojected surface as the history of GI is: blend there.
 		float4 fog = traceFog(pixel, z, rot);
 		if(histOk && fogAlpha > 0.0 && fogSteps > 0u) {
-			fog = lerp(g_fogPrev.Load(int3(histPix / 2, 0)), fog, fogAlpha);
+			fog = lerp(g_fogPrev.Load(int3(min(histPix / 2, int2(giWidth - 1, giHeight - 1)), 0)), fog, fogAlpha);
 		}
 		g_fog[gp] = fog;
 		if(giOn == 0) {
@@ -1387,7 +1387,8 @@ R"(
 		}
 		gi /= float(nGi);
 		if(histOk) {
-			gi = lerp(g_giPrev.Load(int3(histPix / 2, 0)).rgb, gi, giTemporalAlpha);
+			// histPix can sit one past the edge (rounded from the last half pixel); clamp it.
+			gi = lerp(g_giPrev.Load(int3(min(histPix / 2, int2(giWidth - 1, giHeight - 1)), 0)).rgb, gi, giTemporalAlpha);
 		}
 		g_gi[gp] = float4(gi, 1.0);
 	}
@@ -1509,13 +1510,21 @@ float bilateral(Texture2D tex, int2 pix, int radius, float zCenter) {
 	}
 	return s / wsum;
 }
+// GI and the haze are width / 2 by height / 2, rounded down: with an odd size the last column or
+// row of pixels maps one texel past the edge, where Load returns zero. Taps are clamped inside.
+int2 halfResLimit(Texture2D tex) {
+	uint w, h;
+	tex.GetDimensions(w, h);
+	return int2(max(int(w), 1) - 1, max(int(h), 1) - 1);
+}
 float3 giUpsample(int2 pix, float zCenter) {
-	int2 gp = pix / 2;
+	const int2 lim = halfResLimit(giTex);
+	int2 gp = min(pix / 2, lim);
 	float3 s = float3(0, 0, 0);
 	float wsum = 0.0;
 	[unroll] for(int y = -1; y <= 1; ++y) {
 		[unroll] for(int x = -1; x <= 1; ++x) {
-			int2 p = gp + int2(x, y);
+			int2 p = clamp(gp + int2(x, y), int2(0, 0), lim);
 			int2 full = p * 2;
 			float z = depthTex.Load(int3(full, 0)).r;
 			if(abs(z - zCenter) >= 0.002) {
@@ -1534,12 +1543,13 @@ float3 giUpsample(int2 pix, float zCenter) {
 // The half-resolution haze, taken from the neighbours at this pixel's depth so it does not
 // bleed across a silhouette (a lit beam behind a pillar must not halo the pillar's edge).
 float4 fogUpsample(int2 pix, float zCenter) {
-	int2 gp = pix / 2;
+	const int2 lim = halfResLimit(fogTex);
+	int2 gp = min(pix / 2, lim);
 	float4 s = float4(0, 0, 0, 0);
 	float wsum = 0.0;
 	[unroll] for(int y = -1; y <= 1; ++y) {
 		[unroll] for(int x = -1; x <= 1; ++x) {
-			int2 p = gp + int2(x, y);
+			int2 p = clamp(gp + int2(x, y), int2(0, 0), lim);
 			float z = depthTex.Load(int3(p * 2, 0)).r;
 			if(abs(z - zCenter) >= 0.002) {
 				continue;
@@ -1848,6 +1858,17 @@ void D3D12Rtao::shutdown() {
 	m_device = nullptr;
 	m_positions.clear();
 	m_roomPositions.clear();
+	// Attributes are looked up by PrimitiveIndex and must stay in step with the positions; a
+	// re-init that kept them would shift every triangle's material.
+	m_triAttr.clear();
+	m_roomTriAttr.clear();
+	m_roomHasCutout = false;
+	m_dynHasCutout = false;
+	m_swNodes.clear();
+	m_swTris.clear();
+	for(std::uint32_t & root : m_bvhRoots) {
+		root = ~0u;
+	}
 	m_waterPositions.clear();
 	m_metalPositions.clear();
 	m_roomMetalPositions.clear();
@@ -2947,7 +2968,7 @@ bool D3D12Rtao::ensureGeometryBuffers(ID3D12GraphicsCommandList * list) {
 		}
 		using Elem = typename std::decay_t<decltype(src)>::value_type;
 		const UINT64 bytes = UINT64(src.size() * sizeof(Elem));
-		if(!up || up->GetDesc().Width < bytes) {
+		if(!up || !def || up->GetDesc().Width < bytes) {
 			up.reset();
 			def.reset();
 			if(!createBuffer(m_device, bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
