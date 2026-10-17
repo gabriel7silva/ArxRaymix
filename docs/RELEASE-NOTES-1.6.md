@@ -2,7 +2,7 @@
 
 Released 2026-10-17.
 
-A maintenance release: a full code review of 1.5 and the fixes it called for, a frame-time graph in the F11 overlay, and a package without the self-updating launcher.
+A maintenance release: a full code review of 1.5 and the fixes it called for, a frame-time graph in the F11 overlay, volumetric fog that stays where the level has fog, and a package without the self-updating launcher.
 
 You need your own copy of Arx Fatalis (Steam or GOG). Nothing else. If you already have 1.4 or 1.5, `ArxRaymix.exe` offers this update when it starts. New install: run `ArxRaymix-v1.6-setup.exe`, or extract the zip to its own folder and run `ArxRaymix.exe`.
 
@@ -16,10 +16,12 @@ Arx Raymix is still **not digitally signed**: Windows SmartScreen shows "Windows
 
 ## Fixes
 
+- **Volumetric fog only where there is fog.** In 1.5 the fog had the same density everywhere: it filled every room (the prison cell at the start was hazed over), washed over the cutscenes and glowed over their black bars. It now exists only around the level's own fog emitters, the ones that already spawn the smoke, and is off in cutscenes. Rooms without fog cost nothing.
 - **Ray tracing:** half-resolution indirect light and fog no longer read past the edge of the image on odd resolutions; a broken vertex can no longer crash the acceleration structure build; leaving a level frees all of its ray tracing data.
 - **Direct3D 12:** textures freed during play are reused only once the GPU is done with them; F10 screenshots capture the frame actually shown, in the right colours; DLSS Ray Reconstruction gets its inputs before the ray pass changes them; resizing the window with DLSS on no longer risks a crash.
 - **Direct3D 9:** resizing or alt-tabbing keeps the new window size and drawing area.
 - **Menus and settings:** an unknown `ARX_RENDERER` value falls back to your configured API instead of Direct3D 9; when Direct3D 12 cannot start, the Video menu says so; the first-run ray tracing preset is no longer lost. Portuguese: the mouse wheel down binding has its label again.
+- **Packages built on Windows:** the `data` folder (fonts, Portuguese text, translation overlays) was empty when the package was built with Windows PowerShell, so the game ran without its icons font and extra text. It is always complete now.
 - **Launcher and installer:** the launcher's working folders are now `.arxraymix-backup` and `.arxraymix-update`, so your own `backup` or `update` folder is never touched; only one launcher runs at a time; `check_for_updates=0` or `ARX_NO_UPDATE_CHECK` also turns off the launcher's check; damaged or malformed update zips are rejected. Setup refuses to install into a folder holding something other than Arx Raymix, and the uninstaller cleans up every folder it created.
 
 ## Known issues

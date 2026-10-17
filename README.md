@@ -54,6 +54,7 @@ New in v1.6 (see the [release notes](docs/RELEASE-NOTES-1.6.md)):
 
 - **Frame-time graph in F11**: CPU, GPU and ray tracing time, with 120 / 60 / 30 FPS guides.
 - **Standalone package** without the self-updating launcher, for players who want nothing in the folder to contact the network.
+- **Volumetric fog only where the level has fog**: no more haze in every room or over the cutscenes.
 - Fixes from a full code review of 1.5: ray tracing edge cases, D3D12 / D3D9 resize and screenshots, menus, the launcher and the installer.
 
 v1.5 brought ray tracing without an RTX card, volumetric fog and OpenGL ([release notes 1.5](docs/RELEASE-NOTES-1.5.md)):
