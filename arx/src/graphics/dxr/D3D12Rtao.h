@@ -100,6 +100,10 @@ public:
 	[[nodiscard]] size_t dynTriangleCount() const { return m_positions.size() / 3; }
 	
 	static constexpr size_t kMaxShadowLights = 16;
+	//! Fog emitters the volumetric haze is confined to, nearest the camera first.
+	static constexpr size_t kMaxFogVolumes = 16;
+	//! How far in front of the camera the haze reaches, in world units.
+	static constexpr float kFogRange = 3000.f;
 	
 	//! 0 = Low, 1 = Medium, 2 = High, 3 = Ultra.
 	struct DistancePreset {
@@ -132,6 +136,10 @@ public:
 		int giDenoise = 0;
 		int contact = 0;
 		int fogQuality = 0; //!< volumetric haze, 0 Off .. 3 High
+		//! Where the level has fog (its fog emitters): xyz centre, w radius, world units. The haze
+		//! only exists inside these spheres; with none it is off.
+		float fogVolumes[kMaxFogVolumes][4] {};
+		int fogVolumeCount = 0;
 		int distance = 2;
 		float range = 0.f;
 		bool skipTemporal = false;

@@ -159,7 +159,7 @@ static constexpr float giAlpha[] = { 0.20f, 0.12f, 0.08f };
 static constexpr UINT fogSteps[] = { 0u, 8u, 12u, 16u };
 // How far in front of the camera the haze reaches, in world units (it thins out over the far
 // half), and how much of the current frame goes into its history.
-constexpr float kFogRange = 3000.f;
+constexpr float kFogRange = D3D12Rtao::kFogRange;
 constexpr float kFogAlpha = 0.15f;
 // Without DXR every ray walks a BVH in a compute shader, several times slower than the RT cores,
 // so each effect is held at this quality whatever the menu says.
@@ -245,6 +245,9 @@ struct DxrViewCbuf {
 	float fogRange;
 	float fogAlpha;
 	UINT bvhRoots[4];
+	UINT fogVolumeCount;
+	UINT pad2[3];
+	float fogVolumes[D3D12Rtao::kMaxFogVolumes][4];
 };
 static_assert(offsetof(DxrViewCbuf, viewProj) == 0);
 static_assert(offsetof(DxrViewCbuf, specTMax) == 64);
@@ -252,7 +255,13 @@ static_assert(offsetof(DxrViewCbuf, waterFill) == 80,
               "ViewParams must stay float4-aligned to match the HLSL cbuffer");
 static_assert(offsetof(DxrViewCbuf, fogSteps) == 96);
 static_assert(offsetof(DxrViewCbuf, bvhRoots) == 112);
-static_assert(sizeof(DxrViewCbuf) == 128);
+static_assert(offsetof(DxrViewCbuf, fogVolumeCount) == 128);
+static_assert(offsetof(DxrViewCbuf, fogVolumes) == 144);
+static_assert(sizeof(DxrViewCbuf) == 144 + D3D12Rtao::kMaxFogVolumes * 16);
+static_assert(D3D12Rtao::kMaxFogVolumes == 16, "the HLSL ViewParams declares fogVolumes[16]");
+// The upload buffer behind it, a multiple of the 256-byte CBV alignment.
+constexpr UINT64 kViewCbufBytes = 512;
+static_assert(sizeof(DxrViewCbuf) <= kViewCbufBytes);
 
 constexpr UINT kLightFloat4s = 3;
 static_assert(sizeof(D3D12Rtao::GpuLight) == kLightFloat4s * 16, "DXR light record is three float4s");
@@ -390,6 +399,10 @@ cbuffer ViewParams : register(b1) {
 	float fogAlpha;
 	// Software ray tracing: root node of the room, entity, water and player BVHs, ~0u if absent.
 	uint4 bvhRoots;
+	// The level's fog emitters: xyz centre, w radius. The haze exists only inside them.
+	uint fogVolumeCount;
+	uint3 padView2;
+	float4 fogVolumes[16];
 };
 
 // Cleared D24_UNORM depth is exactly 1.0 (INV-04). A value just below 1.0 is a
@@ -786,10 +799,27 @@ float fogNoise(float3 p) {
 	                 lerp(fogHash(i + float3(0, 1, 1)), fogHash(i + float3(1, 1, 1)), f.x), f.y), f.z);
 }
 
+// How much of the level's fog is at p: 1 well inside a fog emitter's sphere, easing to 0 over
+// its outer half, 0 everywhere else. The haze used to fill every room; it belongs where the
+// level designers put fog.
+float fogVolumeMask(float3 p) {
+	float m = 0.0;
+	for(uint i = 0; i < fogVolumeCount; ++i) {
+		float4 v = fogVolumes[i];
+		float d = length(p - v.xyz);
+		m = max(m, 1.0 - smoothstep(v.w * 0.5, v.w, d));
+	}
+	return m;
+}
+
 float fogDensityAt(float3 p) {
+	float mask = fogVolumeMask(p);
+	if(mask <= 0.0) {
+		return 0.0;
+	}
 	float3 q = p * FOG_NOISE_SCALE;
 	float nz = fogNoise(q) * 0.65 + fogNoise(q * 2.7 + 3.1) * 0.35;
-	return fogDensity * lerp(1.0, nz * 1.6, FOG_NOISE_AMOUNT);
+	return fogDensity * mask * lerp(1.0, nz * 1.6, FOG_NOISE_AMOUNT);
 }
 
 float fogPhase(float cosTheta) {
@@ -825,18 +855,17 @@ float3 fogLight(uint i, float3 p, float3 dir) {
 
 // rgb: light scattered towards the camera along this pixel's ray, a: transmittance.
 float4 traceFog(uint2 pixel, float z, float rot) {
-	if(fogSteps == 0u) {
+	// Nothing drawn here (the letterbox bars of a cutscene, the void past the far plane): no
+	// haze either. Tracing the full reach through it hung a glow over the black bars.
+	if(fogSteps == 0u || fogVolumeCount == 0u || z <= 0.0 || z >= SKY_Z) {
 		return float4(0, 0, 0, 1);
 	}
 	float2 uv = (float2(pixel) + 0.5) / float2(width, height);
 	float2 ndc = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 	float4 midH = mul(invViewProj, float4(ndc, 0.5, 1.0));
 	float3 dir = normalize(midH.xyz / max(midH.w, 1e-6) - cameraPos);
-	float range = fogRange;
-	if(z > 0.0 && z < SKY_Z) {
-		float4 sH = mul(invViewProj, float4(ndc, z, 1.0));
-		range = min(range, length(sH.xyz / max(sH.w, 1e-6) - cameraPos));
-	}
+	float4 sH = mul(invViewProj, float4(ndc, z, 1.0));
+	float range = min(fogRange, length(sH.xyz / max(sH.w, 1e-6) - cameraPos));
 	float dt = range / float(fogSteps);
 	float jitter = rot * 0.15915494;
 	float transmittance = 1.0;
@@ -847,12 +876,15 @@ float4 traceFog(uint2 pixel, float z, float rot) {
 		// Thins out over the far half of its reach instead of stopping dead: a light just past
 		// the range showed as a hard disc of glow.
 		float rho = fogDensityAt(p) * (1.0 - smoothstep(fogRange * 0.5, fogRange, t));
+		if(rho <= 1e-6) {
+			continue; // outside the level's fog: nothing scatters, nothing dims
+		}
 		float3 light = float3(FOG_AMBIENT, FOG_AMBIENT, FOG_AMBIENT);
 		float wsum = 0.0;
 		for(uint i = 0; i < lightCount; ++i) {
 			wsum += dot(fogLight(i, p, dir), float3(0.299, 0.587, 0.114));
 		}
-		if(wsum > 1e-6 && rho > 1e-6) {
+		if(wsum > 1e-6) {
 			// One shadow ray per sample, to a light picked in proportion to its share; dividing
 			// by that share keeps the sum right on average, and the history does the averaging.
 			float pick = frac(jitter * 7.0 + float(s) * 0.618034) * wsum;
@@ -903,8 +935,8 @@ float4 traceFog(uint2 pixel, float z, float rot) {
 	return float4(inscatter, transmittance);
 }
 
-// Pixels that leave RayGen early (sky, past the ray tracing range) still have haze in front of
-// them; they get this frame's value with no history.
+// Pixels that leave RayGen early (past the ray tracing range) can still have haze in front of
+// them; they get this frame's value with no history. Where nothing was drawn traceFog is clear.
 void writeFogRaw(uint2 pixel, float z) {
 	if((pixel.x & 1u) == 0u && (pixel.y & 1u) == 0u) {
 		uint2 gp = pixel / 2;
@@ -1954,7 +1986,7 @@ bool D3D12Rtao::init(ID3D12Device * device, ID3D12DescriptorHeap * sharedHeap,
 		LogError << "RTAO: light buffer failed";
 		return true;
 	}
-	if(!createBuffer(device, 256, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+	if(!createBuffer(device, kViewCbufBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
 	                 D3D12_RESOURCE_FLAG_NONE, m_viewCbuf.put())) {
 		LogError << "RTAO: view cbuffer failed";
 		return true;
@@ -3735,6 +3767,10 @@ bool D3D12Rtao::apply(ID3D12GraphicsCommandList * list, ID3D12Resource * backbuf
 			viewCb.fogDensity = 1.f;
 			viewCb.fogRange = kFogRange;
 			viewCb.fogAlpha = (m_histValid && !skipTemporal) ? kFogAlpha : 0.f;
+			const int fogVolumes = (std::max)(0, (std::min)(settings.fogVolumeCount,
+			                                                int(kMaxFogVolumes)));
+			viewCb.fogVolumeCount = UINT(fogVolumes);
+			std::memcpy(viewCb.fogVolumes, settings.fogVolumes, sizeof(float) * 4 * size_t(fogVolumes));
 			std::memcpy(viewCb.bvhRoots, m_bvhRoots, sizeof(viewCb.bvhRoots));
 			std::memcpy(mappedView, &viewCb, sizeof(viewCb));
 			m_viewCbuf->Unmap(0, nullptr);
