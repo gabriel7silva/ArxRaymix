@@ -20,7 +20,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
     [string]$OutDir,
-    [switch]$NoLauncher
+    [switch]$Standalone
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,7 +31,7 @@ if (-not $OutDir) {
 }
 # Absolute: .NET calls below resolve relative paths against their own current folder.
 $OutDir = (Resolve-Path -LiteralPath $OutDir).ProviderPath
-$name = if ($NoLauncher) { "ArxRaymix-$Version-noupdate" } else { "ArxRaymix-$Version" }
+$name = if ($Standalone) { "ArxRaymix-$Version-standalone" } else { "ArxRaymix-$Version" }
 $stage = Join-Path $OutDir $name
 if (-not (Test-Path -LiteralPath (Join-Path $stage 'package.txt'))) {
     throw "$stage has no package.txt. Run scripts/package.ps1 -Version $Version first."
@@ -73,11 +73,11 @@ $nsi = Join-Path $PSScriptRoot 'installer\ArxRaymix.nsi'
 $icon = Join-Path $root 'data\icons\arx-libertatis.ico'
 $defines = @("/DVERSION=$Version", "/DVERSION_NUMERIC=$numeric", "/DSTAGE=$stage",
              "/DDIRS_NSH=$dirsNsh", "/DICON=$icon", "/DOUTFILE=$setup")
-if ($NoLauncher) {
+if ($Standalone) {
     if (Test-Path -LiteralPath (Join-Path $stage 'ArxRaymix.exe')) {
-        throw "$stage holds ArxRaymix.exe, so it was not staged with -NoLauncher. Run scripts/package.ps1 -NoLauncher first."
+        throw "$stage holds ArxRaymix.exe, so it was not staged with -Standalone. Run scripts/package.ps1 -Standalone first."
     }
-    $defines += '/DNO_LAUNCHER'
+    $defines += '/DSTANDALONE'
 }
 & $makensis /V2 /INPUTCHARSET UTF8 @defines $nsi
 if ($LASTEXITCODE -ne 0) {

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build the zip a player downloads: arx.exe, its DLLs and the engine data, nothing else.
 
@@ -7,7 +7,7 @@
 
       arx.exe and every DLL next to it (SDL2, OpenAL, DXC, Streamline when fetched)
       ArxRaymix.exe         the launcher: checks GitHub for a newer release, then starts arx.exe
-                            (omitted with -NoLauncher)
+                            (omitted with -Standalone)
       package.txt           the version, then every packaged file (the launcher's manifest)
       data\                 arx\data\core (localisation overlays, fonts)
       LICENSE, AUTHORS, README.txt
@@ -28,17 +28,22 @@
 .PARAMETER Version
     Name used for the folder and the zip. Defaults to `git describe --tags --always`.
 
-.PARAMETER NoLauncher
-    Leave ArxRaymix.exe out, so the package cannot update itself: the player runs arx.exe.
-    An unsigned program that downloads a release and replaces executables is, to a heuristic
-    scanner, indistinguishable from a downloader, and it is why the normal package is flagged.
-    Use this for mirrors that run their own malware scan, such as Nexus Mods. The zip is named
-    ArxRaymix-<version>-noupdate.zip so it is never confused with the self-updating one.
+.PARAMETER Standalone
+    Leave ArxRaymix.exe out, so the package cannot update itself: the player runs arx.exe and
+    nothing in the folder touches the network. The zip is named
+    ArxRaymix-<version>-standalone.zip so it is never confused with the self-updating one.
+
+    Written for mirrors that run their own malware scan, such as Nexus Mods, on the theory
+    that the self-updating launcher was what they flagged. Measurement disproved that: the
+    launcher scores 0/71 on VirusTotal, and the single detection anywhere (SecureAge, on the
+    NSIS installer stub) fires with and without it. Nexus then quarantined this zip too, at
+    0/66, so their rule reads the file type and not a scanner result. Keep the switch anyway
+    -- a build that provably makes no network calls is worth being able to hand someone.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/package.ps1
     powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.4 -IncludePdb
-    powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.6 -NoLauncher
+    powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.6 -Standalone
 #>
 [CmdletBinding()]
 param(
@@ -46,7 +51,7 @@ param(
     [string]$Version,
     [string]$OutDir,
     [switch]$IncludePdb,
-    [switch]$NoLauncher
+    [switch]$Standalone
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,7 +73,7 @@ if (-not $OutDir) {
     $OutDir = Join-Path $root 'dist'
 }
 
-$name = if ($NoLauncher) { "ArxRaymix-$Version-noupdate" } else { "ArxRaymix-$Version" }
+$name = if ($Standalone) { "ArxRaymix-$Version-standalone" } else { "ArxRaymix-$Version" }
 $stage = Join-Path $OutDir $name
 $zip = Join-Path $OutDir "$name.zip"
 
@@ -81,7 +86,7 @@ $stage = (Resolve-Path -LiteralPath $stage).ProviderPath.TrimEnd([char]92)
 
 # Executable and runtime DLLs: CMake already staged everything arx.exe loads next to it.
 Copy-Item -LiteralPath $exe -Destination $stage
-if (-not $NoLauncher) {
+if (-not $Standalone) {
     $launcher = Join-Path $binDir 'ArxRaymix.exe'
     if (-not (Test-Path -LiteralPath $launcher)) {
         throw "ArxRaymix.exe not found next to arx.exe. Rebuild the arx target; it builds the launcher too."
@@ -177,7 +182,7 @@ Streamline SDK and its licence: https://github.com/NVIDIA-RTX/Streamline
     Set-Content -LiteralPath (Join-Path $slDst 'README.txt') -Value $slNotice -Encoding UTF8
 }
 
-if ($NoLauncher) {
+if ($Standalone) {
     $runStep = @'
   3. Run arx.exe.
 '@
@@ -264,4 +269,4 @@ Write-Host "zip    : $zip"
 Write-Host ("size   : {0:N1} MB" -f ($size / 1MB))
 Write-Host "sha256 : $hash"
 Write-Host "DLSS   : $(if ($haveStreamline) { 'included' } else { 'not included' })"
-Write-Host "updater: $(if ($NoLauncher) { 'omitted (-NoLauncher): run arx.exe' } else { 'ArxRaymix.exe' })"
+Write-Host "updater: $(if ($Standalone) { 'omitted (-Standalone): run arx.exe' } else { 'ArxRaymix.exe' })"

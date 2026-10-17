@@ -64,10 +64,10 @@ VIAddVersionKey "LegalCopyright" "GPLv3. Arx Fatalis (c) Arkane Studios / ZeniMa
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE CheckFolderBeforeInstall
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-; With NO_LAUNCHER the package has no ArxRaymix.exe, so everything that would start it
+; With STANDALONE the package has no ArxRaymix.exe, so everything that would start it
 ; starts the game directly instead. Pointing a shortcut at a file that was never installed
 ; is a broken install, not a missing feature.
-!ifdef NO_LAUNCHER
+!ifdef STANDALONE
 	!define APP_START_EXE "arx.exe"
 !else
 	!define APP_START_EXE "ArxRaymix.exe"
@@ -100,8 +100,14 @@ LangString SecStart ${LANG_ENGLISH} "Start menu shortcuts"
 LangString SecStart ${LANG_PORTUGUESEBR} "Atalhos no Menu Iniciar"
 LangString SecDesktop ${LANG_ENGLISH} "Desktop shortcut"
 LangString SecDesktop ${LANG_PORTUGUESEBR} "Atalho na Área de Trabalho"
+; The standalone build has no launcher to describe, and saying it updates itself would be a lie.
+!ifdef STANDALONE
+LangString DescGame ${LANG_ENGLISH} "The game and the NVIDIA DLSS files. This build never checks for updates."
+LangString DescGame ${LANG_PORTUGUESEBR} "O jogo e os arquivos do NVIDIA DLSS. Esta versão nunca procura atualizações."
+!else
 LangString DescGame ${LANG_ENGLISH} "The game, the launcher with automatic updates, and the NVIDIA DLSS files."
 LangString DescGame ${LANG_PORTUGUESEBR} "O jogo, o launcher com atualização automática e os arquivos do NVIDIA DLSS."
+!endif
 LangString DescStart ${LANG_ENGLISH} "Arx Raymix, Arx Raymix (DirectX 9) and Uninstall in the Start menu."
 LangString DescStart ${LANG_PORTUGUESEBR} "Arx Raymix, Arx Raymix (DirectX 9) e Desinstalar no Menu Iniciar."
 LangString DescDesktop ${LANG_ENGLISH} "An Arx Raymix shortcut on the desktop."
