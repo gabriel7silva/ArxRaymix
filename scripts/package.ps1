@@ -7,6 +7,7 @@
 
       arx.exe and every DLL next to it (SDL2, OpenAL, DXC, Streamline when fetched)
       ArxRaymix.exe         the launcher: checks GitHub for a newer release, then starts arx.exe
+                            (omitted with -NoLauncher)
       package.txt           the version, then every packaged file (the launcher's manifest)
       data\                 arx\data\core (localisation overlays, fonts)
       LICENSE, AUTHORS, README.txt
@@ -27,16 +28,25 @@
 .PARAMETER Version
     Name used for the folder and the zip. Defaults to `git describe --tags --always`.
 
+.PARAMETER NoLauncher
+    Leave ArxRaymix.exe out, so the package cannot update itself: the player runs arx.exe.
+    An unsigned program that downloads a release and replaces executables is, to a heuristic
+    scanner, indistinguishable from a downloader, and it is why the normal package is flagged.
+    Use this for mirrors that run their own malware scan, such as Nexus Mods. The zip is named
+    ArxRaymix-<version>-noupdate.zip so it is never confused with the self-updating one.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/package.ps1
     powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.4 -IncludePdb
+    powershell -ExecutionPolicy Bypass -File scripts/package.ps1 -Version 1.6 -NoLauncher
 #>
 [CmdletBinding()]
 param(
     [string]$Config = 'RelWithDebInfo',
     [string]$Version,
     [string]$OutDir,
-    [switch]$IncludePdb
+    [switch]$IncludePdb,
+    [switch]$NoLauncher
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +68,7 @@ if (-not $OutDir) {
     $OutDir = Join-Path $root 'dist'
 }
 
-$name = "ArxRaymix-$Version"
+$name = if ($NoLauncher) { "ArxRaymix-$Version-noupdate" } else { "ArxRaymix-$Version" }
 $stage = Join-Path $OutDir $name
 $zip = Join-Path $OutDir "$name.zip"
 
@@ -71,11 +81,13 @@ $stage = (Resolve-Path -LiteralPath $stage).ProviderPath.TrimEnd([char]92)
 
 # Executable and runtime DLLs: CMake already staged everything arx.exe loads next to it.
 Copy-Item -LiteralPath $exe -Destination $stage
-$launcher = Join-Path $binDir 'ArxRaymix.exe'
-if (-not (Test-Path -LiteralPath $launcher)) {
-    throw "ArxRaymix.exe not found next to arx.exe. Rebuild the arx target; it builds the launcher too."
+if (-not $NoLauncher) {
+    $launcher = Join-Path $binDir 'ArxRaymix.exe'
+    if (-not (Test-Path -LiteralPath $launcher)) {
+        throw "ArxRaymix.exe not found next to arx.exe. Rebuild the arx target; it builds the launcher too."
+    }
+    Copy-Item -LiteralPath $launcher -Destination $stage
 }
-Copy-Item -LiteralPath $launcher -Destination $stage
 $dlls = Get-ChildItem -LiteralPath $binDir -Filter '*.dll'
 foreach ($dll in $dlls) {
     Copy-Item -LiteralPath $dll.FullName -Destination $stage
@@ -165,6 +177,34 @@ Streamline SDK and its licence: https://github.com/NVIDIA-RTX/Streamline
     Set-Content -LiteralPath (Join-Path $slDst 'README.txt') -Value $slNotice -Encoding UTF8
 }
 
+if ($NoLauncher) {
+    $runStep = @'
+  3. Run arx.exe.
+'@
+    $updates = @'
+Updates
+  This package cannot update itself: it ships without the ArxRaymix.exe launcher, so nothing
+  here contacts the network to look for a new version. Download a new release by hand from
+  https://github.com/gabriel7silva/ArxRaymix/releases and extract it over this folder, or use
+  the self-updating package from that page. The main menu still says when a new version is out;
+  Options -> Interface -> Check for updates turns that off.
+'@
+} else {
+    $runStep = @'
+  3. Run ArxRaymix.exe. It checks for a newer Arx Raymix, offers to install it, then starts
+     the game. arx.exe starts the game without that check.
+'@
+    $updates = @'
+Updates
+  ArxRaymix.exe downloads the new release from GitHub, checks its SHA-256 and replaces only the
+  files listed in package.txt. The previous version goes to the backup folder, and
+  "ArxRaymix.exe --rollback" puts it back. cfg.ini, saves and the Arx Fatalis files are never
+  touched. The main menu also says when a new version is out; Options -> Interface ->
+  Check for updates turns both checks off. "check_for_updates=0" in cfg.ini, or the
+  ARX_NO_UPDATE_CHECK environment variable, also stops the launcher's check.
+'@
+}
+
 $readme = @"
 Arx Raymix $Version
 ===================
@@ -175,15 +215,8 @@ DLSS and Frame Generation. You need your own copy of Arx Fatalis (Steam or GOG).
 Install
   1. Install Arx Fatalis from Steam or GOG and run it once.
   2. Extract this folder anywhere. It does not go inside the game folder.
-  3. Run ArxRaymix.exe. It checks for a newer Arx Raymix, offers to install it, then starts
-     the game. arx.exe starts the game without that check.
-
-Updates
-  ArxRaymix.exe downloads the new release from GitHub, checks its SHA-256 and replaces only the
-  files listed in package.txt. The previous version goes to the backup folder, and
-  "ArxRaymix.exe --rollback" puts it back. cfg.ini, saves and the Arx Fatalis files are never
-  touched. The main menu also says when a new version is out; Options -> Interface ->
-  Check for updates turns both checks off.
+$runStep
+$updates
 
 If the game is not found, point at the folder that holds data.pak:
   arx.exe --data-dir "D:\Games\Arx Fatalis"
@@ -231,3 +264,4 @@ Write-Host "zip    : $zip"
 Write-Host ("size   : {0:N1} MB" -f ($size / 1MB))
 Write-Host "sha256 : $hash"
 Write-Host "DLSS   : $(if ($haveStreamline) { 'included' } else { 'not included' })"
+Write-Host "updater: $(if ($NoLauncher) { 'omitted (-NoLauncher): run arx.exe' } else { 'ArxRaymix.exe' })"
