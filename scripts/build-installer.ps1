@@ -19,7 +19,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
-    [string]$OutDir
+    [string]$OutDir,
+    [switch]$NoLauncher
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,7 +31,8 @@ if (-not $OutDir) {
 }
 # Absolute: .NET calls below resolve relative paths against their own current folder.
 $OutDir = (Resolve-Path -LiteralPath $OutDir).ProviderPath
-$stage = Join-Path $OutDir "ArxRaymix-$Version"
+$name = if ($NoLauncher) { "ArxRaymix-$Version-noupdate" } else { "ArxRaymix-$Version" }
+$stage = Join-Path $OutDir $name
 if (-not (Test-Path -LiteralPath (Join-Path $stage 'package.txt'))) {
     throw "$stage has no package.txt. Run scripts/package.ps1 -Version $Version first."
 }
@@ -59,18 +61,25 @@ while ($numbers.Count -lt 4) { $numbers += 0 }
 $numeric = ($numbers[0..3] -join '.')
 
 # The uninstaller removes the package's folders once they are empty, deepest first.
-$dirsNsh = Join-Path $OutDir "ArxRaymix-$Version-dirs.nsh"
+$dirsNsh = Join-Path $OutDir "$name-dirs.nsh"
 $dirs = Get-ChildItem -LiteralPath $stage -Recurse -Directory |
     ForEach-Object { $_.FullName.Substring($stage.Length + 1) } |
     Sort-Object { $_.Length } -Descending
 $lines = @($dirs | ForEach-Object { "RMDir `"`$INSTDIR\$_`"" })
 [System.IO.File]::WriteAllText($dirsNsh, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding $true))
 
-$setup = Join-Path $OutDir "ArxRaymix-$Version-setup.exe"
+$setup = Join-Path $OutDir "$name-setup.exe"
 $nsi = Join-Path $PSScriptRoot 'installer\ArxRaymix.nsi'
 $icon = Join-Path $root 'data\icons\arx-libertatis.ico'
-& $makensis /V2 /INPUTCHARSET UTF8 "/DVERSION=$Version" "/DVERSION_NUMERIC=$numeric" "/DSTAGE=$stage" `
-    "/DDIRS_NSH=$dirsNsh" "/DICON=$icon" "/DOUTFILE=$setup" $nsi
+$defines = @("/DVERSION=$Version", "/DVERSION_NUMERIC=$numeric", "/DSTAGE=$stage",
+             "/DDIRS_NSH=$dirsNsh", "/DICON=$icon", "/DOUTFILE=$setup")
+if ($NoLauncher) {
+    if (Test-Path -LiteralPath (Join-Path $stage 'ArxRaymix.exe')) {
+        throw "$stage holds ArxRaymix.exe, so it was not staged with -NoLauncher. Run scripts/package.ps1 -NoLauncher first."
+    }
+    $defines += '/DNO_LAUNCHER'
+}
+& $makensis /V2 /INPUTCHARSET UTF8 @defines $nsi
 if ($LASTEXITCODE -ne 0) {
     throw "makensis failed with exit code $LASTEXITCODE"
 }
