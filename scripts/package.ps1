@@ -120,12 +120,22 @@ if (-not $haveStreamline) {
 $dataSrc = Join-Path $root 'arx\data\core'
 $dataDst = Join-Path $stage 'data'
 Copy-Item -LiteralPath $dataSrc -Destination $dataDst -Recurse
-# -File: on Windows PowerShell 5.1, -Include with -LiteralPath also matches whole folders.
-Get-ChildItem -LiteralPath $dataDst -Recurse -File -Include '*.wav', '*.dirs' | Remove-Item -Force
+# Filter on Extension, not -Include: Windows PowerShell 5.1 ignores -Include next to
+# -LiteralPath and returns every file, which left data\ empty in packages built outside pwsh.
+Get-ChildItem -LiteralPath $dataDst -Recurse -File |
+    Where-Object { $_.Extension -in '.wav', '.dirs' } |
+    Remove-Item -Force
 Get-ChildItem -LiteralPath $dataDst -Recurse -Directory |
     Sort-Object { $_.FullName.Length } -Descending |
     Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force) } |
     Remove-Item -Force
+# Without these the game falls back to Arx Fatalis' own fonts and text: no icons, no
+# Portuguese menus. Fail here rather than ship that.
+foreach ($required in 'misc\icons.ttf', 'misc\dejavusansmono.ttf', 'localisation\utext_portugues.ini') {
+    if (-not (Test-Path -LiteralPath (Join-Path $dataDst $required))) {
+        throw "Engine data missing from the package: data\$required"
+    }
+}
 
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'arx\AUTHORS') -Destination $stage
