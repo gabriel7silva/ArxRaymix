@@ -38,11 +38,18 @@ InstallDir "$LOCALAPPDATA\Programs\${APP_KEY}"
 InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 BrandingText "${APP_NAME} ${VERSION}"
 
+; A complete version block is one of the few things an unsigned installer can offer a
+; reputation scanner. Missing CompanyName, InternalName or OriginalFilename scores against
+; the file, and this installer has no certificate to outweigh that yet.
 VIProductVersion "${VERSION_NUMERIC}"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION_NUMERIC}"
 VIAddVersionKey "FileDescription" "${APP_NAME} ${VERSION} Setup"
+VIAddVersionKey "CompanyName" "${APP_NAME} Team"
+VIAddVersionKey "InternalName" "${APP_KEY}Setup"
+VIAddVersionKey "OriginalFilename" "${APP_KEY}-${VERSION}-setup.exe"
+VIAddVersionKey "Comments" "Open source under the GPLv3. Source: ${HOMEPAGE}"
 VIAddVersionKey "LegalCopyright" "GPLv3. Arx Fatalis (c) Arkane Studios / ZeniMax Media"
 
 !define MUI_ICON "${ICON}"
