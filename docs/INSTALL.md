@@ -59,7 +59,7 @@ Arx Raymix is **not digitally signed yet**, so Windows SmartScreen warns about t
 To continue, click **More info**, then **Run anyway**. To make sure the file is the one we published, compare its SHA-256 with the `.sha256` file on the [release page][releases]. In PowerShell:
 
 ```powershell
-Get-FileHash .\ArxRaymix-v1.5-setup.exe -Algorithm SHA256
+Get-FileHash .\ArxRaymix-1.6-setup.exe -Algorithm SHA256
 ```
 
 Only download Arx Raymix from Nexus Mods or from the GitHub releases page.

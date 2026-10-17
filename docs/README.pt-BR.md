@@ -65,7 +65,7 @@ Não é preciso mais nada: nem patch, nem outro mod, nem o Arx Libertatis instal
    - **Zip:** extraia numa pasta própria, por exemplo `C:\Jogos\ArxRaymix`. **Não** extraia dentro da pasta do Arx Fatalis. Evite `C:\Arquivos de Programas`.
 3. **Execute** *Arx Raymix* pelo Menu Iniciar, ou o `ArxRaymix.exe` (ou `arx.exe`).
 
-**Aviso "O Windows protegeu o computador":** o Arx Raymix **ainda não tem assinatura digital**, então o SmartScreen do Windows avisa na primeira vez que você abre o instalador, o `ArxRaymix.exe` ou o `arx.exe` ("Editor desconhecido"). A assinatura digital está planejada para uma próxima versão. Para continuar, clique em **Mais informações** e depois em **Executar assim mesmo**. Para conferir que o arquivo é o original, compare o SHA-256 com o arquivo `.sha256` da página da release (no PowerShell: `Get-FileHash .\ArxRaymix-v1.5-setup.exe -Algorithm SHA256`). Baixe o Arx Raymix só pelo Nexus Mods ou pela página de releases do GitHub.
+**Aviso "O Windows protegeu o computador":** o Arx Raymix **ainda não tem assinatura digital**, então o SmartScreen do Windows avisa na primeira vez que você abre o instalador, o `ArxRaymix.exe` ou o `arx.exe` ("Editor desconhecido"). A assinatura digital está planejada para uma próxima versão. Para continuar, clique em **Mais informações** e depois em **Executar assim mesmo**. Para conferir que o arquivo é o original, compare o SHA-256 com o arquivo `.sha256` da página da release (no PowerShell: `Get-FileHash .\ArxRaymix-1.6-setup.exe -Algorithm SHA256`). Baixe o Arx Raymix só pelo Nexus Mods ou pela página de releases do GitHub.
 
 ### Se o jogo não encontrar os dados
 

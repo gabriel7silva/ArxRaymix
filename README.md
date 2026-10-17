@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.5-c2521a">
+  <img alt="version" src="https://img.shields.io/badge/version-1.6-c2521a">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20x64-2b579a">
   <img alt="base" src="https://img.shields.io/badge/base-Arx%20Libertatis%201.3--dev-6f42c1">
   <img alt="renderer" src="https://img.shields.io/badge/renderer-Direct3D%2012-0078d4">
@@ -81,7 +81,7 @@ Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. 
 - **Nexus Mods** (main channel): <https://www.nexusmods.com/arxfatalis/mods/37>
 - **GitHub Releases**: <https://github.com/gabriel7silva/ArxRaymix/releases>
 
-Two downloads, same files: the installer `ArxRaymix-v1.5-setup.exe` (recommended) and the zip `ArxRaymix-v1.5.zip`. Each has a `.sha256` file next to it on the GitHub release.
+Two downloads, same files: the installer `ArxRaymix-1.6-setup.exe` (recommended) and the zip `ArxRaymix-1.6.zip`. Each has a `.sha256` file next to it on the GitHub release.
 
 ## Install
 
