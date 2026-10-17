@@ -50,7 +50,13 @@ Each pair is the same spot with **F7** (ray tracing on / off). RTX 4050 Laptop, 
 - **Performance overlay**: F11 shows FPS, the DLSS mode and GPU time per pass.
 - Everything Arx Libertatis already does: widescreen, modern resolutions, bug fixes, and so on.
 
-New in v1.5 (see the [release notes](docs/RELEASE-NOTES-1.5.md)):
+New in v1.6 (see the [release notes](docs/RELEASE-NOTES-1.6.md)):
+
+- **Frame-time graph in F11**: CPU, GPU and ray tracing time, with 120 / 60 / 30 FPS guides.
+- **Standalone package** without the self-updating launcher, for players who want nothing in the folder to contact the network.
+- Fixes from a full code review of 1.5: ray tracing edge cases, D3D12 / D3D9 resize and screenshots, menus, the launcher and the installer.
+
+v1.5 brought ray tracing without an RTX card, volumetric fog and OpenGL ([release notes 1.5](docs/RELEASE-NOTES-1.5.md)):
 
 - **Ray tracing without an RTX card.** GPUs without DXR trace the same effects in software, each held at Low; it starts Off there, turn it on in Options → Ray tracing. GPUs with DXR keep hardware ray tracing.
 - **Volumetric fog** with light shafts cut by the level geometry (Options → Ray tracing).
