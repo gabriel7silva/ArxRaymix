@@ -46,6 +46,8 @@
 #include "scene/Light.h"
 #include "game/Camera.h"
 #include "graphics/GlobalFog.h"
+#include "graphics/effects/Fog.h"
+#include "gui/CinematicBorder.h"
 #include "game/Entity.h"
 #include "game/EntityManager.h"
 #include "scene/Rooms.h"
@@ -285,6 +287,55 @@ void describeShadowLight(const char * tag, const EERIE_LIGHT * el, const glm::ve
 	        << " ignition=" << (el->m_isIgnitionLight ? 1 : 0)
 	        << " lit=" << (el->m_ignitionStatus ? 1 : 0)
 	        << " timed=" << ((el->duration == 0) ? 0 : 1);
+}
+
+// The volumetric haze lives where the level has fog: around its fog emitters (g_fogs, the same
+// ones that spawn the smoke particles), as spheres sized by how far those particles drift in
+// their lifetime. Nearest the camera first, up to maxCount; returns how many were written.
+int collectFogVolumes(const Vec3f & cam, float reach, float (*out)[4], size_t maxCount) {
+	struct Volume {
+		float gap;
+		Vec3f center;
+		float radius;
+	};
+	std::vector<Volume> found;
+	for(const FOG_DEF & fog : g_fogs) {
+		if(!fog.exist) {
+			continue;
+		}
+		// ARX_FOGS_Render: a particle lives up to twice the emitter's duration and moves by
+		// `move` every 100 ms, starting up to 100 units off the emitter.
+		const float steps = 2.f * toMsf(fog.duration) / 100.f;
+		const float speed = std::abs(fog.speed);
+		Vec3f center = fog.pos;
+		float radius;
+		if(fog.directional) {
+			const float travel = speed * 0.1f * steps;
+			center += fog.move * (travel * 0.5f);
+			radius = travel * 0.5f;
+		} else {
+			const float spread = speed + std::abs(fog.speedRandom);
+			const float horizontal = speed * 0.2f * spread;
+			const float vertical = spread / 15.f;
+			radius = 173.f + std::sqrt(2.f * horizontal * horizontal + vertical * vertical) * steps;
+		}
+		radius = glm::clamp(radius + fog.size + std::abs(fog.sizeDelta), 200.f, 2000.f);
+		const float gap = glm::distance(cam, center) - radius;
+		if(gap > reach) {
+			continue;
+		}
+		found.push_back({ gap, center, radius });
+	}
+	const size_t count = (std::min)(found.size(), maxCount);
+	std::partial_sort(found.begin(), found.begin() + std::ptrdiff_t(count), found.end(),
+	                  [](const Volume & a, const Volume & b) { return a.gap < b.gap; });
+	for(size_t i = 0; i < count; ++i) {
+		out[i][0] = found[i].center.x;
+		out[i][1] = found[i].center.y;
+		out[i][2] = found[i].center.z;
+		out[i][3] = found[i].radius;
+	}
+	return int(count);
 }
 
 size_t fillShadowLights(const glm::vec3 & cam, D3D12Rtao::GpuLight * out, size_t maxLights,
@@ -4160,6 +4211,16 @@ void D3D12Renderer::applyWorldRayEffects() {
 	const bool metalOn = config.video.dxrReflections > 0;
 	const bool contactOn = config.video.dxrContact > 0;
 	const bool fogOn = config.video.dxrFog > 0;
+	// The haze only where the level has fog, and never in a cutscene: it washed over the
+	// letterboxed scenes and filled rooms the level designers left clear.
+	float fogVolumes[D3D12Rtao::kMaxFogVolumes][4] {};
+	int fogVolumeCount = 0;
+	const bool cutscene = cinematicBorder.isActive() || cinematicBorder.CINEMA_DECAL != 0.f;
+	if(fogOn && !cutscene && g_camera) {
+		fogVolumeCount = collectFogVolumes(g_camera->m_pos, D3D12Rtao::kFogRange, fogVolumes,
+		                                   D3D12Rtao::kMaxFogVolumes);
+	}
+	const bool fogLive = fogVolumeCount > 0;
 	if(!aoOn) {
 		if(!m_loggedRtaoOff) {
 			LogInfo << "RTAO disabled";
@@ -4208,7 +4269,7 @@ void D3D12Renderer::applyWorldRayEffects() {
 	const float casterDist = (std::min)(dist.caster, renderFar);
 	D3D12Rtao::GpuLight lights[D3D12Rtao::kMaxShadowLights] {};
 	size_t nlights = 0;
-	if(shadowsOn || giOn || transOn || metalOn || contactOn || fogOn) {
+	if(shadowsOn || giOn || transOn || metalOn || contactOn || fogLive) {
 		const glm::vec3 cam(glm::inverse(m_view)[3]);
 		nlights = fillShadowLights(cam, lights, D3D12Rtao::kMaxShadowLights, dist.lightHops);
 	}
@@ -4284,6 +4345,12 @@ void D3D12Renderer::applyWorldRayEffects() {
 		        << " quality=" << config.video.dxrFog;
 		m_loggedFogOn = fogOn;
 	}
+	static int s_loggedFogVolumes = -1;
+	if(fogOn && fogVolumeCount != s_loggedFogVolumes) {
+		LogInfo << "DXR haze: " << fogVolumeCount << " fog emitters in reach"
+		        << (cutscene ? " (cutscene, haze off)" : "");
+		s_loggedFogVolumes = fogVolumeCount;
+	}
 	if(giOn && !m_loggedGiOn) {
 		LogInfo << "DXR GI enabled quality=" << config.video.dxrGi;
 		m_loggedGiOn = true;
@@ -4307,7 +4374,9 @@ void D3D12Renderer::applyWorldRayEffects() {
 	dxr.shadowDenoise = config.video.dxrShadowDenoise;
 	dxr.giDenoise = config.video.dxrGiDenoise;
 	dxr.contact = config.video.dxrContact;
-	dxr.fogQuality = config.video.dxrFog;
+	dxr.fogQuality = fogLive ? config.video.dxrFog : 0;
+	dxr.fogVolumeCount = fogVolumeCount;
+	std::memcpy(dxr.fogVolumes, fogVolumes, sizeof(fogVolumes));
 	dxr.distance = config.video.dxrDistance;
 	dxr.range = casterDist;
 	const bool wantRr = config.video.dxrRr > 0 && supportsDlssRr() && config.dxrEffectsEnabled();
