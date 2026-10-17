@@ -1,15 +1,15 @@
 name: Release
 
 # Pushing a tag such as v1.6 builds the player packages and publishes them as a GitHub Release:
-#   ArxRaymix-v1.6.zip                 what players download (and what ArxRaymix.exe installs)
-#   ArxRaymix-v1.6.zip.sha256          checked by ArxRaymix.exe before it installs the zip
-#   ArxRaymix-v1.6-setup.exe           the Windows installer (scripts/build-installer.ps1), and its .sha256
-#   ArxRaymix-v1.6-noupdate.zip        the same game with no self-updating launcher: the player runs
-#                                      arx.exe and nothing in the package touches the network. This is
-#                                      the build mirrored on sites that run their own malware scan.
-#   ArxRaymix-v1.6-noupdate-setup.exe  installer for that build, and both .sha256 files
+#   ArxRaymix-v1.6.zip                   what players download (and what ArxRaymix.exe installs)
+#   ArxRaymix-v1.6.zip.sha256            checked by ArxRaymix.exe before it installs the zip
+#   ArxRaymix-v1.6-setup.exe             the Windows installer (scripts/build-installer.ps1), and its .sha256
+#   ArxRaymix-v1.6-standalone.zip        the same game without the self-updating launcher: the player runs
+#                                        arx.exe and nothing in the package touches the network. This is
+#                                        the build mirrored on sites that run their own malware scan.
+#   ArxRaymix-v1.6-standalone-setup.exe  installer for that build, and both .sha256 files
 # The launcher and the main-menu notice read /releases/latest, so the release goes out as soon
-# as the tag is pushed. The tag must match the first line of arx/VERSION ("Arx Raymix 1.5").
+# as the tag is pushed. The tag must match the first line of arx/VERSION ("Arx Raymix 1.6").
 
 on:
   push:
@@ -53,11 +53,11 @@ jobs:
       - name: Package
         shell: pwsh
         run: ./scripts/package.ps1 -Version '${{ github.ref_name }}'
-      # Mirrors that run their own malware scan get a build with no self-updating
+      # Mirrors that run their own malware scan get a build without the self-updating
       # launcher, so nothing in it touches the network. Same game, same DLLs.
-      - name: Package without the updater
+      - name: Package the standalone build
         shell: pwsh
-        run: ./scripts/package.ps1 -Version '${{ github.ref_name }}' -NoLauncher
+        run: ./scripts/package.ps1 -Version '${{ github.ref_name }}' -Standalone
       - name: Build the installer
         shell: pwsh
         run: |
@@ -66,9 +66,9 @@ jobs:
             choco install nsis -y --no-progress
           }
           ./scripts/build-installer.ps1 -Version '${{ github.ref_name }}'
-      - name: Build the installer without the updater
+      - name: Build the standalone installer
         shell: pwsh
-        run: ./scripts/build-installer.ps1 -Version '${{ github.ref_name }}' -NoLauncher
+        run: ./scripts/build-installer.ps1 -Version '${{ github.ref_name }}' -Standalone
       - name: Publish the release
         shell: pwsh
         env:
@@ -80,10 +80,10 @@ jobs:
             "dist/ArxRaymix-$tag-setup.exe.sha256",
             "dist/ArxRaymix-$tag.zip",
             "dist/ArxRaymix-$tag.zip.sha256",
-            "dist/ArxRaymix-$tag-noupdate-setup.exe",
-            "dist/ArxRaymix-$tag-noupdate-setup.exe.sha256",
-            "dist/ArxRaymix-$tag-noupdate.zip",
-            "dist/ArxRaymix-$tag-noupdate.zip.sha256"
+            "dist/ArxRaymix-$tag-standalone-setup.exe",
+            "dist/ArxRaymix-$tag-standalone-setup.exe.sha256",
+            "dist/ArxRaymix-$tag-standalone.zip",
+            "dist/ArxRaymix-$tag-standalone.zip.sha256"
           )
           $missing = $assets | Where-Object { -not (Test-Path $_) }
           if ($missing) { throw "Missing release assets: $($missing -join ', ')" }

@@ -83,6 +83,8 @@ Nothing else is needed: no game patch, no other mod, no Arx Libertatis install. 
 
 Two downloads, same files: the installer `ArxRaymix-1.6-setup.exe` (recommended) and the zip `ArxRaymix-1.6.zip`. Each has a `.sha256` file next to it on the GitHub release.
 
+The release also carries a **standalone** pair, `ArxRaymix-1.6-standalone.zip` and `-standalone-setup.exe`. Same game, same DLLs, built from the same commit; the only difference is that `ArxRaymix.exe` is left out, so the folder contains nothing that contacts the network and you update by hand. Take it if you prefer that, or if your mirror or workplace objects to a self-updating executable. Everyone else wants the normal pair above.
+
 ## Install
 
 1. Install Arx Fatalis from Steam or GOG.
